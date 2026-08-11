@@ -43,3 +43,4 @@ gradle.lifecycle.beforeProject {
 }
 
 include(":result")
+include(":logger")
