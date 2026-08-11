@@ -61,4 +61,18 @@ class RenderingTest {
         assertContains(withCause.toJsonLine(), "\"stackTrace\"")
         assertEquals("scan complete", withCause.message)
     }
+
+    @Test
+    fun `colorize leaves the line alone when colour is disabled`() {
+        assertEquals("plain line", colorize("plain line", LogLevel.ERROR, enabled = false))
+    }
+
+    @Test
+    fun `colorize wraps each severity in its own colour`() {
+        val esc = Char(27)
+        assertEquals("$esc[31mboom$esc[0m", colorize("boom", LogLevel.ERROR, enabled = true))
+        assertEquals("$esc[33mcareful$esc[0m", colorize("careful", LogLevel.WARN, enabled = true))
+        // VERBOSE is the bright-black/grey slot, distinct from the plain black in the palette.
+        assertEquals("$esc[90mnoise$esc[0m", colorize("noise", LogLevel.VERBOSE, enabled = true))
+    }
 }

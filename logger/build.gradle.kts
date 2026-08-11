@@ -13,6 +13,9 @@ kotlin {
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.io.core)
 
+            // The console half: tty/NO_COLOR/FORCE_COLOR policy, Windows VT + UTF-8, broken pipes.
+            implementation(project(":terminal"))
+
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.serialization.json)

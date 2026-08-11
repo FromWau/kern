@@ -1,5 +1,11 @@
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.terminal.Style
+import com.fromwau.kern.terminal.blue
+import com.fromwau.kern.terminal.brightBlack
+import com.fromwau.kern.terminal.red
+import com.fromwau.kern.terminal.white
+import com.fromwau.kern.terminal.yellow
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.number
@@ -11,13 +17,6 @@ import kotlin.time.Instant
 
 private const val LEVEL_COLUMN = 7
 private const val TAG_COLUMN = 35
-
-private const val ANSI_RESET = "\u001B[0m"
-private const val ANSI_RED = "\u001B[31m"
-private const val ANSI_YELLOW = "\u001B[33m"
-private const val ANSI_BLUE = "\u001B[34m"
-private const val ANSI_WHITE = "\u001B[37m"
-private const val ANSI_GRAY = "\u001B[90m"
 
 // Defaults are dropped from the output, so an entry without fields or a throwable stays a short line.
 private val json = Json
@@ -72,17 +71,18 @@ internal fun LogEntry.toJsonLine(): String = json.encodeToString(
     ),
 )
 
-internal fun colorize(line: String, level: LogLevel): String {
-    val color = when (level) {
-        LogLevel.VERBOSE -> ANSI_GRAY
-        LogLevel.DEBUG -> ANSI_BLUE
-        LogLevel.INFO -> ANSI_WHITE
-        LogLevel.WARN -> ANSI_YELLOW
-        LogLevel.ERROR -> ANSI_RED
+/** The colour each severity prints in. */
+private val LogLevel.style: Style
+    get() = when (this) {
+        LogLevel.VERBOSE -> brightBlack
+        LogLevel.DEBUG -> blue
+        LogLevel.INFO -> white
+        LogLevel.WARN -> yellow
+        LogLevel.ERROR -> red
     }
 
-    return "$color$line$ANSI_RESET"
-}
+/** Colours [line] for its severity, or returns it untouched when [enabled] is false. */
+internal fun colorize(line: String, level: LogLevel, enabled: Boolean): String = level.style.render(line, enabled)
 
 private fun formatLocal(timestamp: Instant): String =
     format(timestamp.toLocalDateTime(TimeZone.currentSystemDefault()))

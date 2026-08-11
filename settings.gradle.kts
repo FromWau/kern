@@ -43,4 +43,5 @@ gradle.lifecycle.beforeProject {
 }
 
 include(":result")
+include(":terminal")
 include(":logger")

@@ -15,8 +15,10 @@ import kotlinx.io.files.Path
  *   expensive `{ }` block costs nothing while it is filtered out.
  * @param format how each line is rendered.
  * @param console whether to write to the platform console at all.
- * @param color whether that console line is wrapped in ANSI colour. Platforms that carry severity
- *   themselves ignore it, notably Android's logcat.
+ * @param color whether that console line may be wrapped in ANSI colour. This is a ceiling, not a switch:
+ *   colour is emitted only when the console would also accept it, so a piped or redirected run stays plain
+ *   and `NO_COLOR` is honoured. Set `FORCE_COLOR=1` to colour a pipe anyway (CI logs). Platforms that carry
+ *   severity themselves ignore it, notably Android's logcat.
  * @param file the file to append to, already resolved by you. kern opens the path it is handed and never
  *   expands a `~` or picks a directory of its own. Null turns file logging off.
  */

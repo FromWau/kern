@@ -11,7 +11,8 @@ Something enters kern once two real projects already need it, never because one 
 | module                       | what it is                                                                         | pulls in                              |
 |------------------------------|------------------------------------------------------------------------------------|---------------------------------------|
 | [`result`](result/README.md) | a typed-error `Result<S, E>`: an expected failure is a value, not an exception     | nothing                               |
-| [`logger`](logger/README.md) | a logger that holds startup entries until you configure it, then reconfigures live | coroutines, kotlinx-io, 3 more runtime |
+| [`terminal`](terminal/README.md) | stdout/stderr, tty and width detection, and one ANSI colour policy that honours `NO_COLOR` | nothing |
+| [`logger`](logger/README.md) | a logger that holds startup entries until you configure it, then reconfigures live | coroutines, kotlinx-io, `terminal`, 3 more runtime |
 
 ```kotlin
 implementation("com.fromwau.kern:result:$kernVersion")

@@ -29,8 +29,9 @@ KMP consumers put it in `commonMain`. The JVM and Android artifacts are Java 25 
 need a JDK 25 toolchain; the native targets have no such requirement.
 
 `kotlinx-coroutines-core` and `kotlinx-io-core` land on your compile classpath, because `StateFlow` and
-`Path` are part of the API you call. `atomicfu`, `kotlinx-datetime` and `kotlinx-serialization-json` come
-along at runtime only, and nothing in the API mentions them.
+`Path` are part of the API you call. [`kern:terminal`](../terminal/README.md), `atomicfu`,
+`kotlinx-datetime` and `kotlinx-serialization-json` come along at runtime only, and nothing in the API
+mentions them.
 
 ## The startup problem
 
@@ -75,7 +76,7 @@ val level: LogLevel? = Log.state.value?.level   // null until the first configur
 | `level`   | the threshold; anything below it is dropped before its message is built         |
 | `format`  | `TEXT` for a person, `JSON` for a log shipper                                   |
 | `console` | whether to write to the platform console                                        |
-| `color`   | whether the console line is wrapped in ANSI colour                              |
+| `color`   | a ceiling on ANSI colour, not a switch; see below                               |
 | `file`    | the file to append to, or null for no file logging                              |
 
 ## Logging
@@ -165,9 +166,15 @@ the call site that logged.
 
 | platform            | goes to                                                     |
 |---------------------|-------------------------------------------------------------|
-| JVM, Linux, Windows | stdout, with ANSI colour when `color` is on                 |
+| JVM, Linux, Windows | stdout, colour permitting                                   |
 | Android             | logcat at the matching severity                             |
 | macOS, iOS          | stdout                                                      |
+
+**`color` is a ceiling, not a switch.** Colour is emitted only when you allow it *and* the console would
+accept it, so a piped or redirected run stays plain without you doing anything, and `NO_COLOR` is obeyed.
+Set `FORCE_COLOR=1` to colour a pipe anyway, which is what CI logs usually want. Windows consoles are
+opted into virtual-terminal processing and UTF-8 on the first line written. That policy lives in
+[`kern:terminal`](../terminal/README.md), so a CLI and its logger cannot disagree about it.
 
 Android is the one that ignores `format` and `color`, because logcat carries the tag, severity and
 timestamp itself; it is given the message and fields alone. Set a `file` to get JSON on Android.
