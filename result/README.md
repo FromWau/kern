@@ -30,6 +30,9 @@ dependencies {
 KMP consumers put it in `commonMain`. The JVM and Android artifacts are Java 25 bytecode, so those two
 need a JDK 25 toolchain; the native targets have no such requirement.
 
+It depends on the Kotlin standard library and nothing else. Serializing a result is an optional extra, and
+the section below is the only place that changes.
+
 Sources are published for every target, so your IDE answers an API question with quick-doc and step-into
 rather than a decompiled stub.
 
@@ -150,6 +153,51 @@ val shown: Result<User, ApiError> = findUserById(id).mapError { crud ->
     }
 }
 ```
+
+## Sending one over a wire
+
+A result is `@Serializable`, so it crosses a wire as itself with nothing to annotate at the call site. The
+failure arrives as the case you declared rather than as a sentence someone has to parse back.
+
+Serialization is an **optional dependency**, split the way `kotlinx-datetime` splits it. On JVM and
+Android nothing is pulled in, so a project that never serializes a result resolves only the standard
+library. The native targets do resolve `kotlinx-serialization-core`, because Kotlin/Native has no lazy
+class loading and a dependent's own compilation needs it present.
+
+Add the format runtime to your own build when you need it:
+
+```kotlin
+plugins {
+    kotlin("plugin.serialization")
+}
+
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationVersion")
+}
+```
+
+`IError` stays a plain marker, so it is your own error hierarchy that carries the annotation. That is the
+same work you would do for any type of yours that crosses a wire:
+
+```kotlin
+@Serializable
+sealed interface CrudError : IError {
+    @Serializable @SerialName("not_found") data class NotFound(val id: Long) : CrudError
+}
+
+@Serializable
+data class Response(val user: Result<User, CrudError>)
+```
+
+```json
+{"user":{"error":{"type":"not_found","id":7}}}
+{"user":{"success":"ada"}}
+```
+
+A result is an object holding exactly one of `success` or `error`, and one holding neither is refused
+rather than guessed at. Nothing on the wire is named after a class here, so moving or renaming a package
+cannot change what your services already exchange. The shape is a plain two-field structure rather than
+anything JSON-specific, so CBOR and protobuf encode it too.
 
 ## License
 

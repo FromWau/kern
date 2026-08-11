@@ -1,5 +1,7 @@
 package com.fromwau.kern.result
 
+import kotlinx.serialization.Serializable
+
 /**
  * A typed-error result: an expected outcome is [Success], an expected failure is [Error].
  *
@@ -11,7 +13,24 @@ package com.fromwau.kern.result
  * fun findUser(id: Long): Result<User, CrudError> =
  *     users[id]?.let { Ok(it) } ?: Err(CrudError.NotFound(id))
  * ```
+ *
+ * A result crosses a wire as itself, with nothing to annotate at the call site, so a failure arrives as
+ * the case you declared instead of as a sentence. Serialization is an optional dependency you supply, and
+ * on JVM and Android a project that never serializes a result resolves only the standard library.
+ *
+ * [IError] stays a plain marker, so it is your own error hierarchy that carries the annotation:
+ *
+ * ```kotlin
+ * @Serializable
+ * sealed interface CrudError : IError {
+ *     @Serializable @SerialName("not_found") data class NotFound(val id: Long) : CrudError
+ * }
+ *
+ * @Serializable
+ * data class Response(val user: Result<User, CrudError>)
+ * ```
  */
+@Serializable(with = ResultSerializer::class)
 public sealed interface Result<out S, out E : IError> {
     /** The value the operation produced. */
     public data class Success<out S>(val value: S) : Result<S, Nothing>
