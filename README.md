@@ -13,8 +13,12 @@ Something enters kern once two real projects already need it, never because one 
 | [`result`](result/README.md) | a typed-error `Result<S, E>`: an expected failure is a value, not an exception | nothing  |
 
 ```kotlin
-implementation("com.fromwau.kern:result:0.1.0")
+implementation("com.fromwau.kern:result:$kernVersion")
 ```
+
+Published versions are listed at
+[maven.frommhund.xyz](https://maven.frommhund.xyz/#/releases/com/fromwau/kern), which reads without
+credentials.
 
 ```kotlin
 fun findUser(id: Long): Result<User, CrudError> =

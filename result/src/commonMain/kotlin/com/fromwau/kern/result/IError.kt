@@ -14,5 +14,11 @@ package com.fromwau.kern.result
  *     data class DbError(val cause: Throwable) : CrudError
  * }
  * ```
+ *
+ * Name the case, do not carry the sentence. A lone `data class Failed(val message: String) : IError` is a
+ * string in a box: it satisfies the bound and buys nothing, since a caller can still only print it. Text on
+ * one case is fine, as `Invalid` shows above. Text as the hierarchy's *contract* is not: an `IError`
+ * subinterface declaring `val message: String` makes every implementer a message carrier, which picks the
+ * user's words in the layer that raised the error.
  */
 public interface IError
