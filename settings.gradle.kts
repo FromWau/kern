@@ -3,6 +3,8 @@
 rootProject.name = "kern"
 
 pluginManagement {
+    includeBuild("build-logic")
+
     repositories {
         google {
             mavenContent {
