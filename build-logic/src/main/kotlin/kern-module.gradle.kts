@@ -23,9 +23,12 @@ val repoSlug = "FromWau/kern"
 val repoUrl = "https://github.com/$repoSlug"
 
 val licenseResource = tasks.register<Copy>("licenseResource") {
-    description = "Copies the project LICENSE into the common resources as META-INF/LICENSE-kern.txt."
+    val licenseName = "LICENSE-kern-$moduleName.txt"
+
+    description = "Copies the project LICENSE into the common resources as META-INF/$licenseName."
     group = LifecycleBasePlugin.BUILD_GROUP
-    from(rootProject.file("LICENSE")) { rename { "LICENSE-kern.txt" } }
+    inputs.property("licenseName", licenseName)
+    from(rootProject.file("LICENSE")) { rename { licenseName } }
     into(layout.buildDirectory.dir("generated/license/META-INF"))
 }
 
