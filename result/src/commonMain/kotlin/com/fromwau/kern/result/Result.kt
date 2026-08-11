@@ -54,6 +54,22 @@ public inline fun <S, E : IError, T> Result<S, E>.map(transform: (S) -> T): Resu
     is Result.Error -> this
 }
 
+/**
+ * Runs [transform] on a success value when the next step can itself fail, passing an error through
+ * untouched. Use this where [map] would hand you a `Result` nested inside a `Result`.
+ *
+ * ```kotlin
+ * fun rename(id: Long, name: String): Result<User, CrudError> =
+ *     findUser(id).flatMap { user -> save(user.copy(name = name)) }
+ * ```
+ */
+public inline fun <S, E : IError, T> Result<S, E>.flatMap(
+    transform: (S) -> Result<T, E>,
+): Result<T, E> = when (this) {
+    is Result.Success -> transform(value)
+    is Result.Error -> this
+}
+
 /** Applies [transform] to an error, passing a success value through untouched. */
 public inline fun <S, E : IError, F : IError> Result<S, E>.mapError(transform: (E) -> F): Result<S, F> =
     when (this) {

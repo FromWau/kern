@@ -5,6 +5,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
@@ -55,6 +56,10 @@ class ResultTest {
 
     private suspend fun deleteUserById(id: Long): EmptyResult<CrudError> = findUserById(id).map { }
 
+    // a second fallible step, which is the shape flatMap exists to chain onto the first
+    private fun renameTo(user: User, name: String): Result<User, CrudError> =
+        if (name.isBlank()) Err(CrudError.Invalid("name must not be blank")) else Ok(user.copy(name = name))
+
     @Test
     fun `Ok and Err construct a success and a failure`() = runTest {
         assertEquals(Ok(User(1, "John")), findUserById(1))
@@ -88,6 +93,30 @@ class ResultTest {
 
         assertEquals("Jane", findUserById(2).fold(onSuccess = { it.name }, onError = { "none" }))
         assertEquals("none", findUserById(4).fold(onSuccess = { it.name }, onError = { "none" }))
+    }
+
+    @Test
+    fun `flatMap chains a second step that can itself fail`() = runTest {
+        assertEquals(Ok(User(1, "Jane")), findUserById(1).flatMap { renameTo(it, "Jane") })
+
+        // The second step's failure is the result, even though the first step succeeded.
+        assertEquals(
+            Err(CrudError.Invalid("name must not be blank")),
+            findUserById(1).flatMap { renameTo(it, "") },
+        )
+    }
+
+    @Test
+    fun `flatMap does not run its transform on an error`() = runTest {
+        var ran = false
+
+        val result = findUserById(4).flatMap {
+            ran = true
+            renameTo(it, "unreachable")
+        }
+
+        assertEquals(Err(CrudError.NotFound(4)), result)
+        assertFalse(ran, "the transform must not run once the chain has already failed")
     }
 
     @Test

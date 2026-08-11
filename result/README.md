@@ -132,6 +132,7 @@ Or with the operators, each of which runs its lambda only on the case it names:
 | operator      | signature              | does                                                         |
 |---------------|------------------------|--------------------------------------------------------------|
 | `map`         | `(S) -> T`             | transforms a success value, passes an error through          |
+| `flatMap`     | `(S) -> Result<T, E>`  | chains a next step that can itself fail                      |
 | `mapError`    | `(E) -> F`             | transforms an error, passes a success through                |
 | `fold`        | `(S) -> T`, `(E) -> T` | collapses both cases into one type                           |
 | `getOrElse`   | `(E) -> S`             | the value, or what the fallback makes of the error           |
@@ -140,6 +141,17 @@ Or with the operators, each of which runs its lambda only on the case it names:
 | `orElse`      | `(E) -> Result<S, F>`  | recovers with another attempt, which may fail its own way    |
 | `onSuccess`   | `(S) -> Unit`          | runs a side effect on a value, returns the result unchanged  |
 | `onError`     | `(E) -> Unit`          | runs a side effect on an error, returns the result unchanged |
+
+Three of them run on a success value and differ in what they leave you holding:
+
+```kotlin
+findUserById(id).map { it.name }        // Result<String, CrudError>, the step cannot fail
+findUserById(id).flatMap { save(it) }   // Result<User, CrudError>, save may fail
+findUserById(id).onSuccess { log(it) }  // Result<User, CrudError>, unchanged
+```
+
+Only `flatMap` can turn a success into an error, because it returns whatever the second step returned.
+Reach for it wherever `map` would leave you holding a `Result` inside a `Result`.
 
 `mapError` is how an error crosses a layer boundary. The data layer's `CrudError` becomes whatever the
 layer above speaks, and the exhaustive `when` means you cannot forget a case:
