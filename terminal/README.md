@@ -6,6 +6,11 @@ The awkward part of writing to a console is not writing. It is knowing whether t
 is a terminal at all, what the user has said about colour, and what Windows needs before it will render an
 escape sequence. This module answers that once, the same way, on every target.
 
+**Output only.** Reading stdin, asking whether stdin is a pipe, exiting the process and looking up
+environment variables are all outside it, so a program that needs those still keeps its own `expect`
+declarations for them. `ansi` is decided partly from whether the *output* handle is a terminal, which is a
+different question from whether stdin is one, and it is not exposed as a general tty probe.
+
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.
 
 ## Add to your build
