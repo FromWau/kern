@@ -1,14 +1,14 @@
 [versions]
 # One version across every kern module, released together, so a consumer pins a single number.
-kernVersion = "0.2.0"
+kernVersion = "0.3.0"
 
-agp = "9.3.1"
+agp = "9.4.0"
 android-compileSdk = "37"
 android-minSdk = "24"
+dotenv-gradle = "0.1.0"
 jdk = "25"
 
-dotenv = "4.0.0"
-kotlin = "2.4.10"
+kotlin = "2.4.20"
 kotlinx-atomicfu = "0.33.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-datetime = "0.8.0"
@@ -17,7 +17,7 @@ kotlinx-serialization = "1.11.0"
 
 [libraries]
 android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
-dotenv-gradlePlugin = { module = "co.uzzu.dotenv:gradle", version.ref = "dotenv" }
+dotenv-gradlePlugin = { module = "com.fromwau:dotenv-gradle", version.ref = "dotenv-gradle" }
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -30,5 +30,4 @@ kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 
 [plugins]
-dotenv = { id = "co.uzzu.dotenv.gradle", version.ref = "dotenv" }
 kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

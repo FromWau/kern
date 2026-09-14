@@ -14,6 +14,9 @@ dependencyResolutionManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.frommhund.xyz/releases") {
+            mavenContent { includeGroupAndSubgroups("com.fromwau") }
+        }
     }
     versionCatalogs {
         create("libs") {

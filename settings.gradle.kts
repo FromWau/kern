@@ -15,6 +15,9 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.frommhund.xyz/releases") {
+            mavenContent { includeGroupAndSubgroups("com.fromwau") }
+        }
     }
 }
 
@@ -45,3 +48,4 @@ gradle.lifecycle.beforeProject {
 include(":result")
 include(":terminal")
 include(":logger")
+include(":dirs")
