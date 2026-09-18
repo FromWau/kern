@@ -1,8 +1,8 @@
 [versions]
 # One version across every kern module, released together, so a consumer pins a single number.
-kernVersion = "0.3.0"
+kernVersion = "0.3.1"
 
-agp = "9.4.0"
+agp = "9.4.1"
 android-compileSdk = "37"
 android-minSdk = "24"
 dotenv-gradle = "0.1.0"

@@ -4,7 +4,6 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
 
 /**
  * Every regular file under this path, and an error for each directory or entry that could not be read. Each
@@ -14,9 +13,7 @@ import kotlinx.io.files.SystemFileSystem
  *
  * Symlinks are followed, and nothing tracks where the walk has been. A link pointing back up repeats that tree
  * at every level until the OS refuses to follow more links in one path (about 40 on Linux), and two such links
- * make the walk effectively endless. A symlink whose target is missing is skipped, and so is an entry that
- * cannot be looked up on the JVM and Apple targets, which kotlinx-io reports as missing there. On the JVM, a
- * directory that may not be read lists as empty.
+ * make the walk effectively endless. A symlink whose target is missing is skipped.
  */
 public fun Path.walkTopDown(): Sequence<Result<Path, FileError>> = sequence {
     val root = this@walkTopDown
@@ -38,11 +35,12 @@ private fun filesUnder(root: Path): Sequence<Result<Path, FileError>> = sequence
     val pending = ArrayDeque(listOf(root))
     while (pending.isNotEmpty()) {
         val directory = pending.removeFirst()
-        val children = try {
-            SystemFileSystem.list(directory).sortedBy { it.name }
-        } catch (e: Exception) {
-            yield(Err(FileError.Inaccessible(directory, e.reason)))
-            continue
+        val children = when (val listed = directory.list()) {
+            is Result.Success -> listed.value
+            is Result.Error -> {
+                yield(listed)
+                continue
+            }
         }
         val subdirectories = mutableListOf<Path>()
         for (child in children) {

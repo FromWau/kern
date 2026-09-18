@@ -229,6 +229,66 @@ class FilesLinuxTest {
     }
 
     @Test
+    fun `list of a directory that may not be read is Inaccessible`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        (locked / "app.toml").writeRaw("port = 1")
+        // Searchable but not readable: the entries are there, and reading their names is what is refused.
+        locked.setMode(S_IXUSR)
+        try {
+            // A runner that may read it anyway, such as root, leaves nothing to observe.
+            if (locked.canList()) return
+
+            val error = locked.list().errorOrNull()
+            assertIs<FileError.Inaccessible>(error)
+            assertEquals(locked, error.path)
+        } finally {
+            locked.setMode(S_IRWXU)
+        }
+    }
+
+    @Test
+    fun `deleting under a directory that may not be entered is Inaccessible rather than NotFound`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        val file = (locked / "app.toml").writeRaw("port = 1")
+        locked.setMode(0)
+        try {
+            if (locked.canList()) return
+
+            assertIs<FileError.Inaccessible>(file.delete().errorOrNull())
+        } finally {
+            locked.setMode(S_IRWXU)
+        }
+    }
+
+    @Test
+    fun `a symlink that loops is Inaccessible`() {
+        val first = (dir / "first").also { links += it }
+        val second = (dir / "second").also { links += it }
+        first.symlinkTo(second)
+        second.symlinkTo(first)
+
+        assertIs<FileError.Inaccessible>(first.readText().errorOrNull())
+    }
+
+    @Test
+    fun `a file under a directory that may not be entered is Inaccessible rather than NotFound`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        val file = (locked / "app.toml").writeRaw("port = 1")
+        locked.setMode(0)
+        try {
+            // A runner that may look anyway, such as root, leaves nothing to observe.
+            if (locked.canList()) return
+
+            assertIs<FileError.Inaccessible>(file.readText().errorOrNull())
+        } finally {
+            locked.setMode(S_IRWXU)
+        }
+    }
+
+    @Test
     fun `a write whose restore also fails reports RestoreFailed and keeps the backup`() {
         val file = (dir / "a.toml").writeRaw("old")
 

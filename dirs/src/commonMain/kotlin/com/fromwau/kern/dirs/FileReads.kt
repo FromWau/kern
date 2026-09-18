@@ -54,16 +54,30 @@ public fun Path.list(): Result<List<Path>, FileError> = metadata().flatMap { met
         Err(FileError.NotADirectory(this, metadata.type))
     } else {
         try {
-            Ok(SystemFileSystem.list(this).sortedBy { it.name })
+            val entries = SystemFileSystem.list(this).sortedBy { it.name }
+            // An empty listing is also how the JVM and Android report a directory they may not read.
+            val denial = if (entries.isEmpty()) listDenial(this) else null
+            if (denial == null) Ok(entries) else Err(FileError.Inaccessible(this, denial.reason))
         } catch (e: Exception) {
             Err(FileError.Inaccessible(this, e.reason))
         }
     }
 }
 
-/** kotlinx-io's metadata for this path, following symlinks; [FileError.NotFound] when nothing is there. */
-internal fun Path.metadata(): Result<FileMetadata, FileError> = try {
-    SystemFileSystem.metadataOrNull(this)?.let { Ok(it) } ?: Err(FileError.NotFound(this))
-} catch (e: Exception) {
-    Err(FileError.Inaccessible(this, e.reason))
+/** Metadata for this path, following symlinks; [FileError.NotFound] only when nothing is really there. */
+internal fun Path.metadata(): Result<FileMetadata, FileError> {
+    // kotlinx-io answers null both for a missing path and for one it may not look at, and on Linux and Windows
+    // throws for every errno but ENOENT. Neither says which, so anything but a straight answer goes to the probe.
+    val found = try {
+        SystemFileSystem.metadataOrNull(this)
+    } catch (_: Exception) {
+        null
+    }
+    if (found != null) return Ok(found)
+
+    return when (val probe = probePath(this)) {
+        is PathProbe.Present -> Ok(probe.metadata)
+        PathProbe.Absent -> Err(FileError.NotFound(this))
+        is PathProbe.Denied -> Err(FileError.Inaccessible(this, probe.reason))
+    }
 }

@@ -79,7 +79,9 @@ dirs.state.createDirectories()        // EmptyResult<FileError>
 - **Names.** `dir / "name"` appends a segment. `extension` is everything after the last dot of the file name,
   so `archive.tar.gz` gives `gz`; a leading dot marks a hidden file, so `.bashrc` has none.
   `nameWithoutExtension` is the rest. `expandTilde(home)` expands `~` and `~/...` and leaves `~bob/...` alone.
-- **Reading.** `exists()` follows symlinks and also answers `false` when the path cannot be looked up.
+- **Reading.** `exists()` follows symlinks, and answers `false` for a path that cannot be looked up as well as
+  for one that is not there. A read that returns a `Result` keeps those apart: `Inaccessible` for a path it may
+  not look at, `NotFound` for one that is not there.
   `readText(maxBytes)` refuses a directory, FIFO, device or socket before opening it, since opening a FIFO
   blocks until something writes to it. A file longer than `maxBytes` is `TooLarge`, and bytes that are not
   valid UTF-8 read as U+FFFD.
@@ -104,7 +106,7 @@ root.walkTopDown().forEach { it.fold(onSuccess = ::index, onError = ::warn) }
 
 | `FileError` | meaning |
 |---|---|
-| `NotFound` | nothing at the path, or a symlink whose target is missing |
+| `NotFound` | nothing at the path: missing, a symlink whose target is missing, or a path that runs through a file and so cannot resolve |
 | `Inaccessible(reason)` | the path could not be read or looked up |
 | `NotRegularFile(type)` | a directory, FIFO, device or socket where a file was expected |
 | `NotADirectory(type)` | a file, FIFO, device or socket where a folder was expected |
@@ -121,8 +123,6 @@ root.walkTopDown().forEach { it.fold(onSuccess = ::index, onError = ::warn) }
   - Nothing forces data to disk, so a finished write survives a crashed process but not a power cut.
   - A symlink whose target is missing cannot be removed: kotlinx-io looks a path up before deleting it, so
     `delete()` reports `NotFound` and `deleteRecursively()` stops on the folder that still holds the link.
-  - On the JVM and Apple targets, a path that cannot be looked up reads as `NotFound`. On the JVM, a folder that
-    may not be read also lists as empty.
 - **Writes are not atomic, and only one write may run on a file at a time, whether from other threads or other
   processes.**
   - A process killed mid-write leaves the file half-written, with the backup `.<name>.<id>.bak` beside it. That

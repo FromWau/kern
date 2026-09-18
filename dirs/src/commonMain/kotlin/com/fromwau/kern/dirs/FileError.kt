@@ -9,8 +9,8 @@ public sealed interface FileError : IError {
     public val path: Path
 
     /**
-     * Nothing is at [path], or [path] is a symlink whose target is missing. On the JVM and Apple targets this also
-     * covers a path that could not be looked up, since kotlinx-io reports both the same way there.
+     * Nothing is at [path]: it is missing, a symlink whose target is missing, or a path that runs through a file
+     * and so cannot resolve. A path that could not be looked up is [Inaccessible] instead, on every target.
      */
     public data class NotFound(override val path: Path) : FileError
 

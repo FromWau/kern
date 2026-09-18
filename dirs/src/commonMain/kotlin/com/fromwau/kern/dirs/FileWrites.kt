@@ -4,6 +4,7 @@ import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.fold
 import com.fromwau.kern.result.getOrNull
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
@@ -85,7 +86,11 @@ public fun Path.delete(): EmptyResult<FileError> = try {
     SystemFileSystem.delete(this, mustExist = true)
     Ok(Unit)
 } catch (e: Exception) {
-    Err(if (exists()) FileError.WriteFailed(this, e.reason) else FileError.NotFound(this))
+    metadata().fold(
+        // It is there, so the removal itself is what failed: a directory with entries, or a read-only parent.
+        onSuccess = { Err(FileError.WriteFailed(this, e.reason)) },
+        onError = { Err(it) },
+    )
 }
 
 /**

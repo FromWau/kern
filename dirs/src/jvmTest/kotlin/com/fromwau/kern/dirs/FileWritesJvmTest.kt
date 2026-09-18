@@ -34,6 +34,22 @@ class FileWritesJvmTest {
     }
 
     @Test
+    fun `deleting under a directory that may not be entered is Inaccessible rather than NotFound`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        val file = (locked / "a.toml").writeRaw("old")
+        shutOut(locked)
+        try {
+            // A runner that may look anyway, such as root, leaves nothing to observe.
+            if (canLookUp(file)) return
+
+            assertIs<FileError.Inaccessible>(file.delete().errorOrNull())
+        } finally {
+            restore(locked)
+        }
+    }
+
+    @Test
     fun `writeText refuses a read-only file and leaves it untouched`() {
         val file = (dir / "a.toml").writeRaw("old")
         val handle = File(file.toString())

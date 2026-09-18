@@ -103,6 +103,14 @@ class FileReadsTest {
     }
 
     @Test
+    fun `a path that runs through a file is NotFound`() {
+        val file = (dir / "plain.txt").writeRaw("x")
+        val throughIt = file / "child.toml"
+
+        assertEquals(Err(FileError.NotFound(throughIt)), throughIt.readText())
+    }
+
+    @Test
     fun `list reports a missing path as NotFound`() {
         val missing = dir / "missing"
 
