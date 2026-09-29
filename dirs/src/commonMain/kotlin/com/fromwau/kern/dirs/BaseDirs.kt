@@ -31,7 +31,8 @@ public data class BaseDirs(
      * Each root with [name] appended; on Linux, `forApp("echod")` gives `~/.config/echod` and its siblings. Call
      * this once per run and pass the result around, since every call draws a new [runId] by default.
      *
-     * @param name the app's folder name under each root. A blank name is [DirsError.InvalidAppName].
+     * @param name the app's folder name under each root, which has to be one folder name: a blank name, `.`,
+     *   `..` or a name holding `/` or `\` is [DirsError.InvalidAppName].
      * @param runId the last segment of [AppDirs.temp], so every run gets a scratch folder of its own. Pass a fixed
      *   id to reuse one.
      * @return the app's directories. They are only computed: nothing is created.
@@ -40,7 +41,7 @@ public data class BaseDirs(
         name: String,
         runId: Uuid = Uuid.random(),
     ): Result<AppDirs, DirsError> =
-        if (name.isNotBlank()) {
+        if (name.isOneFolderName()) {
             Ok(
                 AppDirs(
                     config = Path(configHome, name),
@@ -54,6 +55,10 @@ public data class BaseDirs(
             Err(DirsError.InvalidAppName(name))
         }
 }
+
+/** Whether this names exactly one folder below a root, rather than none, the root's parent or several. */
+private fun String.isOneFolderName(): Boolean =
+    isNotBlank() && this != "." && this != ".." && '/' !in this && '\\' !in this
 
 /**
  * One app's directories. Outside Linux, config and data are the same directory, and so is state except on
@@ -91,6 +96,6 @@ public sealed interface DirsError : IError {
      */
     public data class UnableToResolve(val kind: DirKind) : DirsError
 
-    /** The name given to [BaseDirs.forApp] is blank. */
+    /** The name given to [BaseDirs.forApp] is not one folder name: it is blank, `.`, `..` or holds a separator. */
     public data class InvalidAppName(val name: String) : DirsError
 }

@@ -95,11 +95,16 @@ class BaseDirsFactoryLinuxTest {
     }
 
     @Test
-    fun `TMPDIR is the temp root and a blank one leaves it at slash tmp`() {
+    fun `TMPDIR is the temp root`() {
         environment("HOME" to "/home/me", "TMPDIR" to "/run/user/1000/tmp")
-        assertEquals(Path("/run/user/1000/tmp"), BaseDirsFactory().create().getOrNull()?.tempHome)
 
+        assertEquals(Path("/run/user/1000/tmp"), BaseDirsFactory().create().getOrNull()?.tempHome)
+    }
+
+    @Test
+    fun `a blank TMPDIR leaves the temp root at slash tmp`() {
         environment("HOME" to "/home/me", "TMPDIR" to " ")
+
         assertEquals(Path("/tmp"), BaseDirsFactory().create().getOrNull()?.tempHome)
     }
 }

@@ -2,7 +2,11 @@ package com.fromwau.kern.dirs
 
 import kotlinx.io.files.Path
 
-/** This path with [child] appended as one more segment: `dir / "app.toml"`. */
+/**
+ * This path with [child] appended: `dir / "app.toml"`. [child] is taken as written, so a separator in it adds
+ * more than one segment, `""` adds none, and `".."` is kept as a segment rather than resolved, so the result's
+ * `parent` is this path, not the folder above it.
+ */
 public operator fun Path.div(child: String): Path = Path(this, child)
 
 /**
@@ -23,7 +27,8 @@ public val Path.nameWithoutExtension: String
 
 /**
  * This path with a leading `~` replaced by [home], when the `~` stands alone or is followed by `/` (or by
- * `\` on Windows). Any other path is returned unchanged, including `~bob/x`, which names another user's home.
+ * `\` on Windows). Any other path is returned unchanged, including `~bob/x`, which names another user's home, so
+ * the result is relative whenever this path was and did not start with `~`.
  */
 public fun Path.expandTilde(home: Path): Path {
     val raw = toString()

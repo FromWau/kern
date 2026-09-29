@@ -27,6 +27,13 @@ kotlin {
         jvmMain.get().dependsOn(jvmAndroidMain)
         androidMain.get().dependsOn(jvmAndroidMain)
 
+        // Linux and Apple lock a file with fcntl, which Windows does not have; mingw keeps its own LockFileEx.
+        val posixMain = create("posixMain") {
+            dependsOn(nativeMain.get())
+        }
+        linuxMain.get().dependsOn(posixMain)
+        appleMain.get().dependsOn(posixMain)
+
         commonMain.dependencies {
             api(project(":result"))
             api(libs.kotlinx.io.core)

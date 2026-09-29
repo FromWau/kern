@@ -4,7 +4,9 @@ kernVersion = "0.3.1"
 
 agp = "9.4.1"
 android-compileSdk = "37"
-android-minSdk = "24"
+# 26 is where Android got `java.nio.file`, which is how kotlinx-io moves a file, so below it a failed write
+# cannot put its backup back and reports a damaged file instead. Lower it and that case stops working.
+android-minSdk = "26"
 dotenv-gradle = "0.1.0"
 jdk = "25"
 

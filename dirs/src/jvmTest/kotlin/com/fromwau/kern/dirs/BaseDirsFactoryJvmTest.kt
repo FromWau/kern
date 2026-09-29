@@ -27,6 +27,17 @@ class BaseDirsFactoryJvmTest {
     }
 
     @Test
+    fun `a user home that is not an absolute path counts as unset`() {
+        val unresolved = Err(DirsError.UnableToResolve(DirKind.Home))
+
+        for (userHome in listOf("", " ", "?", "relative/home")) {
+            assertEquals(unresolved, baseDirFor("Linux", envOf(), userHome))
+            assertEquals(unresolved, baseDirFor("Mac OS X", envOf(), userHome))
+        }
+        assertEquals(Path("/home/me"), baseDirFor("Linux", envOf("HOME" to "/home/me"), "?").getOrNull()?.home)
+    }
+
+    @Test
     fun `a blank variable counts as unset`() {
         val env = envOf("HOME" to "/home/me", "XDG_CONFIG_HOME" to " ")
 

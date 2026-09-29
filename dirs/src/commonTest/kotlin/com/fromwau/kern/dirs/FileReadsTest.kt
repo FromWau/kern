@@ -2,11 +2,13 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.getOrNull
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -32,6 +34,56 @@ class FileReadsTest {
         val file = (dir / "a.txt").writeRaw("héllo")
 
         assertEquals(Ok("héllo"), file.readText())
+    }
+
+    @Test
+    fun `readBytes returns the file's bytes as they are`() {
+        val file = dir / "a.bin"
+        val bytes = byteArrayOf(0x68, 0xFF.toByte(), 0x69, 0x00)
+        SystemFileSystem
+            .sink(file)
+            .buffered()
+            .use { it.write(bytes) }
+
+        assertContentEquals(bytes, file.readBytes().getOrNull())
+    }
+
+    @Test
+    fun `readBytes refuses a file larger than the limit`() {
+        val file = (dir / "a.txt").writeRaw("12345")
+
+        assertEquals(Err(FileError.TooLarge(file, limitBytes = 4, atLeastBytes = 5)), file.readBytes(maxBytes = 4))
+    }
+
+    @Test
+    fun `readBytes of a directory is NotRegularFile`() {
+        assertEquals(Err(FileError.NotRegularFile(dir, FileType.Directory)), dir.readBytes())
+    }
+
+    @Test
+    fun `fileType tells a file from a folder`() {
+        val file = (dir / "a.txt").writeRaw("a")
+
+        assertEquals(Ok(FileType.Regular), file.fileType())
+        assertEquals(Ok(FileType.Directory), dir.fileType())
+        assertEquals(Err(FileError.NotFound(dir / "missing")), (dir / "missing").fileType())
+    }
+
+    @Test
+    fun `fileSize is the file's length and refuses a folder`() {
+        val file = (dir / "a.txt").writeRaw("héllo")
+
+        assertEquals(Ok(6L), file.fileSize())
+        assertEquals(Err(FileError.NotRegularFile(dir, FileType.Directory)), dir.fileSize())
+    }
+
+    @Test
+    fun `an empty path is NotFound to every call`() {
+        val empty = Path("")
+
+        assertEquals(Err(FileError.NotFound(empty)), empty.fileType())
+        assertEquals(Err(FileError.NotFound(empty)), empty.list())
+        assertEquals(listOf(Err(FileError.NotFound(empty))), empty.walkTopDown().toList())
     }
 
     @Test

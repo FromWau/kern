@@ -39,6 +39,14 @@ class BaseDirsTest {
     }
 
     @Test
+    fun `a name that is not one folder name is InvalidAppName`() {
+        for (name in listOf(".", "..", "my/app", "my\\app", "/abs")) {
+            assertEquals(Err(DirsError.InvalidAppName(name)), base.forApp(name))
+        }
+        assertEquals(Path(base.configHome, ".myapp"), base.forApp(".myapp").getOrNull()?.config)
+    }
+
+    @Test
     fun `a blank name is InvalidAppName`() {
         assertEquals(Err(DirsError.InvalidAppName("")), base.forApp(""))
         assertEquals(Err(DirsError.InvalidAppName("  ")), base.forApp("  "))

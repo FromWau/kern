@@ -8,8 +8,11 @@ import kotlin.test.assertNull
 class PathNamesTest {
 
     @Test
-    fun `div appends one segment`() {
+    fun `div appends its child as written`() {
         assertEquals(Path("/etc", "app.toml"), Path("/etc") / "app.toml")
+        assertEquals(Path("/etc/a"), (Path("/etc") / "a/b").parent)
+        assertEquals(Path("/etc"), Path("/etc") / "")
+        assertEquals(Path("/etc"), (Path("/etc") / "..").parent)
     }
 
     @Test

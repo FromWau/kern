@@ -9,7 +9,6 @@ import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.io.files.Path
@@ -41,7 +40,6 @@ import platform.posix.lstat
 import platform.posix.mkfifo
 import platform.posix.open
 import platform.posix.opendir
-import platform.posix.read
 import platform.posix.signal
 import platform.posix.stat
 import platform.posix.symlink
@@ -96,6 +94,39 @@ private fun Path.canOpen(flags: Int): Boolean {
     return true
 }
 
+/**
+ * Runs [block] with this directory at [mode] and readable again afterwards. [block] is skipped for a runner
+ * that may read it anyway, such as root, which leaves nothing to observe.
+ */
+internal inline fun Path.withMode(
+    mode: Int,
+    block: () -> Unit,
+) {
+    setMode(mode)
+    try {
+        if (canList()) return
+        block()
+    } finally {
+        setMode(S_IRWXU)
+    }
+}
+
+/**
+ * Runs [block] on what a write left in this directory, and makes it writable again afterwards: the write
+ * locked it, and the cleanup after the test cannot remove anything while it stays that way.
+ *
+ * [block] is skipped for a runner that may write the directory anyway, such as root, whose undo succeeded
+ * and left nothing to look at.
+ */
+internal inline fun Path.withModeRestored(block: () -> Unit) {
+    try {
+        if (canCreateFileIn()) return
+        block()
+    } finally {
+        setMode(S_IRWXU)
+    }
+}
+
 /** Whether a file can be created in this folder. The probe file is removed again. */
 internal fun Path.canCreateFileIn(): Boolean {
     val probe = Path(this, ".probe").toString()
@@ -135,26 +166,27 @@ internal fun <T> withFileSizeLimit(
     }
 }
 
-/** The directory [withFileSizeLimitLocking] locks, as a descriptor so its signal handler allocates nothing. */
+// What [withFileSizeLimitLocking]'s signal handler needs: a descriptor opened up front and the mode to set.
+// They are globals because a staticCFunction captures nothing, and a descriptor so the handler allocates none.
 private var lockedDirectory = -1
+private var lockedMode = S_IRUSR or S_IXUSR
 
 /**
- * [withFileSizeLimit], with [directory] turned read-only the moment a write crosses the limit, so the failed
- * write cannot rename its backup back either.
+ * [withFileSizeLimit], with [directory] set to [mode] the moment a write crosses the limit, so the failed write
+ * cannot rename its backup back either. The default keeps the search bit, so paths inside it can still be
+ * looked up; drop it to make a lookup fail rather than answer.
  */
 internal fun <T> withFileSizeLimitLocking(
     directory: Path,
     bytes: Long,
+    mode: Int = S_IRUSR or S_IXUSR,
     block: () -> T,
 ): T {
     val descriptor = open(directory.toString(), O_RDONLY)
     check(descriptor >= 0)
     lockedDirectory = descriptor
-    // The handler runs inside the interrupted write, so it only calls fchmod on a descriptor opened up front.
-    val previousHandler = signal(
-        SIGXFSZ,
-        staticCFunction<Int, Unit> { fchmod(lockedDirectory, (S_IRUSR or S_IXUSR).convert()) },
-    )
+    lockedMode = mode
+    val previousHandler = signal(SIGXFSZ, staticCFunction<Int, Unit> { fchmod(lockedDirectory, lockedMode.convert()) })
     return memScoped {
         val previous = alloc<rlimit>()
         check(getrlimit(RLIMIT_FSIZE, previous.ptr) == 0)
@@ -171,22 +203,6 @@ internal fun <T> withFileSizeLimitLocking(
             close(descriptor)
         }
     }
-}
-
-/** Reads a file to its end through raw descriptors, so a Worker can drain a FIFO without the code under test. */
-internal fun readFully(path: String): String = memScoped {
-    val descriptor = open(path, O_RDONLY)
-    check(descriptor >= 0)
-    val capacity = 4096
-    val buffer = allocArray<ByteVar>(capacity)
-    val content = StringBuilder()
-    while (true) {
-        val count = read(descriptor, buffer, capacity.convert()).toInt()
-        if (count <= 0) break
-        content.append(buffer.readBytes(count).decodeToString())
-    }
-    close(descriptor)
-    content.toString()
 }
 
 internal fun currentDirectory(): Path = memScoped {

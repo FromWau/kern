@@ -23,12 +23,16 @@ class WalkTest {
         (dir / "a.txt").writeRaw("a")
         (dir / "b" / "x.txt").writeRaw("x")
         (dir / "b" / "d" / "y.txt").writeRaw("y")
+        // `e` holds a file so the order tells a depth-first walk from a breadth-first one: `b`'s own tree is
+        // finished before `e` is entered, and `b` is entered first because the subdirectories go in name order.
+        (dir / "e" / "z.txt").writeRaw("z")
 
         val expected = listOf(
             dir / "a.txt",
             dir / "c.txt",
             dir / "b" / "x.txt",
             dir / "b" / "d" / "y.txt",
+            dir / "e" / "z.txt",
         )
         assertEquals(expected.map { Ok(it) }, dir.walkTopDown().toList())
     }

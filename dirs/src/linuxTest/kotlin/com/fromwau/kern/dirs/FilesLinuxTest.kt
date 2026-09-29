@@ -3,15 +3,13 @@ package com.fromwau.kern.dirs
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.errorOrNull
+import com.fromwau.kern.result.getOrNull
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import platform.posix.S_IRUSR
 import platform.posix.S_IRWXU
 import platform.posix.S_IWUSR
 import platform.posix.S_IXUSR
-import kotlin.native.concurrent.ObsoleteWorkersApi
-import kotlin.native.concurrent.TransferMode
-import kotlin.native.concurrent.Worker
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,13 +17,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-@OptIn(ObsoleteWorkersApi::class)
 class FilesLinuxTest {
     private val dir = newTempDir()
     private val links = mutableListOf<Path>()
     private val tooLarge = ByteArray(64 * 1024) { 'x'.code.toByte() }
+    private val device = Path("/dev/null")
 
     @AfterTest
     fun cleanUp() {
@@ -43,6 +42,30 @@ class FilesLinuxTest {
         assertEquals(Ok(Unit), link.writeText("new"))
         assertTrue(link.isSymlink())
         assertEquals("new", real.readRaw())
+    }
+
+    @Test
+    fun `moveTo moves a symlink as itself and leaves its target where it is`() {
+        val real = (dir / "real.toml").writeRaw("kept")
+        val link = (dir / "link.toml").symlinkTo(real)
+        val moved = (dir / "moved.toml").also { links += it }
+
+        assertEquals(Ok(Unit), link.moveTo(moved))
+
+        assertTrue(moved.isSymlink())
+        assertEquals("kept", real.readRaw())
+    }
+
+    @Test
+    fun `moveTo replaces an empty folder and refuses one with entries`() {
+        val from = (dir / "from").also { SystemFileSystem.createDirectories(it) }
+        val empty = (dir / "empty").also { SystemFileSystem.createDirectories(it) }
+        val full = (dir / "full").also { SystemFileSystem.createDirectories(it) }
+        (full / "entry").writeRaw("a")
+
+        assertIs<FileError.WriteFailed>(from.moveTo(full).errorOrNull())
+        assertEquals(Ok(Unit), from.moveTo(empty))
+        assertFalse(from.exists())
     }
 
     @Test
@@ -169,27 +192,29 @@ class FilesLinuxTest {
     }
 
     @Test
-    fun `createDirectories below a folder that may not be searched names the first missing level`() {
-        val locked = dir / "locked"
-        SystemFileSystem.createDirectories(locked)
-        locked.setMode(0)
-        try {
-            // A runner that may list it anyway, such as root, leaves nothing to observe.
-            if (locked.canList()) return
-
-            val error = (locked / "a" / "b").createDirectories().errorOrNull()
-            assertIs<FileError.WriteFailed>(error)
-            assertEquals(locked / "a", error.path)
-        } finally {
-            locked.setMode(S_IRWXU)
-        }
-    }
-
-    @Test
     fun `readText refuses a FIFO without opening it`() {
         val fifo = (dir / "pipe").makeFifo()
 
         assertEquals(Err(FileError.NotRegularFile(fifo, FileType.Other)), fifo.readText())
+    }
+
+    @Test
+    fun `writeText refuses a FIFO rather than blocking on a reader that may never come`() {
+        // Opening a FIFO for writing waits for a reader, so writing one never returns: a caller above this
+        // gets no result and, where it took a lock first, holds it for as long as the process lives.
+        val fifo = (dir / "pipe").makeFifo()
+
+        assertEquals(Err(FileError.NotRegularFile(fifo, FileType.Other)), fifo.writeText("x = 1"))
+    }
+
+    @Test
+    fun `readText refuses a device`() {
+        assertEquals(Err(FileError.NotRegularFile(device, FileType.Other)), device.readText())
+    }
+
+    @Test
+    fun `writeText refuses a device rather than writing into it`() {
+        assertEquals(Err(FileError.NotRegularFile(device, FileType.Other)), device.writeText("x = 1"))
     }
 
     @Test
@@ -212,19 +237,13 @@ class FilesLinuxTest {
     fun `a directory that may not be read walks as Inaccessible`() {
         val locked = dir / "locked"
         SystemFileSystem.createDirectories(locked)
-        locked.setMode(0)
-        try {
-            // A runner that may list it anyway, such as root, leaves nothing to observe.
-            if (locked.canList()) return
-
+        locked.withMode(0) {
             val error = dir
                 .walkTopDown()
                 .single()
                 .errorOrNull()
             assertIs<FileError.Inaccessible>(error)
             assertEquals(locked, error.path)
-        } finally {
-            locked.setMode(S_IRWXU)
         }
     }
 
@@ -234,16 +253,10 @@ class FilesLinuxTest {
         SystemFileSystem.createDirectories(locked)
         (locked / "app.toml").writeRaw("port = 1")
         // Searchable but not readable: the entries are there, and reading their names is what is refused.
-        locked.setMode(S_IXUSR)
-        try {
-            // A runner that may read it anyway, such as root, leaves nothing to observe.
-            if (locked.canList()) return
-
+        locked.withMode(S_IXUSR) {
             val error = locked.list().errorOrNull()
             assertIs<FileError.Inaccessible>(error)
             assertEquals(locked, error.path)
-        } finally {
-            locked.setMode(S_IRWXU)
         }
     }
 
@@ -252,13 +265,8 @@ class FilesLinuxTest {
         val locked = dir / "locked"
         SystemFileSystem.createDirectories(locked)
         val file = (locked / "app.toml").writeRaw("port = 1")
-        locked.setMode(0)
-        try {
-            if (locked.canList()) return
-
+        locked.withMode(0) {
             assertIs<FileError.Inaccessible>(file.delete().errorOrNull())
-        } finally {
-            locked.setMode(S_IRWXU)
         }
     }
 
@@ -277,14 +285,8 @@ class FilesLinuxTest {
         val locked = dir / "locked"
         SystemFileSystem.createDirectories(locked)
         val file = (locked / "app.toml").writeRaw("port = 1")
-        locked.setMode(0)
-        try {
-            // A runner that may look anyway, such as root, leaves nothing to observe.
-            if (locked.canList()) return
-
+        locked.withMode(0) {
             assertIs<FileError.Inaccessible>(file.readText().errorOrNull())
-        } finally {
-            locked.setMode(S_IRWXU)
         }
     }
 
@@ -310,15 +312,137 @@ class FilesLinuxTest {
     }
 
     @Test
-    fun `writeText into a FIFO reaches its reader`() {
-        val fifo = (dir / "pipe").makeFifo()
-        val reader = Worker.start()
-        val read = reader.execute(TransferMode.SAFE, { fifo.toString() }, ::readFully)
+    fun `a RestoreFailed still names a backup that could not be looked up`() {
+        val file = (dir / "a.toml").writeRaw("old")
 
-        assertEquals(Ok(Unit), fifo.writeText("through the pipe"))
-        assertEquals("through the pipe", read.result)
+        // Without the search bit the backup cannot be looked up at all, which is not the same as being gone.
+        val result = withFileSizeLimitLocking(dir, bytes = 4096, mode = S_IRUSR) { file.writeBytes(tooLarge) }
 
-        reader.requestTermination().result
+        dir.withModeRestored {
+            assertNotNull(assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup)
+        }
+    }
+
+    @Test
+    fun `a backup carries the permissions of the file it copies`() {
+        val file = (dir / "a.toml").writeRaw("old")
+        file.setMode(S_IRUSR or S_IWUSR)
+
+        // Only a failed undo leaves the copy to look at: an ordinary write disposes of it before returning,
+        // and that is the window a copy wider than the file would be readable in.
+        val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
+
+        dir.withModeRestored {
+            val backup = assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup
+
+            assertEquals(S_IRUSR or S_IWUSR, assertNotNull(backup).mode())
+        }
+    }
+
+    @Test
+    fun `a restore leaves the file the permissions it had`() {
+        val file = (dir / "a.toml").writeRaw("old")
+        file.setMode(S_IRUSR or S_IWUSR)
+
+        // The restore moves the copy back over the file, so what the copy carries is what the file keeps.
+        val result = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
+
+        assertIs<FileError.WriteFailed>(result.errorOrNull())
+        assertEquals(S_IRUSR or S_IWUSR, file.mode())
+        assertEquals("old", file.readRaw())
+    }
+
+    @Test
+    fun `a RestoreFailed names no backup when the file was new`() {
+        val file = dir / "new.toml"
+
+        val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
+
+        dir.withModeRestored {
+            assertNull(assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup)
+        }
+    }
+
+    @Test
+    fun `a RestoreFailed reports why the undo failed and not why the write did`() {
+        val file = (dir / "a.toml").writeRaw("old")
+        // The same write fails the same way in both runs. Only the second one cannot put the backup back, so
+        // any difference in what is reported is the undo's doing.
+        val failedWrite = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
+        val writeReason = assertIs<FileError.WriteFailed>(failedWrite.errorOrNull()).reason
+
+        val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
+
+        try {
+            // A runner that may write the folder anyway, such as root, restores the backup and never gets here.
+            if (dir.canCreateFileIn()) return
+
+            val error = assertIs<FileError.RestoreFailed>(result.errorOrNull())
+            assertNotEquals(writeReason, error.reason)
+        } finally {
+            dir.setMode(S_IRWXU)
+        }
+    }
+
+    @Test
+    fun `leftoverBackups finds the backup beside the file a symlink points at`() {
+        val real = (dir / "real.toml").writeRaw("old")
+        val link = (dir / "link.toml")
+            .symlinkTo(real)
+            .also { links += it }
+        (dir / ".real.toml.$A_WRITE_ID.bak").writeRaw("older")
+
+        assertEquals(listOf(".real.toml.$A_WRITE_ID.bak"), link.leftoverBackups().getOrNull()?.map { it.name })
+    }
+
+    @Test
+    fun `leftoverBackups finds the backup of a file named without a folder`() {
+        val previous = currentDirectory()
+        changeDirectory(dir)
+        try {
+            Path("rel.toml").writeRaw("a = 1")
+            Path(".rel.toml.$A_WRITE_ID.bak").writeRaw("a = 0")
+
+            val found = Path("rel.toml").leftoverBackups().getOrNull()
+
+            assertEquals(listOf(".rel.toml.$A_WRITE_ID.bak"), found?.map { it.name })
+        } finally {
+            changeDirectory(previous)
+        }
+    }
+
+    @Test
+    fun `createDirectories below a folder that may not be searched is Inaccessible naming the path asked for`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        locked.withMode(0) {
+            val asked = locked / "app" / "deeper"
+
+            assertEquals(asked, assertIs<FileError.Inaccessible>(asked.createDirectories().errorOrNull()).path)
+        }
+    }
+
+    @Test
+    fun `a write under a folder that may not be searched is Inaccessible naming the folder`() {
+        val locked = dir / "locked"
+        SystemFileSystem.createDirectories(locked)
+        locked.withMode(0) {
+            val result = (locked / "app" / "settings.toml").writeText("a = 1")
+
+            assertEquals(locked / "app", assertIs<FileError.Inaccessible>(result.errorOrNull()).path)
+        }
+    }
+
+    @Test
+    fun `a write through a symlink whose target folder is missing fails on the link`() {
+        val link = (dir / "link.toml")
+            .symlinkTo(dir / "absent" / "app.toml")
+            .also { links += it }
+
+        val error = assertIs<FileError.WriteFailed>(link.writeText("a = 1").errorOrNull())
+
+        assertEquals(link, error.path)
+        assertFalse(SystemFileSystem.exists(dir / "absent"))
     }
 
     @Test

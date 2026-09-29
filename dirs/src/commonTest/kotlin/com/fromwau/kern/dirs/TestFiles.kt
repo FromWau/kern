@@ -51,3 +51,6 @@ internal fun Path.deleteTree() {
         SystemFileSystem.delete(runDir, mustExist = false)
     }
 }
+
+/** A write id spelled the way a real one is, so a name a test puts beside a file reads as a write's backup. */
+internal const val A_WRITE_ID = "3a6c19aa-1f4e-4d2b-9c80-7e15b2c4d9f1"

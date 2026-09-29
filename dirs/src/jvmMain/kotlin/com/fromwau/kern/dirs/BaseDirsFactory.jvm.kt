@@ -14,19 +14,23 @@ public actual class BaseDirsFactory {
         )
 }
 
-/** Picks the rules for [osName]. [env] reads the raw environment; a blank value counts as unset. */
+/**
+ * Picks the rules for [osName]. [env] reads the raw environment; a blank value counts as unset. A [userHome]
+ * that is not an absolute path counts as unset as well: the JDK reports `?` when it cannot find the account.
+ */
 internal fun baseDirFor(
     osName: String,
     env: (String) -> String?,
     userHome: String?,
 ): Result<BaseDirs, DirsError> {
     val variable = { name: String -> env(name)?.takeIf { it.isNotBlank() } }
+    val home = userHome?.takeIf { Path(it).isAbsolute }
     val os = osName.lowercase()
     return when {
         // Checked before "win", which "darwin" contains.
-        "mac" in os || "darwin" in os -> appleBaseDir(variable, userHome)
-        "win" in os -> windowsBaseDir(variable, userHome)
-        else -> linuxBaseDir(variable, userHome)
+        "mac" in os || "darwin" in os -> appleBaseDir(variable, home)
+        "win" in os -> windowsBaseDir(variable, home)
+        else -> linuxBaseDir(variable, home)
     }
 }
 

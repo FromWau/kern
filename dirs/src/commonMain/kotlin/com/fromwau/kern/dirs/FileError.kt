@@ -50,12 +50,31 @@ public sealed interface FileError : IError {
 
     /**
      * A [writeText] or [writeBytes] failed after emptying [path], and undoing it failed too, so [path] is damaged.
-     * [backup] holds the old content, or is null when the file was new. [reason] is the write's error message.
+     *
+     * [backup] is the copy holding the old content, or null when there is none to put back: the file was new,
+     * or the copy is no longer there. [reason] is why the *undo* failed, which is what left the file damaged;
+     * the write's own failure is the condition this is a consequence of.
      */
     public data class RestoreFailed(
         override val path: Path,
         val reason: String,
         val backup: Path?,
+    ) : FileError
+
+    /**
+     * Another holder kept the lock on [path] for longer than the wait, in this process or another. [holderPid]
+     * names it on native Linux and Apple and is null everywhere else. [waitedMs] is how long the attempt waited.
+     */
+    public data class LockBusy(
+        override val path: Path,
+        val holderPid: Int?,
+        val waitedMs: Long,
+    ) : FileError
+
+    /** The lock on [path] could not be attempted: the file would not open, or the OS refused the call. */
+    public data class LockFailed(
+        override val path: Path,
+        val reason: String,
     ) : FileError
 }
 

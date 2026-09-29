@@ -5,7 +5,6 @@ import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.toKString
 import kotlinx.io.files.FileMetadata
 import kotlinx.io.files.Path
 import platform.posix.ENOENT
@@ -15,7 +14,6 @@ import platform.posix.S_IFMT
 import platform.posix.S_IFREG
 import platform.posix.errno
 import platform.posix.stat
-import platform.posix.strerror
 
 // One implementation for every native target, though only Apple needs it: Linux and mingw already throw for a
 // denial instead of returning null, so there this only confirms the ENOENT kotlinx-io implied.
@@ -27,7 +25,7 @@ internal actual fun probePath(path: Path): PathProbe = memScoped {
             // ENOTDIR is a path running through a file: it resolves to nothing, and never can while that
             // file is there, which is absence rather than a refusal.
             ENOENT, ENOTDIR -> PathProbe.Absent
-            else -> PathProbe.Denied(strerror(errno)?.toKString() ?: "errno $errno")
+            else -> PathProbe.Denied(errnoReason())
         }
     }
 
