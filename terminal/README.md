@@ -99,12 +99,12 @@ terminal.out(everything)
 if (terminal.writeErrored()) return BROKEN_PIPE_EXIT
 ```
 
-`yourtool | head -1` closes the pipe while you are still writing. On the JVM that surfaces as a latched
-error flag rather than an exception, so a program that never asks reports success having written nothing.
+`yourtool | head -1` closes the pipe while you are still writing, and `yourtool > /dev/full` runs out of
+space. Neither throws, so a program that never asks reports success having written nothing.
 `writeErrored()` asks, and `BROKEN_PIPE_EXIT` is the shell's 128+SIGPIPE convention for reporting it.
 
-POSIX native needs none of this: `SIGPIPE` ends the process before anything can ask, which is why
-`writeErrored()` is always `false` there.
+On POSIX native a closed pipe ends the process with `SIGPIPE` before anything can ask; a full disk or a
+closed handle raises no signal, and `writeErrored()` reports it there as on the JVM.
 
 ## License
 

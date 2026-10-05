@@ -11,7 +11,7 @@ internal class PlatformIo(
     /** Whether the output handle can render ANSI escapes right now. */
     val ansiCapable: Boolean,
     val env: (String) -> String?,
-    // Only platforms that survive a closed pipe answer: SIGPIPE kills native first, the JVM latches a flag.
+    // The JVM latches a flag on a failed write; native checks each write as it happens.
     val writeFailed: () -> Boolean = { false },
 )
 
