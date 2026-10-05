@@ -37,11 +37,12 @@ public interface Terminal {
     public val ansi: Boolean get() = false
 
     /**
-     * Whether every write so far reached its destination, or why one did not. A stream writes nothing after
-     * its first failure. Ask after writing instead of reporting a false success. A [WriteError.BrokenPipe] is
-     * the reader's choice and is usually reported through [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost
-     * output the user expected. Linux and macOS tell the two apart; the JVM answers [WriteError.Unknown]. The
-     * default success is right for any terminal whose writes cannot fail quietly.
+     * Whether every write so far reached its destination, or why one did not: standard output's failure before
+     * standard error's. A stream writes nothing after its first failure. Ask after writing instead of reporting a
+     * false success. A [WriteError.BrokenPipe] is the reader's choice and is usually reported through
+     * [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost output the user expected. Linux and macOS tell the two
+     * apart; the JVM answers [WriteError.Unknown]. The default success is right for any terminal whose writes
+     * cannot fail quietly.
      */
     public fun writeResult(): EmptyResult<WriteError> = Ok(Unit)
 
@@ -53,17 +54,28 @@ public interface Terminal {
     public fun writeErrored(): Boolean = writeResult() is Result.Error
 }
 
-/** Why output did not reach its destination. */
+/** The stream a [Terminal] writes to. */
+public enum class Stream {
+    /** Standard output, written by [Terminal.out]. */
+    Out,
+
+    /** Standard error, written by [Terminal.err]. */
+    Err,
+}
+
+/** Why output did not reach its destination, and on which [stream]. */
 public sealed interface WriteError : IError {
+    public val stream: Stream
+
     /** The reader went away, as when a downstream `| head` stops reading. */
-    public data object BrokenPipe : WriteError
+    public data class BrokenPipe(override val stream: Stream) : WriteError
 
     /** The system refused the write, as on a full disk or a closed handle. [detail] is its own message. */
-    public data class Refused(val detail: String?) : WriteError
+    public data class Refused(override val stream: Stream, val detail: String?) : WriteError
 
     /**
      * A write failed for a reason the platform does not report, as on the JVM, where a closed pipe and a full
      * disk raise the same exception. [detail] is the platform's message, for showing, not for deciding.
      */
-    public data class Unknown(val detail: String?) : WriteError
+    public data class Unknown(override val stream: Stream, val detail: String?) : WriteError
 }

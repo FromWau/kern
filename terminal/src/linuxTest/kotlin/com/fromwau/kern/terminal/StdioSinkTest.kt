@@ -27,9 +27,9 @@ class StdioSinkTest {
     fun `a write the device refuses is Refused`() {
         val full = assertNotNull(fopen("/dev/full", "w"))
         try {
-            val sink = StdioSink(full)
+            val sink = StdioSink(full, Stream.Out)
             sink.write("text")
-            assertIs<WriteError.Refused>(sink.failure)
+            assertEquals(Stream.Out, assertIs<WriteError.Refused>(sink.failure).stream)
         } finally {
             fclose(full)
         }
@@ -47,9 +47,9 @@ class StdioSinkTest {
                 assertNotNull(fdopen(ends[1], "w"))
             }
             try {
-                val sink = StdioSink(writer)
+                val sink = StdioSink(writer, Stream.Out)
                 sink.write("text")
-                assertEquals(WriteError.BrokenPipe, sink.failure)
+                assertEquals(WriteError.BrokenPipe(Stream.Out), sink.failure)
             } finally {
                 fclose(writer)
             }
@@ -62,7 +62,7 @@ class StdioSinkTest {
     fun `a write that lands is no failure`() {
         val file = assertNotNull(tmpfile())
         try {
-            val sink = StdioSink(file)
+            val sink = StdioSink(file, Stream.Out)
             sink.write("text")
             assertNull(sink.failure)
         } finally {

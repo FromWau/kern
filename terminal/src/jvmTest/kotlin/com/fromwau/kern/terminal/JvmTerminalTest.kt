@@ -33,17 +33,33 @@ class JvmTerminalTest {
     fun `a failed write is Unknown with the platform's message`() {
         val terminal = terminal(FailingStream(), WorkingStream())
         terminal.out("doomed")
-        assertEquals(Err(WriteError.Unknown("No space left on device")), terminal.writeResult())
+        assertEquals(Err(WriteError.Unknown(Stream.Out, "No space left on device")), terminal.writeResult())
     }
 
     @Test
     fun `a fresh terminal is not tainted by another terminal's failure`() {
         val broken = terminal(FailingStream(), WorkingStream())
         broken.out("doomed")
-        assertEquals(Err(WriteError.Unknown("No space left on device")), broken.writeResult())
+        assertEquals(Err(WriteError.Unknown(Stream.Out, "No space left on device")), broken.writeResult())
 
         val healthy = terminal(WorkingStream(), WorkingStream())
         healthy.out("fine")
         assertEquals(Ok(Unit), healthy.writeResult())
+    }
+
+    @Test
+    fun `a failed write to standard error names standard error`() {
+        val terminal = terminal(WorkingStream(), FailingStream())
+        terminal.out("fine")
+        terminal.err("doomed")
+        assertEquals(Err(WriteError.Unknown(Stream.Err, "No space left on device")), terminal.writeResult())
+    }
+
+    @Test
+    fun `standard output's failure comes before standard error's`() {
+        val terminal = terminal(FailingStream(), FailingStream())
+        terminal.err("doomed first")
+        terminal.out("doomed")
+        assertEquals(Stream.Out, (terminal.writeResult() as Err).error.stream)
     }
 }

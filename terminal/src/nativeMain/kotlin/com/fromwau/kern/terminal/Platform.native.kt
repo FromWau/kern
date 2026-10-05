@@ -23,8 +23,8 @@ import platform.posix.strerror
  */
 @OptIn(ExperimentalForeignApi::class)
 internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
-    val out = StdioSink(stdout)
-    val err = StdioSink(stderr)
+    val out = StdioSink(stdout, Stream.Out)
+    val err = StdioSink(stderr, Stream.Err)
     return PlatformIo(
         writeOut = out::write,
         writeErr = err::write,
@@ -36,19 +36,21 @@ internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
     )
 }
 
-/** Writes to [stream] at once, keeps the first write the system refused, and writes nothing after it. */
+/** Writes to [file] at once, keeps the first write the system refused, and writes nothing after it. */
 @OptIn(ExperimentalForeignApi::class)
-internal class StdioSink(private val stream: CPointer<FILE>?) {
+internal class StdioSink(
+    private val file: CPointer<FILE>?,
+    private val stream: Stream,
+) {
     var failure: WriteError? = null
         private set
 
     fun write(text: String) {
         if (failure != null) return
         // Flushed per write: text left in the buffer would fail only at exit, after the exit code was chosen.
-        if (fputs(text, stream) == EOF || fflush(stream) != 0) failure = writeErrorOf(posix_errno())
+        if (fputs(text, file) == EOF || fflush(file) != 0) failure = errorOf(posix_errno())
     }
-}
 
-@OptIn(ExperimentalForeignApi::class)
-private fun writeErrorOf(errno: Int): WriteError =
-    if (errno == EPIPE) WriteError.BrokenPipe else WriteError.Refused(strerror(errno)?.toKString())
+    private fun errorOf(errno: Int): WriteError =
+        if (errno == EPIPE) WriteError.BrokenPipe(stream) else WriteError.Refused(stream, strerror(errno)?.toKString())
+}

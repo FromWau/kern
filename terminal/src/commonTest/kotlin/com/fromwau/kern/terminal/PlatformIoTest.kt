@@ -66,8 +66,8 @@ class PlatformIoTest {
     fun `a write failure reaches the terminal as its typed error`() {
         assertEquals(Ok(Unit), io().toTerminal().writeResult())
         assertEquals(
-            Err(WriteError.BrokenPipe),
-            io(writeFailure = { WriteError.BrokenPipe }).toTerminal().writeResult(),
+            Err(WriteError.BrokenPipe(Stream.Out)),
+            io(writeFailure = { WriteError.BrokenPipe(Stream.Out) }).toTerminal().writeResult(),
         )
     }
 }

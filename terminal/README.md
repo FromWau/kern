@@ -98,10 +98,11 @@ do not wrap".
 terminal.out(everything)
 when (val written = terminal.writeResult()) {
     is Result.Success -> return 0
-    is Result.Error -> when (written.error) {
-        WriteError.BrokenPipe, is WriteError.Unknown -> return BROKEN_PIPE_EXIT
+    is Result.Error -> when (val error = written.error) {
+        is WriteError.BrokenPipe, is WriteError.Unknown -> return BROKEN_PIPE_EXIT
         is WriteError.Refused -> {
-            terminal.err("error: cannot write to standard output\n")
+            val name = if (error.stream == Stream.Out) "standard output" else "standard error"
+            terminal.err("error: cannot write to $name\n")
             return 1
         }
     }
@@ -120,7 +121,8 @@ reader closed.
 
 The JVM raises every failed write as the same exception, without the system's error code, so it cannot
 tell a closed pipe from a full disk. On Windows the answer follows the C runtime's error code, which is
-untested. A stream writes nothing after its first failure.
+untested. Each error names its `stream`; when both fail, standard output's failure is the one reported. A
+stream writes nothing after its first failure.
 
 ## License
 

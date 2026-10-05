@@ -10,8 +10,8 @@ import java.io.OutputStream
 internal fun jvmPlatformIo(isTty: Boolean, outSink: OutputStream, errSink: OutputStream): PlatformIo {
     // A sink per terminal rather than System.out/System.err: a failure recorded on a process-wide stream
     // would decide every later terminal's answer too.
-    val out = StreamSink(outSink)
-    val err = StreamSink(errSink)
+    val out = StreamSink(outSink, Stream.Out)
+    val err = StreamSink(errSink, Stream.Err)
     return PlatformIo(
         writeOut = out::write,
         writeErr = err::write,
@@ -25,7 +25,10 @@ internal fun jvmPlatformIo(isTty: Boolean, outSink: OutputStream, errSink: Outpu
 }
 
 /** Writes UTF-8 to [sink] at once, keeps the first failure a PrintStream would swallow, and writes nothing after it. */
-internal class StreamSink(private val sink: OutputStream) {
+internal class StreamSink(
+    private val sink: OutputStream,
+    private val stream: Stream,
+) {
     @Volatile
     var failure: WriteError? = null
         private set
@@ -39,7 +42,7 @@ internal class StreamSink(private val sink: OutputStream) {
         } catch (e: IOException) {
             // The JDK raises every failed write as a plain IOException, with no errno to tell a closed pipe
             // from a full disk.
-            failure = WriteError.Unknown(e.message)
+            failure = WriteError.Unknown(stream, e.message)
         }
     }
 }
