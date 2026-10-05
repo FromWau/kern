@@ -132,13 +132,18 @@ class LoggerTest {
     }
 
     @Test
-    fun `a sink that throws does not reach the code that logged`() {
-        val broken = Logger(sinks = listOf(LogSink { _, _ -> error("sink is broken") }, recorder))
+    fun `a sink that throws does not reach the code that logged and is reported on the console`() {
+        val console = mutableListOf<String>()
+        val broken = Logger(
+            sinks = listOf(LogSink { _, _ -> error("sink is broken") }, recorder),
+            console = { entry, _, _ -> console += entry.message },
+        )
         broken.configure(quiet(LogLevel.INFO))
 
         broken.tag("app").i { "still logged" }
 
         assertEquals(listOf("still logged"), recorder.messages())
+        assertEquals(listOf("a sink failed: sink is broken"), console)
     }
 
     @Test

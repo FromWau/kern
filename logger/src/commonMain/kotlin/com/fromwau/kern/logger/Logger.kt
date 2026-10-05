@@ -42,9 +42,12 @@ private const val MAX_BUFFERED = 1024
  *
  * @param sinks extra destinations beyond the console and the file. See [LogSink].
  */
-public class Logger(
-    private val sinks: List<LogSink> = emptyList(),
+public class Logger internal constructor(
+    private val sinks: List<LogSink>,
+    private val console: ConsoleWriter,
 ) {
+    public constructor(sinks: List<LogSink> = emptyList()) : this(sinks, consoleWriter)
+
     private val lock = reentrantLock()
     private val mutableState = MutableStateFlow<LoggerRuntimeState?>(null)
     private val buffered = ArrayDeque<LogEntry>()
@@ -151,7 +154,7 @@ public class Logger(
         if (!runtime.passes(entry.level)) return
 
         val line = entry.render(runtime.format)
-        if (runtime.console) consoleWriter.write(entry, line, runtime)
+        if (runtime.console) console.write(entry, line, runtime)
         runtime.file?.let { appendToFile(line, it, runtime) }
 
         sinks.forEach { sink ->
@@ -207,7 +210,7 @@ public class Logger(
         )
 
         // Console directly, never back through dispatch, which would re-enter the destination that failed.
-        consoleWriter.write(entry, entry.toTextLine(), runtime)
+        console.write(entry, entry.toTextLine(), runtime)
     }
 }
 
