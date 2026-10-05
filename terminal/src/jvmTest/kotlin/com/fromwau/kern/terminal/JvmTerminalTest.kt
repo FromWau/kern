@@ -1,13 +1,14 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
 import java.io.IOException
 import java.io.OutputStream
 import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import kotlin.test.assertEquals
 
 private class FailingStream : OutputStream() {
-    override fun write(b: Int): Unit = throw IOException("broken pipe")
+    override fun write(b: Int): Unit = throw IOException("No space left on device")
 }
 
 private class WorkingStream : OutputStream() {
@@ -17,38 +18,32 @@ private class WorkingStream : OutputStream() {
 private fun terminal(out: OutputStream, err: OutputStream) =
     jvmPlatformIo(isTty = false, outSink = out, errSink = err).toTerminal()
 
-/**
- * The JVM-only half of broken-pipe handling: unlike POSIX native, the JVM survives a closed pipe and
- * reports it through PrintStream's latched error flag, which a caller maps to [BROKEN_PIPE_EXIT].
- */
+/** The JVM survives a failed write and keeps it, without a reason the JDK does not give. */
 class JvmTerminalTest {
 
     @Test
-    fun `writeErrored is false when nothing failed`() {
+    fun `writes that land are a success`() {
         val terminal = terminal(WorkingStream(), WorkingStream())
         terminal.out("fine")
         terminal.err("also fine")
-        assertFalse(terminal.writeErrored())
+        assertEquals(Ok(Unit), terminal.writeResult())
     }
 
     @Test
-    fun `writeErrored detects a failed write on this terminal`() {
+    fun `a failed write is Unknown with the platform's message`() {
         val terminal = terminal(FailingStream(), WorkingStream())
         terminal.out("doomed")
-        assertTrue(terminal.writeErrored())
+        assertEquals(Err(WriteError.Unknown("No space left on device")), terminal.writeResult())
     }
 
     @Test
-    fun `a fresh terminal is not tainted by another terminals failure`() {
-        // checkError() never resets once true, so two Terminals sharing one process-wide stream cannot
-        // tell a fresh failure from an older run's. Each construction gets its own sink; a failure in one
-        // must not decide the other's writeErrored().
+    fun `a fresh terminal is not tainted by another terminal's failure`() {
         val broken = terminal(FailingStream(), WorkingStream())
         broken.out("doomed")
-        assertTrue(broken.writeErrored())
+        assertEquals(Err(WriteError.Unknown("No space left on device")), broken.writeResult())
 
         val healthy = terminal(WorkingStream(), WorkingStream())
         healthy.out("fine")
-        assertFalse(healthy.writeErrored())
+        assertEquals(Ok(Unit), healthy.writeResult())
     }
 }

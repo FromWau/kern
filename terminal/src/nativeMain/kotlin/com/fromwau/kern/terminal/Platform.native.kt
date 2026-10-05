@@ -4,19 +4,22 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import platform.posix.EOF
+import platform.posix.EPIPE
 import platform.posix.FILE
 import platform.posix.fflush
 import platform.posix.fileno
 import platform.posix.fputs
 import platform.posix.getenv
 import platform.posix.isatty
+import platform.posix.posix_errno
 import platform.posix.stderr
 import platform.posix.stdout
+import platform.posix.strerror
 
 /**
  * Stdio shared by every native target; width and ANSI capability are the only per-family answers. A closed
- * pipe on POSIX ends the process with SIGPIPE before anything can ask, so [PlatformIo.writeFailed] reports
- * the failures that raise no signal: a full disk, a closed or unwritable handle.
+ * pipe on POSIX ends the process with SIGPIPE before anything can ask, unless the program ignores that
+ * signal; [PlatformIo.writeFailure] reports what remains: a full disk, a closed or unwritable handle.
  */
 @OptIn(ExperimentalForeignApi::class)
 internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
@@ -29,18 +32,23 @@ internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
         width = width,
         ansiCapable = ansiCapable,
         env = { getenv(it)?.toKString() },
-        writeFailed = { out.failed || err.failed },
+        writeFailure = { out.failure ?: err.failure },
     )
 }
 
-/** Writes to [stream] at once and remembers whether the system refused a write. */
+/** Writes to [stream] at once, keeps the first write the system refused, and writes nothing after it. */
 @OptIn(ExperimentalForeignApi::class)
 internal class StdioSink(private val stream: CPointer<FILE>?) {
-    var failed: Boolean = false
+    var failure: WriteError? = null
         private set
 
     fun write(text: String) {
+        if (failure != null) return
         // Flushed per write: text left in the buffer would fail only at exit, after the exit code was chosen.
-        if (fputs(text, stream) == EOF || fflush(stream) != 0) failed = true
+        if (fputs(text, stream) == EOF || fflush(stream) != 0) failure = writeErrorOf(posix_errno())
     }
 }
+
+@OptIn(ExperimentalForeignApi::class)
+private fun writeErrorOf(errno: Int): WriteError =
+    if (errno == EPIPE) WriteError.BrokenPipe else WriteError.Refused(strerror(errno)?.toKString())

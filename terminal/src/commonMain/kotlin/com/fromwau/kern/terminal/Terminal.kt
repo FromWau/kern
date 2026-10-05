@@ -1,5 +1,10 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.IError
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
+
 /** Exit code for a truncated output pipe: the shell's 128+N "killed by signal N" convention, N = SIGPIPE (13). */
 public const val BROKEN_PIPE_EXIT: Int = 128 + 13
 
@@ -32,9 +37,33 @@ public interface Terminal {
     public val ansi: Boolean get() = false
 
     /**
-     * Whether a write has already failed, typically because a downstream `| head` closed the pipe. Ask
-     * after writing and report [BROKEN_PIPE_EXIT] instead of a false success. The default `false` is right
-     * for any terminal whose writes cannot fail quietly.
+     * Whether every write so far reached its destination, or why one did not. A stream writes nothing after
+     * its first failure. Ask after writing instead of reporting a false success. A [WriteError.BrokenPipe] is
+     * the reader's choice and is usually reported through [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost
+     * output the user expected. Linux and macOS tell the two apart; the JVM answers [WriteError.Unknown]. The
+     * default success is right for any terminal whose writes cannot fail quietly.
      */
-    public fun writeErrored(): Boolean = false
+    public fun writeResult(): EmptyResult<WriteError> = Ok(Unit)
+
+    /** Whether a write has already failed. */
+    @Deprecated(
+        "Use writeResult(), which says why a write failed.",
+        ReplaceWith("writeResult() is Result.Error", "com.fromwau.kern.result.Result"),
+    )
+    public fun writeErrored(): Boolean = writeResult() is Result.Error
+}
+
+/** Why output did not reach its destination. */
+public sealed interface WriteError : IError {
+    /** The reader went away, as when a downstream `| head` stops reading. */
+    public data object BrokenPipe : WriteError
+
+    /** The system refused the write, as on a full disk or a closed handle. [detail] is its own message. */
+    public data class Refused(val detail: String?) : WriteError
+
+    /**
+     * A write failed for a reason the platform does not report, as on the JVM, where a closed pipe and a full
+     * disk raise the same exception. [detail] is the platform's message, for showing, not for deciding.
+     */
+    public data class Unknown(val detail: String?) : WriteError
 }

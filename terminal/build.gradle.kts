@@ -11,8 +11,13 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     sourceSets {
-        // JVM and Android share their stdio wiring (PrintStream sinks, the checkError broken-pipe latch)
-        // and differ only in the tty probe, so the shared half lives one level above both.
+        commonMain.dependencies {
+            // api: Terminal.writeResult returns a Result.
+            api(project(":result"))
+        }
+
+        // JVM and Android share their stdio wiring (the sinks that keep a failed write) and differ only in
+        // the tty probe, so the shared half lives one level above both.
         val jvmAndroidMain = create("jvmAndroidMain") {
             dependsOn(commonMain.get())
         }

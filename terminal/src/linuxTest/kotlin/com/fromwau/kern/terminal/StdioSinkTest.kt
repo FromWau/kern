@@ -1,36 +1,70 @@
 package com.fromwau.kern.terminal
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.IntVar
+import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.get
+import kotlinx.cinterop.memScoped
+import platform.posix.SIGPIPE
+import platform.posix.SIG_IGN
+import platform.posix.close
 import platform.posix.fclose
+import platform.posix.fdopen
 import platform.posix.fopen
+import platform.posix.pipe
+import platform.posix.signal
 import platform.posix.tmpfile
 import kotlin.test.Test
-import kotlin.test.assertFalse
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 @OptIn(ExperimentalForeignApi::class)
 class StdioSinkTest {
 
     @Test
-    fun `a write the device refuses is reported`() {
+    fun `a write the device refuses is Refused`() {
         val full = assertNotNull(fopen("/dev/full", "w"))
         try {
             val sink = StdioSink(full)
             sink.write("text")
-            assertTrue(sink.failed)
+            assertIs<WriteError.Refused>(sink.failure)
         } finally {
             fclose(full)
         }
     }
 
     @Test
-    fun `a write that lands is not reported`() {
+    fun `a write to a pipe whose reader is gone is BrokenPipe`() {
+        // Ignored for the test: by default the signal ends the process before the write can fail.
+        val previous = signal(SIGPIPE, SIG_IGN)
+        try {
+            val writer = memScoped {
+                val ends = allocArray<IntVar>(2)
+                check(pipe(ends) == 0)
+                close(ends[0])
+                assertNotNull(fdopen(ends[1], "w"))
+            }
+            try {
+                val sink = StdioSink(writer)
+                sink.write("text")
+                assertEquals(WriteError.BrokenPipe, sink.failure)
+            } finally {
+                fclose(writer)
+            }
+        } finally {
+            signal(SIGPIPE, previous)
+        }
+    }
+
+    @Test
+    fun `a write that lands is no failure`() {
         val file = assertNotNull(tmpfile())
         try {
             val sink = StdioSink(file)
             sink.write("text")
-            assertFalse(sink.failed)
+            assertNull(sink.failure)
         } finally {
             fclose(file)
         }

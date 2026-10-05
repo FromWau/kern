@@ -1,5 +1,7 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,7 +14,7 @@ private fun io(
     width: Int? = null,
     ansiCapable: Boolean = true,
     env: Map<String, String> = emptyMap(),
-    writeFailed: () -> Boolean = { false },
+    writeFailure: () -> WriteError? = { null },
 ) = PlatformIo(
     writeOut = out,
     writeErr = err,
@@ -20,7 +22,7 @@ private fun io(
     width = width,
     ansiCapable = ansiCapable,
     env = { env[it] },
-    writeFailed = writeFailed,
+    writeFailure = writeFailure,
 )
 
 /**
@@ -61,8 +63,11 @@ class PlatformIoTest {
     }
 
     @Test
-    fun `a write failure reaches the terminal`() {
-        assertFalse(io().toTerminal().writeErrored())
-        assertTrue(io(writeFailed = { true }).toTerminal().writeErrored())
+    fun `a write failure reaches the terminal as its typed error`() {
+        assertEquals(Ok(Unit), io().toTerminal().writeResult())
+        assertEquals(
+            Err(WriteError.BrokenPipe),
+            io(writeFailure = { WriteError.BrokenPipe }).toTerminal().writeResult(),
+        )
     }
 }

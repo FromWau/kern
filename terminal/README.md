@@ -92,19 +92,35 @@ Windows, each falling back to stderr when stdout is redirected.
 `0` is never returned by `defaultTerminal()`, but a hand-written `Terminal` may return it to mean "unknown,
 do not wrap".
 
-## Broken pipes
+## Failed writes
 
 ```kotlin
 terminal.out(everything)
-if (terminal.writeErrored()) return BROKEN_PIPE_EXIT
+when (val written = terminal.writeResult()) {
+    is Result.Success -> return 0
+    is Result.Error -> when (written.error) {
+        WriteError.BrokenPipe, is WriteError.Unknown -> return BROKEN_PIPE_EXIT
+        is WriteError.Refused -> {
+            terminal.err("error: cannot write to standard output\n")
+            return 1
+        }
+    }
+}
 ```
 
 `yourtool | head -1` closes the pipe while you are still writing, and `yourtool > /dev/full` runs out of
 space. Neither throws, so a program that never asks reports success having written nothing.
-`writeErrored()` asks, and `BROKEN_PIPE_EXIT` is the shell's 128+SIGPIPE convention for reporting it.
+`writeResult()` asks, and `BROKEN_PIPE_EXIT` is the shell's 128+SIGPIPE convention for reporting a pipe the
+reader closed.
 
-On POSIX native a closed pipe ends the process with `SIGPIPE` before anything can ask; a full disk or a
-closed handle raises no signal, and `writeErrored()` reports it there as on the JVM.
+| failure | Linux and macOS | JVM and Android |
+|---|---|---|
+| the reader closed the pipe | the process ends with `SIGPIPE` first, or `BrokenPipe` if you ignore that signal | `Unknown` |
+| a full disk, a closed handle | `Refused`, with the system's message | `Unknown`, with the JDK's message |
+
+The JVM raises every failed write as the same exception, without the system's error code, so it cannot
+tell a closed pipe from a full disk. On Windows the answer follows the C runtime's error code, which is
+untested. A stream writes nothing after its first failure.
 
 ## License
 

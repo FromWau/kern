@@ -1,5 +1,9 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+
 /** What a platform knows about its own stdio. Policy over these answers lives in [toTerminal], never in an actual. */
 internal class PlatformIo(
     val writeOut: (String) -> Unit,
@@ -11,8 +15,8 @@ internal class PlatformIo(
     /** Whether the output handle can render ANSI escapes right now. */
     val ansiCapable: Boolean,
     val env: (String) -> String?,
-    // The JVM latches a flag on a failed write; native checks each write as it happens.
-    val writeFailed: () -> Boolean = { false },
+    /** Why a write failed, stdout's failure before stderr's, or null while every write landed. */
+    val writeFailure: () -> WriteError? = { null },
 )
 
 /** The platform's own stdio. Constructing it may configure the terminal (Windows code page and VT mode). */
@@ -32,7 +36,7 @@ internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
     override fun err(text: String) = writeErr(text)
     override val columns: Int = resolveColumns(env, width)
     override val ansi: Boolean = ansiEnabled(isTty, env, ansiCapable)
-    override fun writeErrored(): Boolean = writeFailed()
+    override fun writeResult(): EmptyResult<WriteError> = writeFailure()?.let { Err(it) } ?: Ok(Unit)
 }
 
 /**

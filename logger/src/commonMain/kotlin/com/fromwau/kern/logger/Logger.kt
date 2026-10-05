@@ -38,14 +38,13 @@ private const val MAX_BUFFERED = 1024
  * Log.update { it.copy(level = LogLevel.VERBOSE) }   // a settings screen, applied immediately
  * ```
  *
- * Safe to log to from any thread. Use [Log] unless you need more than one logger, or need [sinks].
- *
- * @param sinks extra destinations beyond the console and the file. See [LogSink].
+ * Safe to log to from any thread. Use [Log] unless you need more than one logger, or need extra sinks.
  */
 public class Logger internal constructor(
     private val sinks: List<LogSink>,
     private val console: ConsoleWriter,
 ) {
+    /** @param sinks extra destinations beyond the console and the file. See [LogSink]. */
     public constructor(sinks: List<LogSink> = emptyList()) : this(sinks, consoleWriter)
 
     private val lock = reentrantLock()
