@@ -30,12 +30,23 @@ didYouMean("triangle", listOf("circle", "square"))        // null
 Case is ignored, and the first of these that finds a name wins:
 
 1. a name that differs only in case;
-2. the only name what was written is the start of;
-3. the name fewest edits away, within two edits or a third of its length, whichever is more, and with fewer
-   edits than the longer of the two has characters.
+2. the only name what was written is the start of, when at least two characters were written;
+3. the name fewest edits away: one edit for a name of up to five characters, otherwise two edits or a third of
+   its length, whichever is more, and always fewer edits than the longer of the two has characters. In a word of
+   three characters or fewer a replaced character does not count as close, so `can` is not taken for `nan`,
+   while `an` (a character dropped) and `nna` (two swapped) are.
 
 What was written is never suggested back, nothing is suggested when no name is close, and when two names are
 equally close the one listed first wins.
+
+When the context says which names to expect, pass them as `preferred`. A preferred name that is close by the
+rules above wins over every other name; none is suggested when none of them is close.
+
+```kotlin
+val keywords = listOf("nan", "inf", "true", "false")
+didYouMean("tru", keywords, preferred = listOf("true", "false"))  // "true"
+didYouMean("t", keywords, preferred = listOf("true", "false"))    // null: one character is too little
+```
 
 ## Measure the distance
 
