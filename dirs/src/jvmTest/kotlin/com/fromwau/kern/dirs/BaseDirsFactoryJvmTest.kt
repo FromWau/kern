@@ -2,7 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.files.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,16 +14,16 @@ class BaseDirsFactoryJvmTest {
     fun `macOS and Darwin get the macOS rules`() {
         val caches = Path("/Users/me/Library/Caches")
 
-        assertEquals(caches, baseDirFor("Mac OS X", envOf(), userHome = "/Users/me").getOrNull()?.cacheHome)
-        assertEquals(caches, baseDirFor("Darwin", envOf(), userHome = "/Users/me").getOrNull()?.cacheHome)
+        assertEquals(caches, baseDirFor("Mac OS X", envOf(), userHome = "/Users/me").assertSuccess().cacheHome)
+        assertEquals(caches, baseDirFor("Darwin", envOf(), userHome = "/Users/me").assertSuccess().cacheHome)
     }
 
     @Test
     fun `Windows gets the Windows rules and anything else the XDG rules`() {
         val env = envOf("HOME" to "/home/me", "APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
 
-        assertEquals(Path("/local"), baseDirFor("Windows 11", env, userHome = "/profile").getOrNull()?.cacheHome)
-        assertEquals(Path("/home/me/.cache"), baseDirFor("Linux", env, userHome = null).getOrNull()?.cacheHome)
+        assertEquals(Path("/local"), baseDirFor("Windows 11", env, userHome = "/profile").assertSuccess().cacheHome)
+        assertEquals(Path("/home/me/.cache"), baseDirFor("Linux", env, userHome = null).assertSuccess().cacheHome)
     }
 
     @Test
@@ -34,14 +34,14 @@ class BaseDirsFactoryJvmTest {
             assertEquals(unresolved, baseDirFor("Linux", envOf(), userHome))
             assertEquals(unresolved, baseDirFor("Mac OS X", envOf(), userHome))
         }
-        assertEquals(Path("/home/me"), baseDirFor("Linux", envOf("HOME" to "/home/me"), "?").getOrNull()?.home)
+        assertEquals(Path("/home/me"), baseDirFor("Linux", envOf("HOME" to "/home/me"), "?").assertSuccess().home)
     }
 
     @Test
     fun `a blank variable counts as unset`() {
         val env = envOf("HOME" to "/home/me", "XDG_CONFIG_HOME" to " ")
 
-        assertEquals(Path("/home/me/.config"), baseDirFor("Linux", env, userHome = null).getOrNull()?.configHome)
+        assertEquals(Path("/home/me/.config"), baseDirFor("Linux", env, userHome = null).assertSuccess().configHome)
     }
 
     @Test
@@ -81,7 +81,7 @@ class BaseDirsFactoryJvmTest {
 
     @Test
     fun `linux falls back to user home when HOME is unset`() {
-        assertEquals(Path("/home/account"), linuxBaseDir(envOf(), userHome = "/home/account").getOrNull()?.home)
+        assertEquals(Path("/home/account"), linuxBaseDir(envOf(), userHome = "/home/account").assertSuccess().home)
     }
 
     @Test
@@ -148,16 +148,16 @@ class BaseDirsFactoryJvmTest {
         val env = envOf("HOME" to "/home/me", "TMPDIR" to "/run/user/1000/tmp")
         val expected = Path("/run/user/1000/tmp")
 
-        assertEquals(expected, baseDirFor("Linux", env, userHome = null).getOrNull()?.tempHome)
-        assertEquals(expected, baseDirFor("Mac OS X", env, userHome = "/Users/me").getOrNull()?.tempHome)
+        assertEquals(expected, baseDirFor("Linux", env, userHome = null).assertSuccess().tempHome)
+        assertEquals(expected, baseDirFor("Mac OS X", env, userHome = "/Users/me").assertSuccess().tempHome)
     }
 
     @Test
     fun `a blank or missing TMPDIR leaves the temp root at slash tmp`() {
         val blank = envOf("HOME" to "/home/me", "TMPDIR" to " ")
 
-        assertEquals(Path("/tmp"), baseDirFor("Linux", blank, userHome = null).getOrNull()?.tempHome)
-        assertEquals(Path("/tmp"), baseDirFor("Mac OS X", blank, userHome = "/Users/me").getOrNull()?.tempHome)
-        assertEquals(Path("/tmp"), baseDirFor("Linux", envOf("HOME" to "/home/me"), null).getOrNull()?.tempHome)
+        assertEquals(Path("/tmp"), baseDirFor("Linux", blank, userHome = null).assertSuccess().tempHome)
+        assertEquals(Path("/tmp"), baseDirFor("Mac OS X", blank, userHome = "/Users/me").assertSuccess().tempHome)
+        assertEquals(Path("/tmp"), baseDirFor("Linux", envOf("HOME" to "/home/me"), null).assertSuccess().tempHome)
     }
 }

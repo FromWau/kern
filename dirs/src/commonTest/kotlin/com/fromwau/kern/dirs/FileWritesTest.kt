@@ -2,7 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.errorOrNull
+import com.fromwau.kern.result.assertError
 import kotlinx.io.buffered
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readByteArray
@@ -11,7 +11,6 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -127,8 +126,7 @@ class FileWritesTest {
         val from = (dir / "a.txt").writeRaw("a")
         val to = dir / "nowhere" / "b.txt"
 
-        val error = from.moveTo(to).errorOrNull()
-        assertIs<FileError.WriteFailed>(error)
+        val error = from.moveTo(to).assertError<FileError.WriteFailed>()
         assertEquals(to, error.path)
         assertTrue(from.exists())
     }
@@ -156,8 +154,7 @@ class FileWritesTest {
         SystemFileSystem.createDirectories(outer)
         val inner = (outer / "inner.txt").writeRaw("a")
 
-        val error = outer.delete().errorOrNull()
-        assertIs<FileError.WriteFailed>(error)
+        val error = outer.delete().assertError<FileError.WriteFailed>()
         assertEquals(outer, error.path)
         assertTrue(error.reason.contains("not empty", ignoreCase = true), error.reason)
         assertTrue(inner.exists())

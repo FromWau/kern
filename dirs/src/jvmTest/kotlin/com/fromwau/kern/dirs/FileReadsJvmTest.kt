@@ -2,6 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.errorOrNull
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -11,7 +12,6 @@ import java.nio.file.Paths
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class FileReadsJvmTest {
@@ -35,8 +35,7 @@ class FileReadsJvmTest {
         // A runner that may look anyway, such as root, leaves nothing to observe.
         if (canLookUp(file)) return
 
-        val error = file.readText().errorOrNull()
-        assertIs<FileError.Inaccessible>(error)
+        val error = file.readText().assertError<FileError.Inaccessible>()
         assertEquals(file, error.path)
         assertTrue(error.reason.isNotBlank())
     }
@@ -49,7 +48,7 @@ class FileReadsJvmTest {
 
         if (canLookUp(inner)) return
 
-        assertIs<FileError.Inaccessible>(inner.list().errorOrNull())
+        inner.list().assertError<FileError.Inaccessible>()
     }
 
     @Test
@@ -61,8 +60,7 @@ class FileReadsJvmTest {
         // A runner that may read it anyway, such as root, leaves nothing to observe.
         if (canList(locked)) return
 
-        val error = locked.list().errorOrNull()
-        assertIs<FileError.Inaccessible>(error)
+        val error = locked.list().assertError<FileError.Inaccessible>()
         assertEquals(locked, error.path)
     }
 
@@ -94,7 +92,7 @@ class FileReadsJvmTest {
         // A NUL byte is the one name java.nio refuses to parse at all, where java.io only answered false.
         val unparsable = dir / ("a" + Char(0) + "b")
 
-        assertIs<FileError.NotFound>(unparsable.readText().errorOrNull())
+        unparsable.readText().assertError<FileError.NotFound>()
     }
 
     @Test
@@ -105,6 +103,6 @@ class FileReadsJvmTest {
         Files.createSymbolicLink(Paths.get(first.toString()), Paths.get(second.toString()))
         Files.createSymbolicLink(Paths.get(second.toString()), Paths.get(first.toString()))
 
-        assertIs<FileError.Inaccessible>(first.readText().errorOrNull())
+        first.readText().assertError<FileError.Inaccessible>()
     }
 }

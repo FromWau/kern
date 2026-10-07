@@ -2,7 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.io.files.Path
@@ -77,7 +77,7 @@ class BaseDirsFactoryLinuxTest {
     fun `a blank XDG variable counts as unset`() {
         environment("HOME" to "/home/me", "XDG_CONFIG_HOME" to " ")
 
-        assertEquals(Path("/home/me/.config"), BaseDirsFactory().create().getOrNull()?.configHome)
+        assertEquals(Path("/home/me/.config"), BaseDirsFactory().create().assertSuccess().configHome)
     }
 
     @Test
@@ -98,13 +98,13 @@ class BaseDirsFactoryLinuxTest {
     fun `TMPDIR is the temp root`() {
         environment("HOME" to "/home/me", "TMPDIR" to "/run/user/1000/tmp")
 
-        assertEquals(Path("/run/user/1000/tmp"), BaseDirsFactory().create().getOrNull()?.tempHome)
+        assertEquals(Path("/run/user/1000/tmp"), BaseDirsFactory().create().assertSuccess().tempHome)
     }
 
     @Test
     fun `a blank TMPDIR leaves the temp root at slash tmp`() {
         environment("HOME" to "/home/me", "TMPDIR" to " ")
 
-        assertEquals(Path("/tmp"), BaseDirsFactory().create().getOrNull()?.tempHome)
+        assertEquals(Path("/tmp"), BaseDirsFactory().create().assertSuccess().tempHome)
     }
 }

@@ -2,8 +2,8 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.errorOrNull
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import platform.posix.S_IRUSR
@@ -14,7 +14,6 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -63,7 +62,7 @@ class FilesLinuxTest {
         val full = (dir / "full").also { SystemFileSystem.createDirectories(it) }
         (full / "entry").writeRaw("a")
 
-        assertIs<FileError.WriteFailed>(from.moveTo(full).errorOrNull())
+        from.moveTo(full).assertError<FileError.WriteFailed>()
         assertEquals(Ok(Unit), from.moveTo(empty))
         assertFalse(from.exists())
     }
@@ -88,7 +87,7 @@ class FilesLinuxTest {
             // A runner that may write it anyway, such as root, leaves nothing to observe.
             if (file.canOpenForWriting()) return
 
-            assertIs<FileError.WriteFailed>(file.writeText("new").errorOrNull())
+            file.writeText("new").assertError<FileError.WriteFailed>()
             assertEquals("old", file.readRaw())
             assertEquals(S_IRUSR, file.mode())
             assertEquals(listOf(file), SystemFileSystem.list(dir).toList())
@@ -105,7 +104,7 @@ class FilesLinuxTest {
             // A runner that may read it anyway, such as root, leaves nothing to observe.
             if (file.canOpenForReading()) return
 
-            assertIs<FileError.WriteFailed>(file.writeText("new").errorOrNull())
+            file.writeText("new").assertError<FileError.WriteFailed>()
             assertEquals(S_IWUSR, file.mode())
             assertEquals(listOf(file), SystemFileSystem.list(dir).toList())
         } finally {
@@ -124,7 +123,7 @@ class FilesLinuxTest {
             // A runner that may write it anyway, such as root, leaves nothing to observe.
             if (folder.canCreateFileIn()) return
 
-            assertIs<FileError.WriteFailed>(file.writeText("new").errorOrNull())
+            file.writeText("new").assertError<FileError.WriteFailed>()
             assertEquals("old", file.readRaw())
             assertEquals(listOf(file), SystemFileSystem.list(folder).toList())
         } finally {
@@ -138,7 +137,7 @@ class FilesLinuxTest {
 
         val result = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
 
-        assertIs<FileError.WriteFailed>(result.errorOrNull())
+        result.assertError<FileError.WriteFailed>()
         assertEquals("old", file.readRaw())
         assertEquals(listOf(file), SystemFileSystem.list(dir).toList())
     }
@@ -149,7 +148,7 @@ class FilesLinuxTest {
 
         val result = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
 
-        assertIs<FileError.WriteFailed>(result.errorOrNull())
+        result.assertError<FileError.WriteFailed>()
         assertEquals(emptyList<Path>(), SystemFileSystem.list(dir).toList())
     }
 
@@ -162,7 +161,7 @@ class FilesLinuxTest {
 
         val result = withFileSizeLimit(bytes = 4096) { link.writeBytes(tooLarge) }
 
-        assertIs<FileError.WriteFailed>(result.errorOrNull())
+        result.assertError<FileError.WriteFailed>()
         assertTrue(link.isSymlink())
         assertFalse(destination.exists())
     }
@@ -241,8 +240,7 @@ class FilesLinuxTest {
             val error = dir
                 .walkTopDown()
                 .single()
-                .errorOrNull()
-            assertIs<FileError.Inaccessible>(error)
+                .assertError<FileError.Inaccessible>()
             assertEquals(locked, error.path)
         }
     }
@@ -254,8 +252,7 @@ class FilesLinuxTest {
         (locked / "app.toml").writeRaw("port = 1")
         // Searchable but not readable: the entries are there, and reading their names is what is refused.
         locked.withMode(S_IXUSR) {
-            val error = locked.list().errorOrNull()
-            assertIs<FileError.Inaccessible>(error)
+            val error = locked.list().assertError<FileError.Inaccessible>()
             assertEquals(locked, error.path)
         }
     }
@@ -266,7 +263,7 @@ class FilesLinuxTest {
         SystemFileSystem.createDirectories(locked)
         val file = (locked / "app.toml").writeRaw("port = 1")
         locked.withMode(0) {
-            assertIs<FileError.Inaccessible>(file.delete().errorOrNull())
+            file.delete().assertError<FileError.Inaccessible>()
         }
     }
 
@@ -277,7 +274,7 @@ class FilesLinuxTest {
         first.symlinkTo(second)
         second.symlinkTo(first)
 
-        assertIs<FileError.Inaccessible>(first.readText().errorOrNull())
+        first.readText().assertError<FileError.Inaccessible>()
     }
 
     @Test
@@ -286,7 +283,7 @@ class FilesLinuxTest {
         SystemFileSystem.createDirectories(locked)
         val file = (locked / "app.toml").writeRaw("port = 1")
         locked.withMode(0) {
-            assertIs<FileError.Inaccessible>(file.readText().errorOrNull())
+            file.readText().assertError<FileError.Inaccessible>()
         }
     }
 
@@ -300,8 +297,7 @@ class FilesLinuxTest {
             // A runner that may write the folder anyway, such as root, restores the backup and never gets here.
             if (dir.canCreateFileIn()) return
 
-            val error = result.errorOrNull()
-            assertIs<FileError.RestoreFailed>(error)
+            val error = result.assertError<FileError.RestoreFailed>()
             val backup = assertNotNull(error.backup)
             assertEquals("old", backup.readRaw())
             // The file keeps what the failed write left in it, so the backup is the only intact copy.
@@ -319,7 +315,7 @@ class FilesLinuxTest {
         val result = withFileSizeLimitLocking(dir, bytes = 4096, mode = S_IRUSR) { file.writeBytes(tooLarge) }
 
         dir.withModeRestored {
-            assertNotNull(assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup)
+            assertNotNull(result.assertError<FileError.RestoreFailed>().backup)
         }
     }
 
@@ -333,7 +329,7 @@ class FilesLinuxTest {
         val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
 
         dir.withModeRestored {
-            val backup = assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup
+            val backup = result.assertError<FileError.RestoreFailed>().backup
 
             assertEquals(S_IRUSR or S_IWUSR, assertNotNull(backup).mode())
         }
@@ -347,7 +343,7 @@ class FilesLinuxTest {
         // The restore moves the copy back over the file, so what the copy carries is what the file keeps.
         val result = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
 
-        assertIs<FileError.WriteFailed>(result.errorOrNull())
+        result.assertError<FileError.WriteFailed>()
         assertEquals(S_IRUSR or S_IWUSR, file.mode())
         assertEquals("old", file.readRaw())
     }
@@ -359,7 +355,7 @@ class FilesLinuxTest {
         val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
 
         dir.withModeRestored {
-            assertNull(assertIs<FileError.RestoreFailed>(result.errorOrNull()).backup)
+            assertNull(result.assertError<FileError.RestoreFailed>().backup)
         }
     }
 
@@ -369,7 +365,7 @@ class FilesLinuxTest {
         // The same write fails the same way in both runs. Only the second one cannot put the backup back, so
         // any difference in what is reported is the undo's doing.
         val failedWrite = withFileSizeLimit(bytes = 4096) { file.writeBytes(tooLarge) }
-        val writeReason = assertIs<FileError.WriteFailed>(failedWrite.errorOrNull()).reason
+        val writeReason = failedWrite.assertError<FileError.WriteFailed>().reason
 
         val result = withFileSizeLimitLocking(dir, bytes = 4096) { file.writeBytes(tooLarge) }
 
@@ -377,7 +373,7 @@ class FilesLinuxTest {
             // A runner that may write the folder anyway, such as root, restores the backup and never gets here.
             if (dir.canCreateFileIn()) return
 
-            val error = assertIs<FileError.RestoreFailed>(result.errorOrNull())
+            val error = result.assertError<FileError.RestoreFailed>()
             assertNotEquals(writeReason, error.reason)
         } finally {
             dir.setMode(S_IRWXU)
@@ -392,7 +388,7 @@ class FilesLinuxTest {
             .also { links += it }
         (dir / ".real.toml.$A_WRITE_ID.bak").writeRaw("older")
 
-        assertEquals(listOf(".real.toml.$A_WRITE_ID.bak"), link.leftoverBackups().getOrNull()?.map { it.name })
+        assertEquals(listOf(".real.toml.$A_WRITE_ID.bak"), link.leftoverBackups().assertSuccess().map { it.name })
     }
 
     @Test
@@ -403,9 +399,9 @@ class FilesLinuxTest {
             Path("rel.toml").writeRaw("a = 1")
             Path(".rel.toml.$A_WRITE_ID.bak").writeRaw("a = 0")
 
-            val found = Path("rel.toml").leftoverBackups().getOrNull()
+            val found = Path("rel.toml").leftoverBackups().assertSuccess()
 
-            assertEquals(listOf(".rel.toml.$A_WRITE_ID.bak"), found?.map { it.name })
+            assertEquals(listOf(".rel.toml.$A_WRITE_ID.bak"), found.map { it.name })
         } finally {
             changeDirectory(previous)
         }
@@ -418,7 +414,7 @@ class FilesLinuxTest {
         locked.withMode(0) {
             val asked = locked / "app" / "deeper"
 
-            assertEquals(asked, assertIs<FileError.Inaccessible>(asked.createDirectories().errorOrNull()).path)
+            assertEquals(asked, asked.createDirectories().assertError<FileError.Inaccessible>().path)
         }
     }
 
@@ -429,7 +425,7 @@ class FilesLinuxTest {
         locked.withMode(0) {
             val result = (locked / "app" / "settings.toml").writeText("a = 1")
 
-            assertEquals(locked / "app", assertIs<FileError.Inaccessible>(result.errorOrNull()).path)
+            assertEquals(locked / "app", result.assertError<FileError.Inaccessible>().path)
         }
     }
 
@@ -439,7 +435,7 @@ class FilesLinuxTest {
             .symlinkTo(dir / "absent" / "app.toml")
             .also { links += it }
 
-        val error = assertIs<FileError.WriteFailed>(link.writeText("a = 1").errorOrNull())
+        val error = link.writeText("a = 1").assertError<FileError.WriteFailed>()
 
         assertEquals(link, error.path)
         assertFalse(SystemFileSystem.exists(dir / "absent"))
@@ -481,8 +477,7 @@ class FilesLinuxTest {
             // A runner that may write it anyway, such as root, removes the file and leaves nothing to observe.
             if (folder.canCreateFileIn()) return
 
-            val error = file.deleteRecursively().errorOrNull()
-            assertIs<FileError.WriteFailed>(error)
+            val error = file.deleteRecursively().assertError<FileError.WriteFailed>()
             assertEquals(file, error.path)
         } finally {
             folder.setMode(S_IRWXU)

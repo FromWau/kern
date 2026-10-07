@@ -38,5 +38,9 @@ kotlin {
             api(project(":result"))
             api(libs.kotlinx.io.core)
         }
+
+        commonTest.dependencies {
+            implementation(project(":result-test"))
+        }
     }
 }

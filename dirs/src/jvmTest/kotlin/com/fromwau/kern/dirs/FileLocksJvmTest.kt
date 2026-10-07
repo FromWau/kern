@@ -1,8 +1,8 @@
 package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.errorOrNull
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -10,7 +10,6 @@ import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -46,7 +45,7 @@ class FileLocksJvmTest {
 
             val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000
             assertTrue(elapsedMillis < GIVE_UP_BUDGET_MILLIS, "gave up after ${elapsedMillis}ms, not on its own wait")
-            val busy = assertIs<FileError.LockBusy>(outcome.errorOrNull())
+            val busy = outcome.assertError<FileError.LockBusy>()
             assertNull(busy.holderPid)
             assertTrue(busy.waitedMs >= DEFAULT_LOCK_WAIT_MILLIS, "waited ${busy.waitedMs}ms")
         } finally {
@@ -72,7 +71,7 @@ class FileLocksJvmTest {
 
             val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000
             assertTrue(elapsedMillis < GIVE_UP_BUDGET_MILLIS, "gave up after ${elapsedMillis}ms, not on its own wait")
-            assertIs<FileError.LockBusy>(outcome.errorOrNull())
+            outcome.assertError<FileError.LockBusy>()
         } finally {
             holder.join()
         }
@@ -124,15 +123,15 @@ class FileLocksJvmTest {
         waiter.join(GIVE_UP_BUDGET_MILLIS)
 
         check(!waiter.isAlive) { "the interrupted wait did not end" }
-        assertIs<FileError.LockBusy>((outcome as com.fromwau.kern.result.Result<*, *>).errorOrNull())
+        (outcome as com.fromwau.kern.result.Result<*, *>).assertError<FileError.LockBusy>()
         assertTrue(stillInterrupted, "the wait swallowed the interrupt")
     }
 
     @Test
     fun `a run another process is still running is not stale`() {
         val base = BaseDirs(dir, dir / "c", dir / "d", dir / "s", dir / "k", tempHome = dir / "tmp")
-        val running = checkNotNull(base.forApp("app").getOrNull())
-        val doctor = checkNotNull(base.forApp("app").getOrNull())
+        val running = base.forApp("app").assertSuccess()
+        val doctor = base.forApp("app").assertSuccess()
         File(running.temp.toString()).mkdirs()
         val marker = File(dir.toString(), "held")
         val holder = spawnHolder(running.temp / ".run.lock", marker)

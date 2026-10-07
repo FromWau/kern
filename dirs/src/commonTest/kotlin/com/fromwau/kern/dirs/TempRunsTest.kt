@@ -1,13 +1,12 @@
 package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.errorOrNull
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.files.Path
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
 
@@ -27,7 +26,7 @@ class TempRunsTest {
         dir.deleteTree()
     }
 
-    private fun run(): AppDirs = checkNotNull(base.forApp("app", Uuid.random()).getOrNull())
+    private fun run(): AppDirs = base.forApp("app", Uuid.random()).assertSuccess()
 
     @Test
     fun `withRunTemp creates the run's temp folder and gives back what the block returned`() {
@@ -68,12 +67,12 @@ class TempRunsTest {
     @Test
     fun `a second claim on one run id is LockBusy`() {
         val runId = Uuid.random()
-        val first = checkNotNull(base.forApp("app", runId).getOrNull())
-        val second = checkNotNull(base.forApp("app", runId).getOrNull())
+        val first = base.forApp("app", runId).assertSuccess()
+        val second = base.forApp("app", runId).assertSuccess()
 
         val outcome = first.withRunTemp { second.withRunTemp { } }
 
-        assertIs<FileError.LockBusy>(outcome.getOrNull()?.errorOrNull())
+        outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertTrue(first.temp.exists())
     }
 }

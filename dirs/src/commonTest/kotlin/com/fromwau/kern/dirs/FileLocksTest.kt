@@ -1,14 +1,11 @@
 package com.fromwau.kern.dirs
 
-import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.Result
-import com.fromwau.kern.result.errorOrNull
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.io.files.SystemFileSystem
@@ -48,7 +45,7 @@ class FileLocksTest {
         // The OS lock alone cannot do this: fcntl hands a process the lock it already holds.
         val outcome = lockFile.withLock { lockFile.withLock { } }
 
-        val busy = assertIs<FileError.LockBusy>(outcome.innerError())
+        val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertEquals(lockFile, busy.path)
         assertNull(busy.holderPid)
         assertTrue(busy.waitedMs >= DEFAULT_LOCK_WAIT_MILLIS, "waited ${busy.waitedMs}ms")
@@ -60,7 +57,7 @@ class FileLocksTest {
 
         val outcome = lockFile.withLock(waitMillis = 0) { spelledAgain.withLock(waitMillis = 0) { } }
 
-        val busy = assertIs<FileError.LockBusy>(outcome.innerError())
+        val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertEquals(spelledAgain, busy.path)
     }
 
@@ -68,7 +65,7 @@ class FileLocksTest {
     fun `a wait of zero refuses a lock already held at once`() {
         val outcome = lockFile.withLock(waitMillis = 0) { lockFile.withLock(waitMillis = 0) { } }
 
-        val busy = assertIs<FileError.LockBusy>(outcome.innerError())
+        val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertTrue(busy.waitedMs < DEFAULT_LOCK_WAIT_MILLIS, "waited ${busy.waitedMs}ms")
     }
 
@@ -78,7 +75,7 @@ class FileLocksTest {
 
         val outcome = lockFile.withLock(raised) { lockFile.withLock(raised) { } }
 
-        val busy = assertIs<FileError.LockBusy>(outcome.innerError())
+        val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertTrue(busy.waitedMs >= raised, "waited ${busy.waitedMs}ms of a ${raised}ms budget")
     }
 
@@ -88,9 +85,6 @@ class FileLocksTest {
         val folder = dir / "blocked.lock"
         SystemFileSystem.createDirectories(folder)
 
-        assertIs<FileError.LockFailed>(folder.withLock { }.errorOrNull())
+        folder.withLock { }.assertError<FileError.LockFailed>()
     }
-
-    /** The error the inner hold gave, from a block that took a second hold of the same lock. */
-    private fun Result<EmptyResult<FileError>, FileError>.innerError(): FileError? = getOrNull()?.errorOrNull()
 }

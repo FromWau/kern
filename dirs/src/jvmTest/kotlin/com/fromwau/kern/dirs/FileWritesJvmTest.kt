@@ -1,6 +1,7 @@
 package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.errorOrNull
 import kotlinx.io.files.SystemFileSystem
 import java.io.File
@@ -12,7 +13,6 @@ import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class FileWritesJvmTest {
@@ -45,7 +45,7 @@ class FileWritesJvmTest {
             // A runner that may look anyway, such as root, leaves nothing to observe.
             if (canLookUp(file)) return
 
-            assertIs<FileError.Inaccessible>(file.delete().errorOrNull())
+            file.delete().assertError<FileError.Inaccessible>()
         } finally {
             restore(locked)
         }
@@ -62,7 +62,7 @@ class FileWritesJvmTest {
 
             val asked = locked / "app" / "deeper"
 
-            assertEquals(asked, assertIs<FileError.Inaccessible>(asked.createDirectories().errorOrNull()).path)
+            assertEquals(asked, asked.createDirectories().assertError<FileError.Inaccessible>().path)
         } finally {
             restore(locked)
         }
@@ -77,7 +77,7 @@ class FileWritesJvmTest {
             // A runner that may write anyway, such as root, leaves nothing to observe.
             if (File(readOnly.toString(), "probe").mkdir()) return
 
-            val failure = assertIs<FileError.WriteFailed>((readOnly / "app").createDirectories().errorOrNull())
+            val failure = (readOnly / "app").createDirectories().assertError<FileError.WriteFailed>()
 
             assertEquals("Permission denied", failure.reason)
         } finally {
@@ -121,7 +121,7 @@ class FileWritesJvmTest {
             // A runner that may write it anyway, such as root, leaves nothing to observe. Appending empties nothing.
             if (runCatching { FileOutputStream(handle, true).close() }.isSuccess) return
 
-            assertIs<FileError.WriteFailed>(file.writeText("new").errorOrNull())
+            file.writeText("new").assertError<FileError.WriteFailed>()
             assertEquals("old", file.readRaw())
             assertEquals(listOf(file), SystemFileSystem.list(dir).toList())
         } finally {

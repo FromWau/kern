@@ -2,7 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.files.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,7 +35,7 @@ class BaseDirsTest {
 
     @Test
     fun `forApp draws a new run id on every call`() {
-        assertNotEquals(base.forApp("myapp").getOrNull()?.temp, base.forApp("myapp").getOrNull()?.temp)
+        assertNotEquals(base.forApp("myapp").assertSuccess().temp, base.forApp("myapp").assertSuccess().temp)
     }
 
     @Test
@@ -43,7 +43,7 @@ class BaseDirsTest {
         for (name in listOf(".", "..", "my/app", "my\\app", "/abs")) {
             assertEquals(Err(DirsError.InvalidAppName(name)), base.forApp(name))
         }
-        assertEquals(Path(base.configHome, ".myapp"), base.forApp(".myapp").getOrNull()?.config)
+        assertEquals(Path(base.configHome, ".myapp"), base.forApp(".myapp").assertSuccess().config)
     }
 
     @Test

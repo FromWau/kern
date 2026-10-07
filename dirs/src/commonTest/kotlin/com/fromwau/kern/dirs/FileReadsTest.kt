@@ -2,7 +2,7 @@ package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
-import com.fromwau.kern.result.getOrNull
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -45,7 +45,7 @@ class FileReadsTest {
             .buffered()
             .use { it.write(bytes) }
 
-        assertContentEquals(bytes, file.readBytes().getOrNull())
+        assertContentEquals(bytes, file.readBytes().assertSuccess())
     }
 
     @Test
