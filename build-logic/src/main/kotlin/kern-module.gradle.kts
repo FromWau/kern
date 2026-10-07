@@ -14,6 +14,10 @@ fun catalogVersion(alias: String): String = libs.findVersion(alias).get().requir
 val jdkVersion = catalogVersion("jdk").toInt()
 val moduleName = project.name
 
+// A module name may hold a hyphen, as `result-test` does, which neither a namespace nor a framework name may.
+val namespaceName = moduleName.replace('-', '.')
+val frameworkName = moduleName.split('-').joinToString("") { part -> part.replaceFirstChar { it.uppercase() } }
+
 kotlin {
     explicitApi()
 
@@ -22,7 +26,7 @@ kotlin {
     android {
         compileSdk = catalogVersion("android-compileSdk").toInt()
         minSdk = catalogVersion("android-minSdk").toInt()
-        namespace = "com.fromwau.kern.$moduleName"
+        namespace = "com.fromwau.kern.$namespaceName"
     }
 
     jvm {
@@ -37,7 +41,7 @@ kotlin {
         iosSimulatorArm64(),
     ).forEach { appleTarget ->
         appleTarget.binaries.framework {
-            baseName = "Kern${moduleName.replaceFirstChar { it.uppercase() }}"
+            baseName = "Kern$frameworkName"
             isStatic = true
         }
     }

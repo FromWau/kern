@@ -211,6 +211,27 @@ rather than guessed at. Nothing on the wire is named after a class here, so movi
 cannot change what your services already exchange. The shape is a plain two-field structure rather than
 anything JSON-specific, so CBOR and protobuf encode it too.
 
+## Test it
+
+`com.fromwau.kern:result-test` holds two assertions for your tests, so a test reads the value it expects instead
+of reaching for `getOrNull()!!`, and a failure says what came instead of throwing a bare `NullPointerException`.
+
+```kotlin
+dependencies {
+    testImplementation("com.fromwau.kern:result-test:$kernVersion")   // KMP: in commonTest
+}
+```
+
+```kotlin
+val user = findUser(7).assertSuccess()                       // the value, or: expected Success but got Error(...)
+val notFound = findUser(8).assertError<CrudError.NotFound>() // the error as that case, or a failure naming it
+assertEquals(8, notFound.id)
+```
+
+`assertError` fails as well for an error of another case, so asking for the case you expect is the whole
+assertion. It brings kotlin-test with it, which is why it is an artifact of its own: nothing in `result` itself
+throws.
+
 ## License
 
 [Apache-2.0](../LICENSE).

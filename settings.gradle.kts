@@ -46,6 +46,7 @@ gradle.lifecycle.beforeProject {
 }
 
 include(":result")
+include(":result-test")
 include(":terminal")
 include(":logger")
 include(":dirs")
