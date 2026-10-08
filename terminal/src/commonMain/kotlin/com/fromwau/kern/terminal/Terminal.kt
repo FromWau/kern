@@ -33,8 +33,15 @@ public interface Terminal {
     /** Usable width in columns, or 0 when unknown, which means "do not wrap". */
     public val columns: Int get() = 0
 
-    /** Whether ANSI colour is appropriate for this terminal right now. */
+    /** Whether ANSI colour is appropriate for standard output right now. */
     public val ansi: Boolean get() = false
+
+    /**
+     * Whether ANSI colour is appropriate for standard error right now, decided like [ansi] but for that stream,
+     * so `2>file` stays plain while standard output is a terminal. The JVM cannot ask whether standard error is a
+     * terminal, so there it is true only when `FORCE_COLOR` or `CLICOLOR_FORCE` asks for colour.
+     */
+    public val errAnsi: Boolean get() = false
 
     /**
      * Whether every write so far reached its destination, or why one did not: standard output's failure before

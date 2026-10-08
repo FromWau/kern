@@ -10,6 +10,8 @@ internal class PlatformIo(
     val writeErr: (String) -> Unit,
     // The JVM's only probe covers stdin and stdout together; native asks about stdout alone.
     val isTty: Boolean,
+    // The JVM has no probe for standard error at all, so it keeps the default.
+    val errIsTty: Boolean = false,
     /** Detected width in columns, or null where the platform cannot detect it (every JVM and Android run). */
     val width: Int?,
     /** Whether the output handle can render ANSI escapes right now. */
@@ -36,6 +38,7 @@ internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
     override fun err(text: String) = writeErr(text)
     override val columns: Int = resolveColumns(env, width)
     override val ansi: Boolean = ansiEnabled(isTty, env, ansiCapable)
+    override val errAnsi: Boolean = ansiEnabled(errIsTty, env, ansiCapable)
     override fun writeResult(): EmptyResult<WriteError> = writeFailure()?.let { Err(it) } ?: Ok(Unit)
 }
 

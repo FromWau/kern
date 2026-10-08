@@ -2,16 +2,21 @@ package com.fromwau.kern.terminal
 
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.IntVar
+import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.convert
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.usePinned
 import platform.posix.SIGPIPE
 import platform.posix.SIG_IGN
 import platform.posix.close
 import platform.posix.fclose
 import platform.posix.fdopen
 import platform.posix.fopen
+import platform.posix.fread
 import platform.posix.pipe
+import platform.posix.rewind
 import platform.posix.signal
 import platform.posix.tmpfile
 import kotlin.test.Test
@@ -55,6 +60,20 @@ class StdioSinkTest {
             }
         } finally {
             signal(SIGPIPE, previous)
+        }
+    }
+
+    @Test
+    fun `a write keeps every byte after a NUL`() {
+        val file = assertNotNull(tmpfile())
+        try {
+            StdioSink(file, Stream.Out).write("a\u0000b\n")
+            rewind(file)
+            val read = ByteArray(16)
+            val count = read.usePinned { fread(it.addressOf(0), 1u, read.size.convert(), file).toInt() }
+            assertEquals("a\u0000b\n", read.decodeToString(0, count))
+        } finally {
+            fclose(file)
         }
     }
 

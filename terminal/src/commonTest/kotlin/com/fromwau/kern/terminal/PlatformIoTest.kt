@@ -11,6 +11,7 @@ private fun io(
     out: (String) -> Unit = {},
     err: (String) -> Unit = {},
     isTty: Boolean = false,
+    errIsTty: Boolean = false,
     width: Int? = null,
     ansiCapable: Boolean = true,
     env: Map<String, String> = emptyMap(),
@@ -19,6 +20,7 @@ private fun io(
     writeOut = out,
     writeErr = err,
     isTty = isTty,
+    errIsTty = errIsTty,
     width = width,
     ansiCapable = ansiCapable,
     env = { env[it] },
@@ -42,6 +44,16 @@ class PlatformIoTest {
 
         assertEquals("to-out", out.toString())
         assertEquals("to-err", err.toString())
+    }
+
+    @Test
+    fun `standard error decides its own colour`() {
+        val redirectedErr = io(isTty = true, errIsTty = false).toTerminal()
+        assertTrue(redirectedErr.ansi)
+        assertFalse(redirectedErr.errAnsi)
+
+        assertTrue(io(isTty = false, errIsTty = true).toTerminal().errAnsi)
+        assertTrue(io(env = mapOf("FORCE_COLOR" to "1")).toTerminal().errAnsi)
     }
 
     @Test

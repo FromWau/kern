@@ -8,8 +8,8 @@ escape sequence. This module answers that once, the same way, on every target.
 
 **Output only.** Reading stdin, asking whether stdin is a pipe, exiting the process and looking up
 environment variables are all outside it, so a program that needs those still keeps its own `expect`
-declarations for them. `ansi` is decided partly from whether the *output* handle is a terminal, which is a
-different question from whether stdin is one, and it is not exposed as a general tty probe.
+declarations for them. `ansi` and `errAnsi` are decided partly from whether that *output* handle is a
+terminal, and neither is exposed as a general tty probe.
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.
 
@@ -61,7 +61,8 @@ println((bold + red).render("failed", terminal.ansi))
 ```
 
 `render` takes the decision rather than making it, so nothing in your code branches on colour. Pass
-`terminal.ansi` and a piped run prints plain text on its own.
+`terminal.ansi` and a piped run prints plain text on its own. Text you write with `terminal.err` takes
+`terminal.errAnsi` instead, so `2>errors.log` stays plain while standard output is a terminal.
 
 The palette is `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `brightBlack`, plus
 `bold`, `dim`, `italic` and `underline`. Combine with `+`.
@@ -75,7 +76,15 @@ The palette is `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `wh
 | handle cannot render escapes | off |
 | `CLICOLOR=0` | off |
 | `TERM=dumb` | off |
-| otherwise | on when stdout is a real tty |
+| otherwise | on when that stream is a real tty |
+
+`ansi` answers for standard output and `errAnsi` for standard error, each from its own stream, as
+`ls --color=auto` and git do: a piped stdout loses colour while a stderr still on the terminal keeps it.
+
+**The JVM cannot ask about one stream.** Its only probe, `System.console().isTerminal()`, is true only when
+stdin *and* stdout are both terminals, so `app < input.txt` prints plain text on the JVM though stdout is a
+terminal, and `errAnsi` is on only when forced. Set `FORCE_COLOR=1` where that matters. Natively each stream
+is asked with `isatty`.
 
 Forcing is the one rung that ignores what the handle can render, which is what makes `FORCE_COLOR=1` work
 for CI logs that are captured rather than displayed.
