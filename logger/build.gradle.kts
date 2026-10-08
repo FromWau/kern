@@ -3,13 +3,31 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
-description = "A reactive Kotlin Multiplatform logger: buffers until configured, then applies every " +
-    "runtime change to the very next line."
+description = "A reactive Kotlin Multiplatform logger: logs with defaults at once, applies every change to " +
+    "the very next line, and can hold startup entries until your config is read."
 
 kotlin {
+    // Declaring a source set by hand switches the default hierarchy off, which strands nativeMain and every leaf
+    // under it. Re-applying it before the custom sets below keeps both.
+    applyDefaultHierarchyTemplate()
+
     sourceSets {
+        // JVM and Android append to the log file through the same java.io call.
+        val jvmAndroidMain = create("jvmAndroidMain") {
+            dependsOn(commonMain.get())
+        }
+        jvmMain.get().dependsOn(jvmAndroidMain)
+        androidMain.get().dependsOn(jvmAndroidMain)
+
+        // Linux and Apple append with POSIX open and write, which Windows does not have.
+        val posixMain = create("posixMain") {
+            dependsOn(nativeMain.get())
+        }
+        linuxMain.get().dependsOn(posixMain)
+        appleMain.get().dependsOn(posixMain)
+
         commonMain.dependencies {
-            // api: both types appear in the public surface (Logger.state, LoggerRuntimeState.file).
+            // api: both types appear in the public surface (Logger.state, LoggerConfig.file).
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.io.core)
 

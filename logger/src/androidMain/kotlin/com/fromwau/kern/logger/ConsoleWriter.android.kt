@@ -4,8 +4,8 @@ import android.util.Log as Logcat
 
 /**
  * logcat carries the tag, severity and timestamp itself, so it is given the message alone rather than a
- * rendered line. [LoggerRuntimeState.format] and [LoggerRuntimeState.color] therefore shape the log file
- * here, not the console; set a [LoggerRuntimeState.file] to get JSON on Android.
+ * rendered line. [LoggerConfig.format] and [LoggerConfig.color] therefore shape the log file
+ * here, not the console; set a [LoggerConfig.file] to get JSON on Android.
  */
 internal actual val consoleWriter: ConsoleWriter = ConsoleWriter { entry, _, _ ->
     val message = entry.fields

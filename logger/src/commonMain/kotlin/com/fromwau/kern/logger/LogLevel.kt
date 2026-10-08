@@ -1,7 +1,7 @@
 package com.fromwau.kern.logger
 
 /**
- * How severe one entry is, and the threshold [LoggerRuntimeState.level] measures it against.
+ * How severe one entry is, and the threshold [LoggerConfig.level] measures it against.
  *
  * An entry is written when its level is at or above the configured one, so `INFO` passes [INFO], [WARN]
  * and [ERROR] through and drops [DEBUG] and [VERBOSE]. Declaration order is the ranking.

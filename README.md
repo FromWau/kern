@@ -12,7 +12,7 @@ Something enters kern once two real projects already need it, never because one 
 | [`result`](result/README.md) | a typed-error `Result<S, E>`: an expected failure is a value, not an exception     | nothing on JVM/Android, serialization-core on native |
 | [`result-test`](result/README.md#test-it) | test assertions for a `Result`: `assertSuccess()` and `assertError<E>()` | `result`, kotlin-test |
 | [`terminal`](terminal/README.md) | stdout/stderr, tty and width detection, and one ANSI colour policy that honours `NO_COLOR` | `result` |
-| [`logger`](logger/README.md) | a logger that holds startup entries until you configure it, then reconfigures live | coroutines, kotlinx-io, `terminal`, 3 more runtime |
+| [`logger`](logger/README.md) | a logger that works with defaults at once, reconfigures live, and can hold startup entries for your config | coroutines, kotlinx-io, `terminal`, 3 more runtime |
 | [`dirs`](dirs/README.md) | where an app's config, data, state, cache and temp belong, and `Path` helpers that return typed errors | kotlinx-io, `result` |
 | [`fuzzy`](fuzzy/README.md) | approximate string matching: edit distance and a "did you mean" suggestion | nothing |
 

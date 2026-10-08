@@ -1,5 +1,9 @@
 package com.fromwau.kern.logger
 
+import kotlinx.datetime.TimeZone
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -18,7 +22,7 @@ class RenderingTest {
 
     @Test
     fun `a text line carries the level tag message and fields`() {
-        val line = entry.toTextLine()
+        val line = entry.toTextLine(TimeZone.UTC.asLocalClock())
 
         assertContains(line, "INFO")
         assertContains(line, "Scanner")
@@ -27,12 +31,39 @@ class RenderingTest {
     }
 
     @Test
+    fun `a text line stamps ISO 8601 local time to the millisecond with its offset`() {
+        val utc = entry.toTextLine(TimeZone.UTC.asLocalClock())
+        val vienna = entry.toTextLine(TimeZone.of("Europe/Vienna").asLocalClock())
+
+        assertEquals("2026-08-11T12:34:56.789Z", utc.substringBefore(' '))
+        assertEquals("2026-08-11T14:34:56.789+02:00", vienna.substringBefore(' '))
+    }
+
+    @Test
+    fun `a lone surrogate is escaped in json and replaced in text while a whole pair is kept`() {
+        val damaged = entry.copy(message = "cut ${Char(0xD83D)} whole ${Char(0xD83D)}${Char(0xDE00)}")
+
+        val json = damaged.toJsonLine()
+        assertContains(json, "cut \\ud83d whole ${Char(0xD83D)}${Char(0xDE00)}")
+        assertEquals(damaged.message, Json.parseToJsonElement(json).jsonObject["message"]?.jsonPrimitive?.content)
+        val text = damaged.toTextLine(TimeZone.UTC.asLocalClock())
+        assertContains(text, "cut ${Char(0xFFFD)} whole ${Char(0xD83D)}${Char(0xDE00)}")
+    }
+
+    @Test
+    fun `a json timestamp always has nine fraction digits`() {
+        val whole = entry.copy(timestamp = Instant.parse("2026-08-11T12:34:56Z"))
+
+        assertContains(whole.toJsonLine(), "\"timestamp\":\"2026-08-11T12:34:56.000000000Z\"")
+    }
+
+    @Test
     fun `a json line nests the fields under their own key`() {
         val line = entry.toJsonLine()
 
         assertContains(line, "\"fields\":{\"count\":\"412\"}")
         assertContains(line, "\"level\":\"INFO\"")
-        assertContains(line, "\"timestamp\":\"2026-08-11T12:34:56.789Z\"")
+        assertContains(line, "\"timestamp\":\"2026-08-11T12:34:56.789000000Z\"")
     }
 
     @Test
@@ -56,8 +87,8 @@ class RenderingTest {
     fun `a throwable is rendered under the message rather than folded into it`() {
         val withCause = entry.copy(throwable = IllegalStateException("boom"))
 
-        assertContains(withCause.toTextLine(), "scan complete")
-        assertContains(withCause.toTextLine(), "boom")
+        assertContains(withCause.toTextLine(TimeZone.UTC.asLocalClock()), "scan complete")
+        assertContains(withCause.toTextLine(TimeZone.UTC.asLocalClock()), "boom")
         assertContains(withCause.toJsonLine(), "\"stackTrace\"")
         assertEquals("scan complete", withCause.message)
     }

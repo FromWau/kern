@@ -6,10 +6,11 @@ import com.fromwau.kern.terminal.brightBlack
 import com.fromwau.kern.terminal.red
 import com.fromwau.kern.terminal.white
 import com.fromwau.kern.terminal.yellow
-import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.number
-import kotlinx.datetime.toLocalDateTime
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.UtcOffset
+import kotlinx.datetime.format
+import kotlinx.datetime.format.DateTimeComponents
+import kotlinx.datetime.format.char
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -35,13 +36,23 @@ private data class JsonLine(
     @SerialName("stackTrace") val stackTrace: String? = null,
 )
 
-internal fun LogEntry.render(format: LogFormat): String = when (format) {
-    LogFormat.TEXT -> toTextLine()
+internal fun LogEntry.render(
+    format: LogFormat,
+    localClock: LocalClock,
+): String = when (format) {
+    LogFormat.TEXT -> toTextLine(localClock)
     LogFormat.JSON -> toJsonLine()
 }
 
-internal fun LogEntry.toTextLine(): String = buildString {
-    append(formatLocal(timestamp))
+internal fun LogEntry.toTextLine(localClock: LocalClock): String =
+    textLine(localClock).mapLoneSurrogates { REPLACEMENT }
+
+// A JSON escape keeps a lone surrogate exactly, and a JSON reader gets the original string back.
+internal fun LogEntry.toJsonLine(): String =
+    jsonLine().mapLoneSurrogates { "\\u${it.code.toString(16).padStart(4, '0')}" }
+
+private fun LogEntry.textLine(localClock: LocalClock): String = buildString {
+    append(timestamp.format(TEXT_TIMESTAMP, localClock.offsetAt(timestamp)))
     append(' ')
     append(level.name.padEnd(LEVEL_COLUMN))
     append(' ')
@@ -60,9 +71,9 @@ internal fun LogEntry.toTextLine(): String = buildString {
     }
 }
 
-internal fun LogEntry.toJsonLine(): String = json.encodeToString(
+private fun LogEntry.jsonLine(): String = json.encodeToString(
     JsonLine(
-        timestamp = timestamp.toString(),
+        timestamp = timestamp.format(JSON_TIMESTAMP),
         tag = tag,
         level = level.name,
         message = message,
@@ -84,17 +95,48 @@ private val LogLevel.style: Style
 /** Colours [line] for its severity, or returns it untouched when [enabled] is false. */
 internal fun colorize(line: String, level: LogLevel, enabled: Boolean): String = level.style.render(line, enabled)
 
-private fun formatLocal(timestamp: Instant): String =
-    format(timestamp.toLocalDateTime(TimeZone.currentSystemDefault()))
+// ISO 8601 with a fixed number of fraction digits, so stamps of one offset sort as text in time order.
+private fun timestampFormat(fractionDigits: Int) = DateTimeComponents.Format {
+    date(LocalDate.Formats.ISO)
+    char('T')
+    hour()
+    char(':')
+    minute()
+    char(':')
+    second()
+    char('.')
+    secondFraction(fixedLength = fractionDigits)
+    offset(UtcOffset.Formats.ISO)
+}
 
-private fun format(dateTime: LocalDateTime): String {
-    val year = dateTime.year.toString().padStart(4, '0')
-    val month = dateTime.month.number.toString().padStart(2, '0')
-    val day = dateTime.day.toString().padStart(2, '0')
-    val hour = dateTime.hour.toString().padStart(2, '0')
-    val minute = dateTime.minute.toString().padStart(2, '0')
-    val second = dateTime.second.toString().padStart(2, '0')
-    val milli = (dateTime.nanosecond / 1_000_000).toString().padStart(3, '0')
+private val TEXT_TIMESTAMP = timestampFormat(fractionDigits = 3)
+private val JSON_TIMESTAMP = timestampFormat(fractionDigits = 9)
 
-    return "$year-$month-$day $hour:$minute:$second.$milli"
+private val REPLACEMENT = Char(0xFFFD).toString()
+
+/**
+ * Rewrites every half of a surrogate pair that stands alone, as a string cut through an emoji has. UTF-8 has no
+ * bytes for one, and the JVM would write `?` where native writes U+FFFD.
+ */
+private inline fun String.mapLoneSurrogates(replacement: (Char) -> String): String {
+    if (none { it.isSurrogate() }) return this
+
+    val source = this
+    return buildString {
+        var index = 0
+        while (index < source.length) {
+            val char = source[index]
+            val next = source.getOrNull(index + 1)
+            when {
+                char.isHighSurrogate() && next != null && next.isLowSurrogate() -> {
+                    append(char)
+                    append(next)
+                    index++
+                }
+                char.isSurrogate() -> append(replacement(char))
+                else -> append(char)
+            }
+            index++
+        }
+    }
 }
