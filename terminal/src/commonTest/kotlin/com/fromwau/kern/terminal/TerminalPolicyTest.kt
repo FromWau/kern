@@ -49,6 +49,13 @@ class TerminalPolicyTest {
     }
 
     @Test
+    fun `an empty force value is treated as not set`() {
+        // force-color.org forces colour only when FORCE_COLOR is present and not empty, as NO_COLOR reads its own.
+        assertFalse(ansiEnabled(isTty = false, env = envOf(mapOf("FORCE_COLOR" to ""))))
+        assertFalse(ansiEnabled(isTty = false, env = envOf(mapOf("CLICOLOR_FORCE" to ""))))
+    }
+
+    @Test
     fun `NO_COLOR beats CLICOLOR_FORCE`() {
         assertFalse(ansiEnabled(isTty = false, env = envOf(mapOf("NO_COLOR" to "1", "CLICOLOR_FORCE" to "1"))))
     }

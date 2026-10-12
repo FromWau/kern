@@ -65,14 +65,15 @@ println((bold + red).render("failed", terminal.ansi))
 `terminal.errAnsi` instead, so `2>errors.log` stays plain while standard output is a terminal.
 
 The palette is `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `brightBlack`, plus
-`bold`, `dim`, `italic` and `underline`. Combine with `+`.
+`bold`, `dim`, `italic` and `underline`. Combine with `+`. A styled piece may sit inside another, and the text
+after it keeps the outer style.
 
 **What `ansi` actually decides**, highest precedence first:
 
 | rule | effect |
 |---|---|
 | `NO_COLOR` set and non-empty | off, always ([no-color.org](https://no-color.org)) |
-| `FORCE_COLOR` / `CLICOLOR_FORCE` not `0` | on, even when piped |
+| `FORCE_COLOR` / `CLICOLOR_FORCE` set, not empty and not `0` | on, even when piped |
 | handle cannot render escapes | off |
 | `CLICOLOR=0` | off |
 | `TERM=dumb` | off |

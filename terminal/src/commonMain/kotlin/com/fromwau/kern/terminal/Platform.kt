@@ -63,8 +63,11 @@ public fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Bool
         else -> isTty
     }
 
-/** `FORCE_COLOR` / `CLICOLOR_FORCE` force colour when set to anything other than the opt-out value `"0"`. */
-private fun String?.forcesColor(): Boolean = this != null && this != "0"
+/**
+ * `FORCE_COLOR` / `CLICOLOR_FORCE` force colour when set to anything other than the opt-out value `"0"`. An empty
+ * value counts as not set, as it does for `NO_COLOR`.
+ */
+private fun String?.forcesColor(): Boolean = !isNullOrEmpty() && this != "0"
 
 /** Terminal width: `COLUMNS` env override wins, then the [detected] ioctl/Win32 width, then an 80 fallback. */
 public fun resolveColumns(env: (String) -> String?, detected: Int? = null): Int =

@@ -17,10 +17,14 @@ public class Style internal constructor(internal val codes: List<Int>) {
 
     /**
      * Wraps [text] in this style's ANSI SGR codes when [enabled] and there is something to apply; returns
-     * it unchanged otherwise, so a caller never branches on colour itself.
+     * it unchanged otherwise, so a caller never branches on colour itself. A styled piece nested in [text] ends
+     * with a reset, so this style is opened again after each one, and the text that follows keeps it.
      */
-    public fun render(text: String, enabled: Boolean): String =
-        if (enabled && codes.isNotEmpty()) "$ESC[${codes.joinToString(";")}m$text$ESC[0m" else text
+    public fun render(text: String, enabled: Boolean): String {
+        if (!enabled || codes.isEmpty()) return text
+        val open = "$ESC[${codes.joinToString(";")}m"
+        return "$open${text.replace(RESET, RESET + open)}$RESET"
+    }
 }
 
 public val black: Style = Style(listOf(30))
@@ -41,3 +45,4 @@ public val italic: Style = Style(listOf(3))
 public val underline: Style = Style(listOf(4))
 
 private val ESC = Char(27).toString()
+private val RESET = "$ESC[0m"
