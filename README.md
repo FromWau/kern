@@ -25,8 +25,7 @@ Published versions are listed at
 credentials.
 
 ```kotlin
-fun findUser(id: Long): Result<User, CrudError> =
-    users[id]?.let { Ok(it) } ?: Err(CrudError.NotFound(id))
+fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
 ```
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.

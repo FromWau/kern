@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 @Serializable
 private data class Account(val id: Long, val name: String)
@@ -85,5 +86,14 @@ class ResultSerializationTest {
     @Test
     fun `an object holding neither key is refused rather than decoded into a wrong case`() {
         assertFailsWith<SerializationException> { Json.decodeFromString(serializer, "{}") }
+    }
+
+    @Test
+    fun `an object holding both keys is refused rather than decoded into one of them`() {
+        val both = """{"success":{"id":7,"name":"ada"},"error":{"type":"declined"}}"""
+
+        val failure = assertFailsWith<SerializationException> { Json.decodeFromString(serializer, both) }
+
+        assertTrue("more than one" in failure.message.orEmpty(), failure.message)
     }
 }

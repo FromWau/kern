@@ -46,6 +46,12 @@ An error string is the other half of the mistake. The moment your data layer ret
 it has decided what the user reads and in which language, from the wrong layer. Return a type instead and
 let the edge decide the words.
 
+A type is also what lets the layer above act. A string can only be shown, but a case can be matched: a
+timed-out connection offers a retry, a server error asks the user to try later or to report it, a missing
+record shows an empty state, invalid input highlights the field. A layer with nothing to do passes the error
+through unchanged, and a layer that has to react gets every case to match on, exhaustively. With
+serialization the case survives the wire too, so the backend's `NotFound(id)` arrives as `NotFound(id)`.
+
 ## Declaring your errors
 
 Every error implements `IError`, and a sealed hierarchy per concern is the shape that pays off:
@@ -111,6 +117,16 @@ A bare `Error(...)` collides with `kotlin.Error`, which is a `Throwable`. A miss
 a confusing overload error rather than an unresolved name, and compiles silently on any argument that
 happens to fit.
 
+`Result` itself has the same trap: `kotlin.Result` is imported by default. A file that forgets
+`import com.fromwau.kern.result.Result` gets the standard one, and the compiler complains that `Result`
+takes one type argument rather than about a missing import.
+
+A nullable lookup becomes a result with `toResult`, which builds the error only for null:
+
+```kotlin
+fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
+```
+
 When the work has nothing to hand back on success, `EmptyResult<E>` says so. It is `Result<Unit, E>`, so
 the success case is still there and is written `Ok(Unit)`:
 
@@ -128,7 +144,8 @@ when (val result = findUserById(id)) {
 }
 ```
 
-Or with the operators, each of which runs its lambda only on the case it names:
+Or with the operators. Each lambda runs only on the case it names:
+
 | operator      | signature              | does                                                         |
 |---------------|------------------------|--------------------------------------------------------------|
 | `map`         | `(S) -> T`             | transforms a success value, passes an error through          |
@@ -141,6 +158,8 @@ Or with the operators, each of which runs its lambda only on the case it names:
 | `orElse`      | `(E) -> Result<S, F>`  | recovers with another attempt, which may fail its own way    |
 | `onSuccess`   | `(S) -> Unit`          | runs a side effect on a value, returns the result unchanged  |
 | `onError`     | `(E) -> Unit`          | runs a side effect on an error, returns the result unchanged |
+| `isSuccess`   |                        | true for a success, and smart casts the result to it         |
+| `isError`     |                        | true for an error, and smart casts the result to it          |
 
 Three of them run on a success value and differ in what they leave you holding:
 
@@ -165,6 +184,51 @@ val shown: Result<User, ApiError> = findUserById(id).mapError { crud ->
     }
 }
 ```
+
+## Several steps in a row
+
+A chain of `flatMap`s nests one lambda per step. When the steps read top to bottom, return early instead.
+`getOrElse` is inline, so a `return` in its fallback leaves the enclosing function. That is Kotlin's own
+equivalent of Rust's `?`, with nothing thrown and every exit visible:
+
+```kotlin
+fun register(form: Form): Result<User, SignupError> {
+    val email = parseEmail(form.email).getOrElse { return Err(it) }
+    val user = createUser(email).getOrElse { return Err(it) }
+    sendWelcome(user).getOrElse { return Err(it) }
+    return Ok(user)
+}
+```
+
+An error from another hierarchy is converted where it leaves, in plain sight:
+`getOrElse { return Err(SignupError.Email(it)) }`. To get a result as an expression rather than from a
+function, wrap the steps in `run` and return from it by label:
+
+```kotlin
+val user: Result<User, UserError> = run {
+    val raw = fetchRawData(id).getOrElse { return@run Err(it) }
+    val built = parseUser(raw).getOrElse { return@run Err(it) }
+    Ok(built)
+}
+```
+
+There is no `result { }` builder with a `.bind()`. A plain call cannot make its caller return, so such a
+builder throws under the hood to get out, and this idiom needs nothing thrown.
+
+## Several results at once
+
+| function    | on                       | gives                                                         |
+|-------------|--------------------------|---------------------------------------------------------------|
+| `combine`   | `Iterable<Result<T, E>>` | every value as one list, or the first error                   |
+| `mapResult` | `Iterable<T>`            | each item mapped by a fallible step, stops at the first error |
+| `zip`       | two or three results     | their values combined by a lambda, or the first error         |
+
+```kotlin
+val ports: Result<List<Int>, PortError> = listOf("80", "443").mapResult(::parsePort)
+val endpoint = parseHost(rawHost).zip(parsePort(rawPort)) { host, port -> Endpoint(host, port) }
+```
+
+The first error means the first in order: the earliest item, or the earliest argument to `zip`.
 
 ## Sending one over a wire
 
@@ -206,14 +270,14 @@ data class Response(val user: Result<User, CrudError>)
 {"user":{"success":"ada"}}
 ```
 
-A result is an object holding exactly one of `success` or `error`, and one holding neither is refused
-rather than guessed at. Nothing on the wire is named after a class here, so moving or renaming a package
-cannot change what your services already exchange. The shape is a plain two-field structure rather than
+A result is an object holding exactly one of `success` or `error`, and one holding neither or both is
+refused rather than guessed at. Nothing on the wire is named after a class here, so moving or renaming a
+package cannot change what your services already exchange. The shape is a plain two-field structure rather than
 anything JSON-specific, so CBOR and protobuf encode it too.
 
 ## Test it
 
-`com.fromwau.kern:result-test` holds two assertions for your tests, so a test reads the value it expects instead
+`com.fromwau.kern:result-test` holds assertions for your tests, so a test reads the value it expects instead
 of reaching for `getOrNull()!!`, and a failure says what came instead of throwing a bare `NullPointerException`.
 
 ```kotlin
@@ -226,6 +290,9 @@ dependencies {
 val user = findUser(7).assertSuccess()                       // the value, or: expected Success but got Error(...)
 val notFound = findUser(8).assertError<CrudError.NotFound>() // the error as that case, or a failure naming it
 assertEquals(8, notFound.id)
+
+findUser(7).assertSuccess(ada)                               // that exact value, or a failure naming both
+findUser(8).assertError(CrudError.NotFound(8))               // that exact error, or a failure naming both
 ```
 
 `assertError` fails as well for an error of another case, so asking for the case you expect is the whole

@@ -1,6 +1,11 @@
+@file:OptIn(ExperimentalContracts::class)
+
 package com.fromwau.kern.result
 
 import kotlinx.serialization.Serializable
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /**
  * A typed-error result: an expected outcome is [Success], an expected failure is [Error].
@@ -10,8 +15,7 @@ import kotlinx.serialization.Serializable
  * so an error is always a type you declared.
  *
  * ```kotlin
- * fun findUser(id: Long): Result<User, CrudError> =
- *     users[id]?.let { Ok(it) } ?: Err(CrudError.NotFound(id))
+ * fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
  * ```
  *
  * A result crosses a wire as itself, with nothing to annotate at the call site, so a failure arrives as
@@ -47,6 +51,42 @@ public typealias Err<E> = Result.Error<E>
 
 /** A result whose success carries no value, built as `Ok(Unit)`: the work either completed or failed. */
 public typealias EmptyResult<E> = Result<Unit, E>
+
+/**
+ * True for a success, and the compiler then treats this result as a [Result.Success], so `value` reads directly:
+ *
+ * ```kotlin
+ * if (result.isSuccess()) render(result.value)
+ * ```
+ */
+public fun <S, E : IError> Result<S, E>.isSuccess(): Boolean {
+    contract {
+        returns(true) implies (this@isSuccess is Result.Success<S>)
+        returns(false) implies (this@isSuccess is Result.Error<E>)
+    }
+    return this is Result.Success
+}
+
+/** True for an error, and the compiler then treats this result as a [Result.Error], so `error` reads directly. */
+public fun <S, E : IError> Result<S, E>.isError(): Boolean {
+    contract {
+        returns(true) implies (this@isError is Result.Error<E>)
+        returns(false) implies (this@isError is Result.Success<S>)
+    }
+    return this is Result.Error
+}
+
+/**
+ * A success holding this value, or the error [error] builds when it is null.
+ *
+ * ```kotlin
+ * fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
+ * ```
+ */
+public inline fun <T : Any, E : IError> T?.toResult(error: () -> E): Result<T, E> {
+    contract { callsInPlace(error, InvocationKind.AT_MOST_ONCE) }
+    return if (this != null) Ok(this) else Err(error())
+}
 
 /** Applies [transform] to a success value, passing an error through untouched. */
 public inline fun <S, E : IError, T> Result<S, E>.map(transform: (S) -> T): Result<T, E> = when (this) {

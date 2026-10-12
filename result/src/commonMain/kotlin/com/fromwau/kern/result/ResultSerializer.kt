@@ -53,15 +53,15 @@ public class ResultSerializer<S, E : IError>(
         var decoded: Result<S, E>? = null
 
         while (true) {
-            when (val index = decodeElementIndex(descriptor)) {
-                SUCCESS_INDEX ->
-                    decoded = Ok(decodeSerializableElement(descriptor, SUCCESS_INDEX, successSerializer))
+            val index = decodeElementIndex(descriptor)
+            if (index == CompositeDecoder.DECODE_DONE) break
+            if (decoded != null) {
+                throw SerializationException("A Result needs either a success or an error, found more than one")
+            }
 
-                ERROR_INDEX ->
-                    decoded = Err(decodeSerializableElement(descriptor, ERROR_INDEX, errorSerializer))
-
-                CompositeDecoder.DECODE_DONE -> break
-
+            decoded = when (index) {
+                SUCCESS_INDEX -> Ok(decodeSerializableElement(descriptor, SUCCESS_INDEX, successSerializer))
+                ERROR_INDEX -> Err(decodeSerializableElement(descriptor, ERROR_INDEX, errorSerializer))
                 else -> throw SerializationException("Unexpected index $index while reading a Result")
             }
         }

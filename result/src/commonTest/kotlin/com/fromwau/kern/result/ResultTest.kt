@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 private sealed interface CrudError : IError {
     data class NotFound(val id: Long) : CrudError
@@ -152,5 +153,21 @@ class ResultTest {
             .onError { error("unreachable") }
         assertEquals("John", found)
         assertEquals(Ok(User(1, "John")), success)
+    }
+
+    @Test
+    fun `isSuccess and isError smart cast the result to the case they confirm`() = runTest {
+        val found = findUserById(1)
+        val missing = findUserById(4)
+
+        assertTrue(found.isSuccess())
+        assertFalse(missing.isSuccess())
+        assertTrue(missing.isError())
+        assertFalse(found.isError())
+
+        if (found.isSuccess()) assertEquals("John", found.value.name)
+        if (missing.isError()) assertEquals(CrudError.NotFound(4), missing.error)
+        if (!found.isError()) assertEquals("John", found.value.name)
+        if (!missing.isSuccess()) assertEquals(CrudError.NotFound(4), missing.error)
     }
 }

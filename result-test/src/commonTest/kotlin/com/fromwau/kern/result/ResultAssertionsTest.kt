@@ -45,4 +45,44 @@ class ResultAssertionsTest {
 
         assertTrue("user" in failure.message.orEmpty(), failure.message)
     }
+
+    @Test
+    fun `assertSuccess with an expected value passes on an equal success`() {
+        found.assertSuccess("user")
+    }
+
+    @Test
+    fun `assertSuccess with an expected value fails naming both values on another success`() {
+        val failure = assertFailsWith<AssertionError> { found.assertSuccess("admin") }
+
+        assertTrue("admin" in failure.message.orEmpty() && "user" in failure.message.orEmpty(), failure.message)
+    }
+
+    @Test
+    fun `assertSuccess with an expected value on an error fails naming the value and the error`() {
+        val failure = assertFailsWith<AssertionError> { missing.assertSuccess("user") }
+
+        val message = failure.message.orEmpty()
+        assertTrue("user" in message && "Missing(id=7)" in message, failure.message)
+    }
+
+    @Test
+    fun `assertError with an expected error passes on an equal error`() {
+        missing.assertError(Probe.Missing(7))
+    }
+
+    @Test
+    fun `assertError with an expected error fails naming both errors on another error`() {
+        val failure = assertFailsWith<AssertionError> { missing.assertError(Probe.Missing(8)) }
+
+        val message = failure.message.orEmpty()
+        assertTrue("Missing(id=8)" in message && "Missing(id=7)" in message, failure.message)
+    }
+
+    @Test
+    fun `assertError with an expected error on a success fails naming the value`() {
+        val failure = assertFailsWith<AssertionError> { found.assertError(Probe.Busy) }
+
+        assertTrue("user" in failure.message.orEmpty(), failure.message)
+    }
 }
