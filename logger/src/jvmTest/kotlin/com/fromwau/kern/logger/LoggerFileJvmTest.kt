@@ -9,6 +9,7 @@ import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 class LoggerFileJvmTest {
     private val file = Path(SystemTemporaryDirectory, "kern-logger-two-writers-${System.nanoTime()}.log")
@@ -24,7 +25,9 @@ class LoggerFileJvmTest {
         val message = "x".repeat(20_000)
         val writers = List(2) { index ->
             val logger = Logger()
-            logger.configure(LoggerConfig(format = LogFormat.JSON, console = Console.OFF, file = file))
+            logger.configure(
+                LoggerConfig(console = ConsoleOutput.Off, file = FileOutput.Append(file, format = LogFormat.JSON)),
+            )
             thread {
                 repeat(300) { logger.tag("writer$index").i { message } }
                 logger.close()
@@ -36,5 +39,20 @@ class LoggerFileJvmTest {
 
         assertEquals(600, lines.size)
         lines.forEach { Json.parseToJsonElement(it) }
+    }
+
+    @Test
+    fun `a file that is not a regular file keeps reporting its own error`() {
+        // /dev/full takes the open and refuses every write with ENOSPC: a full disk on demand, on Linux.
+        if (!File("/dev/full").exists()) return
+        val logger = Logger()
+        logger.configure(
+            LoggerConfig(console = ConsoleOutput.Off, file = FileOutput.Append(Path("/dev/full"), FileFailure.Drop)),
+        )
+
+        repeat(3) { logger.tag("app").i { "lost" } }
+
+        val error = logger.health.value.file.lastError
+        assertIs<java.io.IOException>(error, "expected the disk's own error, got $error")
     }
 }

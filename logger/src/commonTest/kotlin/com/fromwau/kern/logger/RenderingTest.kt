@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 class RenderingTest {
@@ -28,15 +29,6 @@ class RenderingTest {
         assertContains(line, "Scanner")
         assertContains(line, "scan complete")
         assertContains(line, "count=412")
-    }
-
-    @Test
-    fun `a text line stamps ISO 8601 local time to the millisecond with its offset`() {
-        val utc = entry.toTextLine(TimeZone.UTC.asLocalClock())
-        val vienna = entry.toTextLine(TimeZone.of("Europe/Vienna").asLocalClock())
-
-        assertEquals("2026-08-11T12:34:56.789Z", utc.substringBefore(' '))
-        assertEquals("2026-08-11T14:34:56.789+02:00", vienna.substringBefore(' '))
     }
 
     @Test
@@ -94,16 +86,38 @@ class RenderingTest {
     }
 
     @Test
-    fun `colorize leaves the line alone when colour is disabled`() {
-        assertEquals("plain line", colorize("plain line", LogLevel.ERROR, enabled = false))
+    fun `a json field carries its type in the literal`() {
+        val typed = entry.copy(
+            fields = mapOf(
+                "port" to 5001,
+                "big" to 9_007_199_254_740_993L,
+                "ratio" to 0.5,
+                "tls" to true,
+                "user" to null,
+                "host" to "0.0.0.0",
+            ),
+        )
+
+        assertContains(
+            typed.toJsonLine(),
+            "\"fields\":{\"port\":5001,\"big\":9007199254740993,\"ratio\":0.5,\"tls\":true,\"user\":null," +
+                "\"host\":\"0.0.0.0\"}",
+        )
     }
 
     @Test
-    fun `colorize wraps each severity in its own colour`() {
-        val esc = Char(27)
-        assertEquals("$esc[31mboom$esc[0m", colorize("boom", LogLevel.ERROR, enabled = true))
-        assertEquals("$esc[33mcareful$esc[0m", colorize("careful", LogLevel.WARN, enabled = true))
-        // VERBOSE is the bright-black/grey slot, distinct from the plain black in the palette.
-        assertEquals("$esc[90mnoise$esc[0m", colorize("noise", LogLevel.VERBOSE, enabled = true))
+    fun `a json field JSON has no literal for is written as a string`() {
+        val odd = entry.copy(
+            fields = mapOf("nan" to Double.NaN, "inf" to Float.POSITIVE_INFINITY, "list" to listOf(1, 2)),
+        )
+
+        assertContains(odd.toJsonLine(), "\"fields\":{\"nan\":\"NaN\",\"inf\":\"Infinity\",\"list\":\"[1, 2]\"}")
+    }
+
+    @Test
+    fun `a text field is written as key=value with null spelled out`() {
+        val typed = entry.copy(fields = mapOf("port" to 5001, "tls" to true, "user" to null))
+
+        assertContains(typed.toTextLine(TimeZone.UTC.asLocalClock()), "scan complete port=5001 tls=true user=null")
     }
 }

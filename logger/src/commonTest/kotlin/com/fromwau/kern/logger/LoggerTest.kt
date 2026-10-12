@@ -1,16 +1,9 @@
 package com.fromwau.kern.logger
 
-import kotlinx.io.buffered
-import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
-import kotlinx.io.files.SystemTemporaryDirectory
-import kotlinx.io.readString
-import kotlinx.io.writeString
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -30,27 +23,13 @@ class LoggerTest {
     private val recorder = Recorder()
     private val logger = Logger(sinks = listOf(recorder))
 
-    private val created = mutableListOf<Path>()
-    private var sequence = 0
-
     @AfterTest
     fun cleanup() {
         logger.close()
-        created.forEach { if (SystemFileSystem.exists(it)) SystemFileSystem.delete(it) }
     }
 
     /** Console off so a test run stays readable; the recorder is what the assertions read. */
-    private fun quiet(level: LogLevel) = LoggerConfig(level = level, console = Console.OFF)
-
-    private fun tempFile(name: String): Path {
-        val path = Path(SystemTemporaryDirectory, "kern-logger-$name-${sequence++}.log")
-        if (SystemFileSystem.exists(path)) SystemFileSystem.delete(path)
-        created += path
-        return path
-    }
-
-    private fun read(path: Path): String =
-        SystemFileSystem.source(path).buffered().use { it.readString() }
+    private fun quiet(level: LogLevel) = LoggerConfig(level = level, console = ConsoleOutput.Off)
 
     @Test
     fun `a new logger writes at once with the default config`() {
@@ -140,23 +119,25 @@ class LoggerTest {
         logger.configure(quiet(LogLevel.INFO))
 
         val cause = IllegalStateException("boom")
-        logger.tag("Scanner").e(cause, "count" to "412", "ms" to "1200") { "scan failed" }
+        logger.tag("Scanner").e(cause, "count" to 412, "cached" to true, "user" to null) { "scan failed" }
 
         val entry = recorder.entries.single()
-        assertEquals(mapOf("count" to "412", "ms" to "1200"), entry.fields)
+        assertEquals(mapOf("count" to 412, "cached" to true, "user" to null), entry.fields)
         assertEquals(cause, entry.throwable)
     }
 
     @Test
-    fun `holding more entries than the limit is an error naming the missing configure`() {
+    fun `holding more entries than the limit drops the oldest and the replay says how many`() {
         logger.holdUntilConfigured()
-        repeat(1024) { index -> logger.tag("boot").i { "entry $index" } }
+        repeat(1030) { index -> logger.tag("boot").i { "entry $index" } }
 
-        val overflow = assertFailsWith<IllegalStateException> { logger.tag("boot").i { "entry 1024" } }
-
-        assertContains(overflow.message.orEmpty(), "configure()")
+        assertEquals(6, logger.health.value.heldDropped)
         logger.configure(quiet(LogLevel.VERBOSE))
-        assertEquals(1024, recorder.entries.size)
+
+        val warning = recorder.entries.first()
+        assertEquals(LogLevel.WARN, warning.level)
+        assertContains(warning.message, "dropped the 6 oldest held entries")
+        assertEquals((6..1029).map { "entry $it" }, recorder.messages().drop(1))
     }
 
     @Test
@@ -211,54 +192,12 @@ class LoggerTest {
     }
 
     @Test
-    fun `a sink that throws reaches the code that logged`() {
-        val broken = Logger(sinks = listOf(LogSink { _, _ -> error("sink is broken") }), console = { _, _, _ -> })
-        broken.configure(quiet(LogLevel.INFO))
-
-        val thrown = assertFailsWith<IllegalStateException> { broken.tag("app").i { "lost with the sink" } }
-
-        assertEquals("sink is broken", thrown.message)
-    }
-
-    @Test
-    fun `a file that cannot be written is skipped without a word and the sinks still get every entry`() {
-        val blocker = tempFile("blocker")
-        SystemFileSystem.sink(blocker).close()
-        val console = mutableListOf<String>()
-        val failing = Logger(sinks = listOf(recorder), console = { entry, _, _ -> console += entry.message })
-        failing.configure(LoggerConfig(file = Path(blocker, "app.log")))
-
-        failing.tag("app").i { "first" }
-        failing.tag("app").i { "second" }
-
-        assertEquals(listOf("first", "second"), recorder.messages())
-        assertEquals(listOf("first", "second"), console)
-    }
-
-    @Test
-    fun `after a failed write the next entry starts on a line of its own`() {
-        val file = tempFile("torn")
-        SystemFileSystem.createDirectories(file)
-        logger.configure(quiet(LogLevel.INFO).copy(file = file))
-        logger.tag("app").i { "fails: the path is a directory" }
-
-        SystemFileSystem.delete(file)
-        SystemFileSystem.sink(file).buffered().use { it.writeString("{\"torn") }
-        logger.tag("app").i { "readable" }
-        logger.close()
-
-        val lines = read(file).lines()
-        assertEquals("{\"torn", lines[0])
-        assertContains(lines[1], "readable")
-    }
-
-    @Test
     fun `configure with a transform starts from the current config`() {
         logger.configure(quiet(LogLevel.WARN))
 
-        logger.configure { it.copy(format = LogFormat.JSON) }
+        logger.configure { it.copy(sinkFailure = SinkFailure.Throw) }
 
-        assertEquals(quiet(LogLevel.WARN).copy(format = LogFormat.JSON), logger.state.value)
+        assertEquals(quiet(LogLevel.WARN).copy(sinkFailure = SinkFailure.Throw), logger.state.value)
     }
 
     @Test
@@ -266,54 +205,23 @@ class LoggerTest {
         logger.holdUntilConfigured()
         logger.tag("boot").d { "held" }
 
-        logger.configure { it.copy(level = LogLevel.DEBUG, console = Console.OFF) }
+        logger.configure { it.copy(level = LogLevel.DEBUG, console = ConsoleOutput.Off) }
 
-        assertEquals(LoggerConfig(level = LogLevel.DEBUG, console = Console.OFF), logger.state.value)
+        assertEquals(LoggerConfig(level = LogLevel.DEBUG, console = ConsoleOutput.Off), logger.state.value)
         assertEquals(listOf("held"), recorder.messages())
     }
 
     @Test
-    fun `the configured file receives the rendered line`() {
-        val file = tempFile("basic")
-        logger.configure(quiet(LogLevel.INFO).copy(file = file))
+    fun `a field whose toString throws is written as a placeholder rather than failing the entry`() {
+        val written = mutableListOf<String>()
+        val rendering = Logger(sinks = listOf(recorder), console = { _, line, _ -> written += line })
+        val broken = object {
+            override fun toString(): String = error("no text for this")
+        }
 
-        logger.tag("app").i("count" to "412") { "written to disk" }
-        logger.close()
+        rendering.tag("app").i("value" to broken) { "still logged" }
 
-        val written = read(file)
-        assertContains(written, "written to disk")
-        assertContains(written, "count=412")
-    }
-
-    @Test
-    fun `moving the configured file writes the next entry to the new path`() {
-        val first = tempFile("first")
-        val second = tempFile("second")
-        logger.configure(quiet(LogLevel.INFO).copy(file = first))
-
-        logger.tag("app").i { "in the first file" }
-        logger.configure(quiet(LogLevel.INFO).copy(file = second))
-        logger.tag("app").i { "in the second file" }
-        logger.close()
-
-        assertContains(read(first), "in the first file")
-        assertContains(read(second), "in the second file")
-        assertFalse(read(first).contains("in the second file"))
-    }
-
-    @Test
-    fun `a missing parent directory is created rather than failing the write`() {
-        val nested = Path(SystemTemporaryDirectory, "kern-logger-nested-${sequence++}")
-        val file = Path(nested, "app.log")
-        created += file
-        logger.configure(quiet(LogLevel.INFO).copy(file = file))
-
-        logger.tag("app").i { "into a fresh directory" }
-        logger.close()
-
-        assertContains(read(file), "into a fresh directory")
-
-        SystemFileSystem.delete(file)
-        SystemFileSystem.delete(nested)
+        assertEquals(listOf("still logged"), recorder.messages())
+        assertContains(written.single(), "value=<toString() threw IllegalStateException>")
     }
 }

@@ -5,52 +5,69 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.io.buffered
-import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
 import kotlin.time.Clock
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
-private const val INTERNAL_TAG = "kern.logger"
-
-/** How many entries [Logger.holdUntilConfigured] holds; logging another before [Logger.configure] throws. */
-private const val MAX_BUFFERED = 1024
+/** How many entries [Logger.holdUntilConfigured] holds; past that the oldest give way. */
+private const val MAX_HELD = 1024
 
 /**
  * A logger you reconfigure while it runs. It logs from the start with the default [LoggerConfig]: `INFO` and
- * above, as text, to the console. [configure] changes that, and a change takes effect on the next entry.
+ * above, as text, to the platform's console. [configure] changes that, and a change takes effect on the next
+ * entry.
  *
  * ```kotlin
  * Log.tag("Scanner").i { "scan complete" }           // written at once, with the defaults
  *
- * Log.configure(LoggerConfig(level = LogLevel.DEBUG, file = Path(logDir, "app.log")))
+ * Log.configure(LoggerConfig(level = LogLevel.DEBUG, file = FileOutput.Append(Path(logDir, "app.log"))))
  * Log.configure { it.copy(level = LogLevel.VERBOSE) }   // a settings screen, applied at once
  * ```
  *
  * An app that logs before it has read its own config can ask for those entries to be held instead, with
  * [holdUntilConfigured], so the config decides what they were worth.
  *
+ * A destination that fails never takes the others down with it, and by default never reaches the code that
+ * logged: [LoggerConfig.file] and [LoggerConfig.sinkFailure] decide what happens to a refused entry, and
+ * [health] counts every one.
+ *
  * Safe to log to from any thread. Use [Log] unless you need more than one logger, or need extra sinks.
  */
 public class Logger internal constructor(
-    private val sinks: List<LogSink>,
+    sinks: List<LogSink>,
     private val console: ConsoleWriter,
+    private val delivery: LogDelivery = LogDelivery.Inline,
+    private val report: (String) -> Unit = ::reportToStandardError,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
-    /** @param sinks extra destinations beyond the console and the file. See [LogSink]. */
-    public constructor(sinks: List<LogSink> = emptyList()) : this(sinks, consoleWriter)
+    /**
+     * @param sinks extra destinations beyond the console and the file. See [LogSink].
+     * @param delivery which thread writes each entry; the thread that logged, unless you hand over another.
+     */
+    public constructor(
+        sinks: List<LogSink> = emptyList(),
+        delivery: LogDelivery = LogDelivery.Inline,
+    ) : this(sinks, consoleWriter, delivery)
 
     private val lock = reentrantLock()
     private val mutableState = MutableStateFlow<LoggerConfig?>(LoggerConfig())
-    private val buffered = ArrayDeque<LogEntry>()
+    private val slots = sinks.map(::SinkSlot)
+    private val file = LogFile(timeSource)
+
+    private val held = ArrayDeque<LogEntry>()
+    private var droppedFromThisHold = 0L
+    private var droppedFromHolds = 0L
+
+    // Reported once per source, so a dead disk costs one line on standard error rather than one per entry.
+    private var fileFailureReported = false
+    private var unreachableThrowReported = false
+
+    private var healthChanged = false
+    private val mutableHealth = MutableStateFlow(LoggerHealth(sinks = slots.map { it.health }))
 
     // Looked up once per configure: on native the lookup reads the system's zone data and costs far more than
     // rendering the line.
     private var localClock = systemLocalClock()
-
-    // Set by a failed append, which may have left part of a line behind for the next one to end.
-    private var lastAppendFailed = false
-
-    private var openPath: Path? = null
-    private var openFile: AppendFile? = null
 
     /**
      * How the logger is behaving right now, or null while [holdUntilConfigured] has it holding entries.
@@ -62,6 +79,12 @@ public class Logger internal constructor(
     public val state: StateFlow<LoggerConfig?> = mutableState.asStateFlow()
 
     /**
+     * What the file and the sinks have failed to take, and what a hold has dropped. It changes only when something
+     * fails, recovers or is dropped, so collecting it costs nothing while all is well.
+     */
+    public val health: StateFlow<LoggerHealth> = mutableHealth.asStateFlow()
+
+    /**
      * Replaces the configuration, and writes out every entry [holdUntilConfigured] was holding.
      *
      * Replayed entries keep the timestamp they were logged at, and are filtered by the level you are
@@ -71,11 +94,8 @@ public class Logger internal constructor(
     public fun configure(config: LoggerConfig) {
         lock.withLock {
             applyConfig(config)
-            if (buffered.isEmpty()) return@withLock
-
-            val held = buffered.toList()
-            buffered.clear()
-            deliver(held, config)
+            val replay = takeHeld()
+            if (replay.isNotEmpty()) deliver(replay, config)
         }
     }
 
@@ -116,14 +136,18 @@ public class Logger internal constructor(
      * against it yet. [close] before any [configure] writes the held entries with the default config, so none
      * is lost.
      *
-     * At most 1024 entries are held. Every entry past that throws an [IllegalStateException], on whichever
-     * thread logs it: a program that logs that much before configuring has forgotten to call [configure], or
-     * does not need to hold at all.
+     * At most 1024 entries are held. Past that the oldest give way, and the replay starts with a warning saying
+     * how many, also counted in [LoggerHealth.heldDropped].
+     *
+     * Waits first for every entry already handed to the [LogDelivery], so call it from an ordinary thread, never
+     * from inside a [LogSink].
      */
     public fun holdUntilConfigured() {
+        delivery.flush()
         lock.withLock {
-            closeFile()
+            closeFile(mutableState.value)
             mutableState.value = null
+            droppedFromThisHold = 0
         }
     }
 
@@ -136,14 +160,17 @@ public class Logger internal constructor(
      *
      * Prefer [tag], which reads better at a call site and fills in the tag for you.
      *
+     * @param fields structured values; see [TaggedLogger] for how each type is written.
      * @param message built only once the entry is known to be worth keeping, so an expensive block costs
      *   nothing while it is filtered out. While [holdUntilConfigured] holds entries it is built at once.
+     * @throws Exception only what a destination set to [FileFailure.Throw] or [SinkFailure.Throw] failed with,
+     *   after every other destination has the entry, and only with [LogDelivery.Inline].
      */
     public fun log(
         tag: String,
         level: LogLevel,
         throwable: Throwable? = null,
-        fields: Map<String, String> = emptyMap(),
+        fields: Map<String, Any?> = emptyMap(),
         message: () -> String,
     ) {
         // Filtered before the lock so a suppressed entry never blocks and never builds its message. The
@@ -160,58 +187,117 @@ public class Logger internal constructor(
             throwable = throwable,
         )
 
-        lock.withLock {
-            when (val current = mutableState.value) {
-                null -> buffer(entry)
-                else -> deliver(listOf(entry), current)
+        // An entry a sink logs while it is being written to goes through at once, on the thread already holding
+        // the lock: queued instead, it would reach that sink later, with nothing left to say where it came from.
+        if (lock.tryLock()) {
+            try {
+                if (slots.any { it.busy }) return holdOrDeliver(entry)
+            } finally {
+                lock.unlock()
             }
+        }
+        delivery.submit {
+            try {
+                lock.withLock { holdOrDeliver(entry) }
+            } catch (e: Exception) {
+                if (delivery !== LogDelivery.Inline) reportUnreachableThrow(e)
+                throw e
+            }
+        }
+    }
+
+    private fun reportUnreachableThrow(failure: Exception) {
+        if (unreachableThrowReported) return
+        unreachableThrowReported = true
+        reportFailure {
+            "a write set to FileFailure.Throw or SinkFailure.Throw failed ($failure), but the delivery writes " +
+                "off the calling thread, so it cannot reach the code that logged"
+        }
+    }
+
+    private fun holdOrDeliver(entry: LogEntry) {
+        when (val current = mutableState.value) {
+            null -> hold(entry)
+            else -> deliver(listOf(entry), current)
         }
     }
 
     /**
-     * Closes the log file. Logging afterwards reopens it, so this ends a run rather than the logger, and after a
-     * tool such as logrotate has moved the file it is how the next entry lands in a new file at the path.
+     * Closes the log file, after one last attempt at the entries it refused, and makes the same last attempt for
+     * every [RetryingSink]; what is still refused is reported in one line per destination on standard error.
+     * Logging afterwards reopens the file, so this ends a run rather than the logger, and after a tool such as
+     * logrotate has moved the file it is how the next entry lands in a new file at the path.
      *
      * Called while [holdUntilConfigured] is still holding, it first writes the held entries with the default
      * [LoggerConfig], followed by a warning that [configure] never came, so nothing logged is lost. With nothing
      * held there is nothing to warn about, and the hold simply ends.
+     *
+     * Waits first for every entry already handed to the [LogDelivery], so call it from an ordinary thread, never
+     * from inside a [LogSink].
      */
     public fun close() {
+        delivery.flush()
         lock.withLock {
             if (mutableState.value == null) {
                 val defaults = LoggerConfig()
                 applyConfig(defaults)
-                if (buffered.isNotEmpty()) {
-                    val warning = LogEntry(
-                        timestamp = Clock.System.now(),
-                        tag = INTERNAL_TAG,
-                        level = LogLevel.WARN,
-                        message = "close() was called before configure(), " +
+                val replay = takeHeld()
+                if (replay.isNotEmpty()) {
+                    val warning = internalEntry(
+                        LogLevel.WARN,
+                        "close() was called before configure(), " +
                             "so the held entries were written with the default config",
                     )
-                    val held = buffered.toList() + warning
-                    buffered.clear()
-                    deliver(held, defaults)
+                    deliver(replay + warning, defaults)
                 }
             }
-            closeFile()
+            closeFile(mutableState.value)
+            closeRetryingSinks()
+        }
+    }
+
+    private fun closeRetryingSinks() {
+        slots.forEachIndexed { index, slot ->
+            val (count, cause) = slot.sink.retrying()?.flushOrAbandon() ?: return@forEachIndexed
+            reportFailure { "sink $index: ${entries(count)} could not be delivered: $cause" }
         }
     }
 
     private fun applyConfig(config: LoggerConfig) {
-        if (openPath != config.file) closeFile()
+        val nextPath = (config.file as? FileOutput.Append)?.path
+        if (file.path != null && file.path != nextPath) closeFile(mutableState.value)
         localClock = systemLocalClock()
         mutableState.value = config
     }
 
-    private fun buffer(entry: LogEntry) {
-        // The one throw in kern: holding this much unconfigured is a program that forgot a call, and dropping
-        // entries silently would hide it.
-        check(buffered.size < MAX_BUFFERED) {
-            "Logger held $MAX_BUFFERED entries without being configured: did you forget to call configure(), " +
-                "or should holdUntilConfigured() be removed?"
+    private fun hold(entry: LogEntry) {
+        if (held.size >= MAX_HELD) {
+            held.removeFirst()
+            droppedFromThisHold++
+            droppedFromHolds++
+            healthChanged = true
+            publishHealth()
         }
-        buffered.addLast(entry)
+        held.addLast(entry)
+    }
+
+    /** The held entries for a replay, led by a warning when some gave way, and the hold emptied. */
+    private fun takeHeld(): List<LogEntry> {
+        val dropped = droppedFromThisHold
+        val replay = buildList {
+            if (dropped > 0) {
+                add(
+                    internalEntry(
+                        LogLevel.WARN,
+                        "dropped the $dropped oldest held entries: more than $MAX_HELD were logged before configure()",
+                    ),
+                )
+            }
+            addAll(held)
+        }
+        held.clear()
+        droppedFromThisHold = 0
+        return replay
     }
 
     /**
@@ -220,66 +306,156 @@ public class Logger internal constructor(
      * is already in the file and the sinks.
      */
     private fun deliver(entries: List<LogEntry>, config: LoggerConfig) {
+        val fileFormat = (config.file as? FileOutput.Append)?.format
+        val consoleFormat = config.console.format
         val lines = entries
             .filter { config.passes(it.level) }
-            .map { it to it.render(config.format, localClock) }
+            .map { entry ->
+                val fileLine = fileFormat?.let { entry.render(it, localClock) }
+                val consoleLine = when (consoleFormat) {
+                    null -> null
+                    fileFormat -> fileLine
+                    else -> entry.render(consoleFormat, localClock)
+                }
+                Rendered(entry, fileLine, consoleLine)
+            }
 
-        lines.forEach { (entry, line) -> persist(entry, line, config) }
-        if (config.console != Console.OFF) lines.forEach { (entry, line) -> console.write(entry, line, config) }
+        var thrown: Exception? = null
+        fun keep(failure: Exception?) {
+            if (failure == null) return
+            val first = thrown
+            if (first == null) thrown = failure else first.addSuppressed(failure)
+        }
+
+        lines.forEach { (entry, fileLine, _) ->
+            if (fileLine != null) keep(writeFile(entry, fileLine, config))
+            slots.forEachIndexed { index, slot -> keep(writeSink(index, slot, entry, config)) }
+        }
+        lines.forEach { (entry, _, consoleLine) -> if (consoleLine != null) console.write(entry, consoleLine, config) }
+
+        publishHealth()
+        thrown?.let { throw it }
     }
 
-    // A sink is the caller's code, so what it throws reaches the caller, like a message builder that throws.
-    private fun persist(entry: LogEntry, line: String, config: LoggerConfig) {
-        config.file?.let { appendToFile(line, it) }
-        sinks.forEach { it.write(entry, config) }
+    /** @return the failure to throw under [FileFailure.Throw], or null. */
+    private fun writeFile(entry: LogEntry, line: String, config: LoggerConfig): Exception? {
+        val output = config.file as? FileOutput.Append ?: return null
+        val wasIdle = file.idle
+        val failure = file.write(FileLine(entry.timestamp, line), output) { gapLine(it, config) }
+        if (!wasIdle || !file.idle) healthChanged = true
+        if (failure == null) return null
+
+        val fate = when (output.onFailure) {
+            FileFailure.Throw -> return failure
+            is FileFailure.Retry -> "held for a retry"
+            FileFailure.Drop -> "dropped"
+        }
+        if (!fileFailureReported) {
+            fileFailureReported = true
+            reportFailure { "the log file ${output.path} refused a write ($failure); its entries are $fate" }
+        }
+        return null
     }
 
-    // A write that fails is dropped: the file is the caller's environment, and nothing is left to tell. The
-    // handle goes too, so the next entry reopens and a full disk or a missing directory recovers once fixed.
-    private fun appendToFile(line: String, file: Path) {
+    /** @return the failure to throw under [SinkFailure.Throw], or null. */
+    private fun writeSink(index: Int, slot: SinkSlot, entry: LogEntry, config: LoggerConfig): Exception? {
+        // An entry the sink logged while handling one would come straight back to it, and a failing sink that
+        // logs its own failure would loop.
+        if (slot.busy || entry.level.severity < slot.sink.minLevel.severity) return null
+
+        val policy = config.sinkFailure
+        if (policy is SinkFailure.Drop && policy.breaker is Breaker.Trip && slot.isOpen()) {
+            slot.dropped++
+            healthChanged = true
+            return null
+        }
+
+        slot.busy = true
         try {
-            val target = fileFor(file)
-            val text = if (lastAppendFailed && !endsWithNewline(file)) "\n$line\n" else "$line\n"
-            target.append(text.encodeToByteArray())
-            lastAppendFailed = false
-        } catch (_: Exception) {
-            lastAppendFailed = true
-            closeFile()
+            slot.sink.write(entry, config)
+            if (slot.consecutiveFailures > 0) {
+                slot.consecutiveFailures = 0
+                slot.openUntil = null
+                healthChanged = true
+            }
+            return null
+        } catch (e: Exception) {
+            // A CancellationException included: write is not suspending, so it is the sink's own, such as a
+            // timeout inside runBlocking, never the cancellation of the code that logged.
+            slot.failures++
+            slot.dropped++
+            slot.lastError = e
+            slot.consecutiveFailures++
+            healthChanged = true
+
+            return when (policy) {
+                SinkFailure.Throw -> e
+                is SinkFailure.Drop -> {
+                    val breaker = policy.breaker
+                    if (breaker is Breaker.Trip && slot.consecutiveFailures >= breaker.consecutiveFailures) {
+                        slot.openUntil = timeSource.markNow() + breaker.cooldown
+                    }
+                    if (!slot.failureReported) {
+                        slot.failureReported = true
+                        val name = slot.sink::class.simpleName
+                        reportFailure { "sink $index ($name) threw $e; its entries are dropped" }
+                    }
+                    null
+                }
+            }
+        } finally {
+            slot.busy = false
         }
     }
 
-    // The torn line stays as it is, since truncating could cut another process's entries; ending it keeps the
-    // next entry readable on a line of its own.
-    private fun endsWithNewline(file: Path): Boolean {
-        val size = SystemFileSystem.metadataOrNull(file)?.size ?: return true
-        if (size == 0L) return true
-
-        return SystemFileSystem.source(file).buffered().use { source ->
-            source.skip(size - 1)
-            source.readByte() == '\n'.code.toByte()
+    private fun closeFile(config: LoggerConfig?) {
+        val path = file.path ?: return
+        val drop = ((config?.file as? FileOutput.Append)?.onFailure as? FileFailure.Retry)?.drop ?: DropPolicy.OLDEST
+        val wasIdle = file.idle
+        val lost = file.close(drop) { gapLine(it, config ?: LoggerConfig()) }
+        if (lost != null) {
+            val (count, cause) = lost
+            reportFailure { "${entries(count)} for $path could not be written: $cause" }
         }
+        fileFailureReported = false
+        if (!wasIdle) healthChanged = true
+        publishHealth()
     }
 
-    private fun fileFor(file: Path): AppendFile {
-        openFile?.let { if (openPath == file) return it }
-
-        closeFile()
-        file.parent?.let { SystemFileSystem.createDirectories(it, mustCreate = false) }
-
-        return openAppendFile(file).also {
-            openFile = it
-            openPath = file
-        }
+    private fun gapLine(gap: Gap, config: LoggerConfig): String {
+        val format = (config.file as? FileOutput.Append)?.format ?: LogFormat.TEXT
+        return gapEntry(gap, "the log file").render(format, localClock)
     }
 
-    private fun closeFile() {
+    // A failure while reporting a failure is swallowed: there is nowhere left to report it.
+    private fun reportFailure(message: () -> String) {
         try {
-            openFile?.close()
+            report("$INTERNAL_TAG: ${message()}")
         } catch (_: Exception) {
-            // Already unusable; the next entry opens a fresh handle.
         }
-        openFile = null
-        openPath = null
+    }
+
+    private fun publishHealth() {
+        if (!healthChanged) return
+        healthChanged = false
+        mutableHealth.value = LoggerHealth(file.health, slots.map { it.health }, droppedFromHolds)
+    }
+
+    private data class Rendered(val entry: LogEntry, val fileLine: String?, val consoleLine: String?)
+
+    private class SinkSlot(val sink: LogSink) {
+        var failures = 0L
+        var dropped = 0L
+        var lastError: Throwable? = null
+        var consecutiveFailures = 0
+        var openUntil: TimeMark? = null
+        var failureReported = false
+        var busy = false
+
+        fun isOpen(): Boolean = openUntil?.hasNotPassedNow() ?: false
+
+        val health: SinkHealth
+            get() = SinkHealth(failures, dropped, lastError, breakerOpen = openUntil != null)
     }
 }
 

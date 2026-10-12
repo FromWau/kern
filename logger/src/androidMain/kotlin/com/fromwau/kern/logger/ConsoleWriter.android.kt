@@ -3,14 +3,15 @@ package com.fromwau.kern.logger
 import android.util.Log as Logcat
 
 /**
- * logcat carries the tag, severity and timestamp itself, so it is given the message alone rather than a
- * rendered line. [LoggerConfig.format] and [LoggerConfig.color] therefore shape the log file
- * here, not the console; set a [LoggerConfig.file] to get JSON on Android.
+ * [ConsoleOutput.Platform] is logcat, which carries the tag, severity and timestamp itself, so it is given the
+ * message and fields rather than a rendered line, whatever its format says.
+ * [ConsoleOutput.Stdout] and [ConsoleOutput.Stderr] write the rendered line to those streams, which logcat shows
+ * under `System.out` and `System.err`.
  */
-internal actual val consoleWriter: ConsoleWriter = ConsoleWriter { entry, _, _ ->
-    val message = entry.fields
-        .entries
-        .joinToString(prefix = entry.message, separator = "") { (key, value) -> " $key=$value" }
+internal actual val consoleWriter: ConsoleWriter = ConsoleWriter { entry, line, config ->
+    if (config.console !is ConsoleOutput.Platform) return@ConsoleWriter stdioConsoleWriter.write(entry, line, config)
+
+    val message = entry.message + entry.fields.asText()
 
     when (entry.level) {
         LogLevel.VERBOSE -> Logcat.v(entry.tag, message, entry.throwable)

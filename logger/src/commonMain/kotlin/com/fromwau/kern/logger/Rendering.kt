@@ -1,11 +1,5 @@
 package com.fromwau.kern.logger
 
-import com.fromwau.kern.terminal.Style
-import com.fromwau.kern.terminal.blue
-import com.fromwau.kern.terminal.brightBlack
-import com.fromwau.kern.terminal.red
-import com.fromwau.kern.terminal.white
-import com.fromwau.kern.terminal.yellow
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.format
@@ -14,6 +8,10 @@ import kotlinx.datetime.format.char
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.time.Instant
 
 private const val LEVEL_COLUMN = 7
@@ -32,7 +30,7 @@ private data class JsonLine(
     @SerialName("tag") val tag: String,
     @SerialName("level") val level: String,
     @SerialName("message") val message: String,
-    @SerialName("fields") val fields: Map<String, String> = emptyMap(),
+    @SerialName("fields") val fields: JsonObject = JsonObject(emptyMap()),
     @SerialName("stackTrace") val stackTrace: String? = null,
 )
 
@@ -59,12 +57,7 @@ private fun LogEntry.textLine(localClock: LocalClock): String = buildString {
     append(tag.take(TAG_COLUMN))
     append(" - ")
     append(message)
-    fields.forEach { (key, value) ->
-        append(' ')
-        append(key)
-        append('=')
-        append(value)
-    }
+    append(fields.asText())
     throwable?.let {
         append('\n')
         append(it.stackTraceToString())
@@ -77,23 +70,32 @@ private fun LogEntry.jsonLine(): String = json.encodeToString(
         tag = tag,
         level = level.name,
         message = message,
-        fields = fields,
+        fields = JsonObject(fields.mapValues { (_, value) -> value.toJsonField() }),
         stackTrace = throwable?.stackTraceToString(),
     ),
 )
 
-/** The colour each severity prints in. */
-private val LogLevel.style: Style
-    get() = when (this) {
-        LogLevel.VERBOSE -> brightBlack
-        LogLevel.DEBUG -> blue
-        LogLevel.INFO -> white
-        LogLevel.WARN -> yellow
-        LogLevel.ERROR -> red
-    }
+/** The JSON literal a field value carries its type in; JSON has no literal for NaN or an infinity. */
+private fun Any?.toJsonField(): JsonElement = when (this) {
+    null -> JsonNull
+    is Boolean -> JsonPrimitive(this)
+    is Double -> if (isFinite()) JsonPrimitive(this) else JsonPrimitive(toString())
+    is Float -> if (isFinite()) JsonPrimitive(this) else JsonPrimitive(toString())
+    is Int, is Long, is Short, is Byte -> JsonPrimitive(this as Number)
+    else -> JsonPrimitive(safeText())
+}
 
-/** Colours [line] for its severity, or returns it untouched when [enabled] is false. */
-internal fun colorize(line: String, level: LogLevel, enabled: Boolean): String = level.style.render(line, enabled)
+/** The fields as ` key=value` pairs, ready to follow the message. */
+internal fun Map<String, Any?>.asText(): String = entries.joinToString(separator = "") { (key, value) ->
+    " $key=${value.safeText()}"
+}
+
+/** The value's text, or a placeholder when its `toString()` throws, which would otherwise lose the whole entry. */
+private fun Any?.safeText(): String = try {
+    toString()
+} catch (e: Exception) {
+    "<toString() threw ${e::class.simpleName}>"
+}
 
 // ISO 8601 with a fixed number of fraction digits, so stamps of one offset sort as text in time order.
 private fun timestampFormat(fractionDigits: Int) = DateTimeComponents.Format {
