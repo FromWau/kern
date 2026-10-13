@@ -26,8 +26,8 @@ dependencies {
 }
 ```
 
-KMP consumers put it in `commonMain`. The JVM and Android artifacts are Java 25 bytecode, so those two need
-a JDK 25 toolchain; the native targets have no such requirement.
+KMP consumers put it in `commonMain`. The JVM and Android artifacts are Java 17 bytecode, so those two need
+JDK 17 or newer; the native targets have no such requirement.
 
 ## Writing
 

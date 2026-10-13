@@ -8,7 +8,10 @@ android-compileSdk = "37"
 # cannot put its backup back and reports a damaged file instead. Lower it and that case stops working.
 android-minSdk = "26"
 dotenv-gradle = "0.1.0"
-jdk = "25"
+# The JDK Gradle compiles with, and the one a consumer needs: the JVM and Android artifacts are Java 17 bytecode,
+# and -Xjdk-release refuses any JDK API newer than that.
+jdk-build = "25"
+jdk-target = "17"
 
 kotlin = "2.4.20"
 kotlinx-atomicfu = "0.33.0"

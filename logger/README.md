@@ -33,7 +33,7 @@ dependencies {
 ```
 
 KMP consumers put it in `commonMain`. It is built with Kotlin 2.4.20, so use that or newer. The JVM and
-Android artifacts are Java 25 bytecode, so those two need a JDK 25 toolchain; the native targets have no such
+Android artifacts are Java 17 bytecode, so those two need JDK 17 or newer; the native targets have no such
 requirement. Everything is in one package, `com.fromwau.kern.logger`; `logger-async` adds
 `com.fromwau.kern.logger.async`.
 

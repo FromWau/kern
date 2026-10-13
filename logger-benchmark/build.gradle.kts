@@ -6,8 +6,10 @@ plugins {
     alias(libs.plugins.kotlinxBenchmark)
 }
 
+val buildJdk = libs.versions.jdk.build.get().toInt()
+
 kotlin {
-    jvmToolchain(libs.versions.jdk.get().toInt())
+    jvmToolchain(buildJdk)
     jvm()
 
     sourceSets {
@@ -47,7 +49,7 @@ tasks.register<JavaExec>("stress") {
     val main = kotlin.jvm().compilations.getByName("main")
     classpath = files(main.output.allOutputs, main.runtimeDependencyFiles)
     mainClass = "com.fromwau.kern.logger.benchmark.StressKt"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(libs.versions.jdk.get()) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(buildJdk) }
     workingDir = projectDir
     providers.gradleProperty("entries").orNull?.let { args(it) }
 }

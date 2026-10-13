@@ -42,8 +42,19 @@ internal fun Exception.asProbe(): PathProbe = when (this) {
     is AccessDeniedException -> PathProbe.Denied("Permission denied")
     // It carries no reason, only the path, so it says what the native targets say about a loop.
     is FileSystemLoopException -> PathProbe.Denied("Too many levels of symbolic links")
-    is FileSystemException -> PathProbe.Denied(fault)
+    is FileSystemException -> if (runsThroughFile()) PathProbe.Absent else PathProbe.Denied(fault)
     else -> PathProbe.Denied(reason)
+}
+
+// A path running through a file is absent, as ENOTDIR is natively. JDK 25 raises it as NoSuchFileException, but JDK
+// 17 as a bare FileSystemException with only the system's message, so the nearest existing ancestor is asked instead.
+private fun FileSystemException.runsThroughFile(): Boolean {
+    var ancestor = file?.let { Paths.get(it).parent }
+    while (ancestor != null) {
+        if (Files.exists(ancestor)) return !Files.isDirectory(ancestor)
+        ancestor = ancestor.parent
+    }
+    return false
 }
 
 // getMessage() leads with the path too, and for a loop or an over-long name that is the whole of it. `reason`

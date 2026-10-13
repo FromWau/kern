@@ -29,7 +29,7 @@ dependencies {
 }
 ```
 
-The JVM and Android artifacts are Java 25 bytecode, so those two need a JDK 25 toolchain.
+The JVM and Android artifacts are Java 17 bytecode, so those two need JDK 17 or newer.
 
 ## What changes
 

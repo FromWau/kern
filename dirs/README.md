@@ -20,7 +20,7 @@ dependencies {
 
 KMP consumers put it in `commonMain`. kern's `result` and kotlinx-io come along as `api`, since `Result`,
 `IError` and `Path` appear in this module's signatures. `forApp` takes a `kotlin.uuid.Uuid`, so consumers need
-Kotlin 2.4 or newer. The JVM and Android artifacts are Java 25 bytecode, so those two need a JDK 25 toolchain,
+Kotlin 2.4 or newer. The JVM and Android artifacts are Java 17 bytecode, so those two need JDK 17 or newer,
 and Android needs `minSdk` 26 and `compileSdk` 37; the native targets have no such requirement.
 
 ## Where files go
