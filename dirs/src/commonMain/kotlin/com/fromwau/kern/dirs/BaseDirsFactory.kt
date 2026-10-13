@@ -9,6 +9,8 @@ import com.fromwau.kern.result.Result
  * ```kotlin
  * // androidMain
  * val factory = BaseDirsFactory(context)
+ * // jvmMain and macosMain, for a command-line tool that wants the XDG layout on macOS
+ * val factory = BaseDirsFactory(DirLayout.Xdg)
  * // every other target
  * val factory = BaseDirsFactory()
  * // common code

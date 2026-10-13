@@ -17,9 +17,10 @@ public actual class BaseDirsFactory {
                 home = Path(home),
                 configHome = Path(appData),
                 dataHome = Path(appData),
-                stateHome = Path(appData),
+                stateHome = Path(localAppData),
                 cacheHome = Path(localAppData),
                 tempHome = Path(temp),
+                naming = AppNaming.Windows,
             ),
         )
     }

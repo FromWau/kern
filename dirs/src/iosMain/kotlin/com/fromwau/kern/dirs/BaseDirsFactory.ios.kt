@@ -12,8 +12,8 @@ import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUserDomainMask
 
-// Kept identical to macosMain's copy by hand, rather than shared through an appleMain source set: one
-// duplicate costs less than another layer in the source tree. Change both.
+// Kept identical to macosMain's DirLayout.Native branch by hand, rather than shared through an appleMain source
+// set: one duplicate costs less than another layer in the source tree. Change both.
 public actual class BaseDirsFactory {
     public actual fun create(): Result<BaseDirs, DirsError> {
         val support = userDirectory(NSApplicationSupportDirectory)
@@ -29,6 +29,7 @@ public actual class BaseDirsFactory {
                 stateHome = support,
                 cacheHome = caches,
                 tempHome = Path(NSTemporaryDirectory()),
+                naming = AppNaming.Apple,
             ),
         )
     }

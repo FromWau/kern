@@ -15,8 +15,15 @@ import kotlin.test.assertEquals
 
 @OptIn(ExperimentalForeignApi::class)
 class BaseDirsFactoryLinuxTest {
-    private val variables =
-        listOf("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR")
+    private val variables = listOf(
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+        "TMPDIR",
+    )
     private val saved = variables.associateWith { getenv(it)?.toKString() }
 
     @AfterTest
@@ -50,6 +57,13 @@ class BaseDirsFactoryLinuxTest {
         )
 
         assertEquals(Ok(expected), BaseDirsFactory().create())
+    }
+
+    @Test
+    fun `the runtime root comes from XDG_RUNTIME_DIR`() {
+        environment("HOME" to "/home/me", "XDG_RUNTIME_DIR" to "/run/user/1000")
+
+        assertEquals(Path("/run/user/1000"), BaseDirsFactory().create().assertSuccess().runtimeHome)
     }
 
     @Test

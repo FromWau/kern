@@ -5,12 +5,14 @@ import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import kotlinx.io.files.Path
 
-public actual class BaseDirsFactory {
+/** @param layout which convention macOS uses; Linux and Windows have one each and ignore it. */
+public actual class BaseDirsFactory(private val layout: DirLayout = DirLayout.Native) {
     public actual fun create(): Result<BaseDirs, DirsError> =
         baseDirFor(
             osName = System.getProperty("os.name").orEmpty(),
             env = System::getenv,
             userHome = System.getProperty("user.home"),
+            layout = layout,
         )
 }
 
@@ -22,13 +24,20 @@ internal fun baseDirFor(
     osName: String,
     env: (String) -> String?,
     userHome: String?,
+    layout: DirLayout = DirLayout.Native,
 ): Result<BaseDirs, DirsError> {
     val variable = { name: String -> env(name)?.takeIf { it.isNotBlank() } }
     val home = userHome?.takeIf { Path(it).isAbsolute }
     val os = osName.lowercase()
     return when {
         // Checked before "win", which "darwin" contains.
-        "mac" in os || "darwin" in os -> appleBaseDir(variable, home)
+        "mac" in os || "darwin" in os -> when (layout) {
+            DirLayout.Native -> appleBaseDir(variable, home)
+            // $HOME first, as on Linux: XDG's defaults are relative to it, and user.home ignores it.
+            DirLayout.Xdg -> (variable("HOME") ?: home)
+                ?.let { Ok(xdgBaseDirs(it, variable, tempRoot(variable))) }
+                ?: Err(DirsError.UnableToResolve(DirKind.Home))
+        }
         "win" in os -> windowsBaseDir(variable, home)
         else -> linuxBaseDir(variable, home)
     }
@@ -48,9 +57,10 @@ internal fun windowsBaseDir(
             home = Path(home),
             configHome = Path(appData),
             dataHome = Path(appData),
-            stateHome = Path(appData),
+            stateHome = Path(localAppData),
             cacheHome = Path(localAppData),
             tempHome = Path(temp),
+            naming = AppNaming.Windows,
         ),
     )
 }
@@ -62,16 +72,7 @@ internal fun linuxBaseDir(
     // user.home comes from the account database and ignores $HOME, which XDG's defaults are relative to.
     val home = env("HOME") ?: userHome ?: return Err(DirsError.UnableToResolve(DirKind.Home))
 
-    return Ok(
-        BaseDirs(
-            home = Path(home),
-            configHome = Path(env("XDG_CONFIG_HOME") ?: "$home/.config"),
-            dataHome = Path(env("XDG_DATA_HOME") ?: "$home/.local/share"),
-            stateHome = Path(env("XDG_STATE_HOME") ?: "$home/.local/state"),
-            cacheHome = Path(env("XDG_CACHE_HOME") ?: "$home/.cache"),
-            tempHome = tempRoot(env),
-        ),
-    )
+    return Ok(xdgBaseDirs(home, env, tempRoot(env)).copy(runtimeHome = env("XDG_RUNTIME_DIR")?.let(::Path)))
 }
 
 internal fun appleBaseDir(
@@ -89,6 +90,7 @@ internal fun appleBaseDir(
             stateHome = support,
             cacheHome = Path("$home/Library/Caches"),
             tempHome = tempRoot(env),
+            naming = AppNaming.Apple,
         ),
     )
 }

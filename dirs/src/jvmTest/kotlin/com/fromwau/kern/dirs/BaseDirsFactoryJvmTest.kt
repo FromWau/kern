@@ -6,6 +6,7 @@ import com.fromwau.kern.result.assertSuccess
 import kotlinx.io.files.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class BaseDirsFactoryJvmTest {
     private fun envOf(vararg variables: Pair<String, String>): (String) -> String? = mapOf(*variables)::get
@@ -80,6 +81,28 @@ class BaseDirsFactoryJvmTest {
     }
 
     @Test
+    fun `linux takes the runtime root from XDG_RUNTIME_DIR and has none without it`() {
+        val env = envOf("HOME" to "/home/me", "XDG_RUNTIME_DIR" to "/run/user/1000")
+
+        assertEquals(Path("/run/user/1000"), linuxBaseDir(env, userHome = null).assertSuccess().runtimeHome)
+        assertNull(linuxBaseDir(envOf("HOME" to "/home/me"), userHome = null).assertSuccess().runtimeHome)
+    }
+
+    @Test
+    fun `only linux has a runtime root`() {
+        val env = envOf(
+            "HOME" to "/home/me",
+            "XDG_RUNTIME_DIR" to "/run/user/1000",
+            "APPDATA" to "/roaming",
+            "LOCALAPPDATA" to "/local",
+            "TEMP" to "/temp",
+        )
+
+        assertNull(baseDirFor("Windows 11", env, userHome = "/profile").assertSuccess().runtimeHome)
+        assertNull(baseDirFor("Mac OS X", env, userHome = "/Users/me").assertSuccess().runtimeHome)
+    }
+
+    @Test
     fun `linux falls back to user home when HOME is unset`() {
         assertEquals(Path("/home/account"), linuxBaseDir(envOf(), userHome = "/home/account").assertSuccess().home)
     }
@@ -90,15 +113,16 @@ class BaseDirsFactoryJvmTest {
     }
 
     @Test
-    fun `windows keeps config data and state in APPDATA and cache in LOCALAPPDATA`() {
+    fun `windows keeps config and data in APPDATA and state and cache in LOCALAPPDATA`() {
         val env = envOf("APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
         val expected = BaseDirs(
             home = Path("/profile"),
             configHome = Path("/roaming"),
             dataHome = Path("/roaming"),
-            stateHome = Path("/roaming"),
+            stateHome = Path("/local"),
             cacheHome = Path("/local"),
             tempHome = Path("/temp"),
+            naming = AppNaming.Windows,
         )
 
         assertEquals(Ok(expected), windowsBaseDir(env, userHome = "/profile"))
@@ -133,9 +157,67 @@ class BaseDirsFactoryJvmTest {
             stateHome = support,
             cacheHome = Path("/Users/me/Library/Caches"),
             tempHome = Path("/tmp"),
+            naming = AppNaming.Apple,
         )
 
         assertEquals(Ok(expected), appleBaseDir(envOf(), userHome = "/Users/me"))
+    }
+
+    @Test
+    fun `macos with the Xdg layout puts the XDG roots under the account home`() {
+        val expected = BaseDirs(
+            home = Path("/Users/me"),
+            configHome = Path("/Users/me/.config"),
+            dataHome = Path("/Users/me/.local/share"),
+            stateHome = Path("/Users/me/.local/state"),
+            cacheHome = Path("/Users/me/.cache"),
+            tempHome = Path("/tmp"),
+        )
+
+        assertEquals(Ok(expected), baseDirFor("Mac OS X", envOf(), userHome = "/Users/me", DirLayout.Xdg))
+    }
+
+    @Test
+    fun `macos with the Xdg layout takes each root from its XDG variable`() {
+        val env = envOf(
+            "XDG_CONFIG_HOME" to "/xdg/config",
+            "XDG_DATA_HOME" to "/xdg/data",
+            "XDG_STATE_HOME" to "/xdg/state",
+            "XDG_CACHE_HOME" to "/xdg/cache",
+        )
+        val dirs = baseDirFor("Mac OS X", env, userHome = "/Users/me", DirLayout.Xdg).assertSuccess()
+
+        assertEquals(
+            listOf(Path("/xdg/config"), Path("/xdg/data"), Path("/xdg/state"), Path("/xdg/cache")),
+            listOf(dirs.configHome, dirs.dataHome, dirs.stateHome, dirs.cacheHome),
+        )
+    }
+
+    @Test
+    fun `macos with the Xdg layout puts the roots under HOME as Linux does`() {
+        val dirs = baseDirFor("Mac OS X", envOf("HOME" to "/tmp/sandbox"), userHome = "/Users/me", DirLayout.Xdg)
+
+        assertEquals(Path("/tmp/sandbox/.config"), dirs.assertSuccess().configHome)
+    }
+
+    @Test
+    fun `the layout changes nothing on Linux and Windows`() {
+        val env = envOf("HOME" to "/home/me", "APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
+
+        for (os in listOf("Linux", "Windows 11")) {
+            assertEquals(baseDirFor(os, env, userHome = "/home/me"), baseDirFor(os, env, "/home/me", DirLayout.Xdg))
+        }
+    }
+
+    @Test
+    fun `each platform names an app's folder its own way`() {
+        val env = envOf("HOME" to "/home/me", "APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
+        val naming = { os: String, layout: DirLayout -> baseDirFor(os, env, "/home/me", layout).assertSuccess().naming }
+
+        assertEquals(AppNaming.Xdg, naming("Linux", DirLayout.Native))
+        assertEquals(AppNaming.Windows, naming("Windows 11", DirLayout.Native))
+        assertEquals(AppNaming.Apple, naming("Mac OS X", DirLayout.Native))
+        assertEquals(AppNaming.Xdg, naming("Mac OS X", DirLayout.Xdg))
     }
 
     @Test
