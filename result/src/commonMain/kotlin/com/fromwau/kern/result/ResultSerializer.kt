@@ -26,7 +26,7 @@ private const val ERROR_INDEX = 1
  * A result encodes as an object holding exactly one of `success` or `error`, which every format can
  * express, so this is not tied to JSON.
  */
-public class ResultSerializer<S, E : IError>(
+public class ResultSerializer<S, E : ResultError>(
     private val successSerializer: KSerializer<S>,
     private val errorSerializer: KSerializer<E>,
 ) : KSerializer<Result<S, E>> {

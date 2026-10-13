@@ -1,11 +1,11 @@
 package com.fromwau.kern.fs
 
-import com.fromwau.kern.result.IError
+import com.fromwau.kern.result.ResultError
 import kotlinx.io.files.FileMetadata
 import kotlinx.io.files.Path
 
 /** Why a file operation failed. Every case names the [path] it is about. */
-public sealed interface FileError : IError {
+public sealed interface FileError : ResultError {
     public val path: Path
 
     /**

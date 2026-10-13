@@ -25,6 +25,7 @@ internal fun newTempDir(): Path {
 }
 
 /** Writes [content] with kotlinx-io directly, so a test's setup never depends on the code under test. */
+@IgnorableReturnValue
 internal fun Path.writeRaw(content: String): Path = also { path ->
     SystemFileSystem
         .sink(path)

@@ -47,7 +47,7 @@ class TempRunsTest {
         val crashed = run()
         val running = run()
         val doctor = run()
-        crashed.withRunTemp { }
+        crashed.withRunTemp { }.assertSuccess()
 
         val stale = running.withRunTemp { doctor.withRunTemp { doctor.staleTempRuns() } }
 

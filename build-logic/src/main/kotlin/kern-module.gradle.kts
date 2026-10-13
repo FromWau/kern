@@ -24,6 +24,11 @@ val frameworkName = moduleName.split('-').joinToString("") { part -> part.replac
 kotlin {
     explicitApi()
 
+    compilerOptions {
+        // Every non-Unit return in kern, tests included, is must-use, so a dropped Result warns here and for consumers.
+        freeCompilerArgs.add("-Xreturn-value-checker=full")
+    }
+
     jvmToolchain(buildJdk)
 
     android {

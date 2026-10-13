@@ -1,9 +1,9 @@
 package com.fromwau.kern.dirs
 
 import com.fromwau.kern.result.Err
-import com.fromwau.kern.result.IError
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.ResultError
 import kotlinx.io.files.Path
 import kotlin.uuid.Uuid
 
@@ -124,7 +124,7 @@ public enum class DirKind {
 }
 
 /** Why [BaseDirsFactory.create] or [BaseDirs.forApp] failed. */
-public sealed interface DirsError : IError {
+public sealed interface DirsError : ResultError {
     /**
      * The environment or the OS had no answer for the [kind] root. Linux, and macOS on the JVM, can only miss
      * [DirKind.Home]. Windows can miss [DirKind.Home], `%APPDATA%` ([DirKind.Config]), `%LOCALAPPDATA%`

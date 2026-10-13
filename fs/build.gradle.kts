@@ -28,7 +28,7 @@ kotlin {
         appleMain.get().dependsOn(posixMain)
 
         commonMain.dependencies {
-            // api: AppDirs and Path appear in the public signatures, and FileError is an IError.
+            // api: AppDirs and Path appear in the public signatures, and FileError is a ResultError.
             api(project(":dirs"))
             api(project(":result"))
             api(libs.kotlinx.io.core)

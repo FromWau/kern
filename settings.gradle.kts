@@ -65,6 +65,7 @@ gradle.lifecycle.beforeProject {
 
 include(":result")
 include(":result-test")
+include(":result-coroutines")
 include(":terminal")
 include(":logger")
 include(":logger-async")

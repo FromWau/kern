@@ -1,9 +1,9 @@
 package com.fromwau.kern.terminal
 
 import com.fromwau.kern.result.EmptyResult
-import com.fromwau.kern.result.IError
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.ResultError
 
 /** Exit code for a truncated output pipe: the shell's 128+N "killed by signal N" convention, N = SIGPIPE (13). */
 public const val BROKEN_PIPE_EXIT: Int = 128 + 13
@@ -71,7 +71,7 @@ public enum class Stream {
 }
 
 /** Why output did not reach its destination, and on which [stream]. */
-public sealed interface WriteError : IError {
+public sealed interface WriteError : ResultError {
     public val stream: Stream
 
     /** The reader went away, as when a downstream `| head` stops reading. */

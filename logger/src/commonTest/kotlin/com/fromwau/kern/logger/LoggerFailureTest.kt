@@ -201,7 +201,7 @@ class LoggerFailureTest {
         }
 
         override fun flush() {
-            queued.forEach { write -> runCatching(write) }
+            queued.forEach { write -> val _ = runCatching(write) }
             queued.clear()
         }
     }

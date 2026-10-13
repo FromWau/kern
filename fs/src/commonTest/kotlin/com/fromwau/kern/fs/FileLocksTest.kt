@@ -28,14 +28,14 @@ class FileLocksTest {
     fun `the lock file and its missing folders are created and stay`() {
         val nested = dir / "a" / "b" / ".app.lock"
 
-        nested.withLock { }
+        nested.withLock { }.assertSuccess()
 
         assertTrue(nested.exists(), "deleting the lock file would let a second holder past the first")
     }
 
     @Test
     fun `a released lock lets the next holder in`() {
-        lockFile.withLock { }
+        lockFile.withLock { }.assertSuccess()
 
         assertEquals(Ok(2), lockFile.withLock { 2 })
     }

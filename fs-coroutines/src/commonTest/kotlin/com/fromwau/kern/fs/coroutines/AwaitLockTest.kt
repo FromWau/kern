@@ -28,7 +28,7 @@ class AwaitLockTest {
 
     @AfterTest
     fun cleanUp() {
-        dir.deleteRecursively()
+        val _ = dir.deleteRecursively()
     }
 
     @Test
@@ -60,7 +60,7 @@ class AwaitLockTest {
 
     @Test
     fun `a cancelled block releases the lock`() = runTest {
-        val holder = launch { lockFile.awaitLock { awaitCancellation() } }
+        val holder = launch { val _ = lockFile.awaitLock { awaitCancellation() } }
         yield()
         assertEquals(Ok(null), lockFile.tryLock(), "the block never took the lock")
 
@@ -72,7 +72,7 @@ class AwaitLockTest {
     @Test
     fun `a cancelled wait holds nothing`() = runTest {
         val held = assertNotNull(lockFile.tryLock().assertSuccess())
-        val waiter = launch { lockFile.awaitLock(waitMillis = 10_000) { } }
+        val waiter = launch { val _ = lockFile.awaitLock(waitMillis = 10_000) { } }
         yield()
 
         waiter.cancelAndJoin()

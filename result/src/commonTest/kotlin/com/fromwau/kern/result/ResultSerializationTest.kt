@@ -16,7 +16,7 @@ private data class Account(val id: Long, val name: String)
 
 /** A case carrying data and a case carrying none: the payload is what has to survive the trip. */
 @Serializable
-private sealed interface TransferError : IError {
+private sealed interface TransferError : ResultError {
     @Serializable
     @SerialName("not_found")
     data class NotFound(val id: Long) : TransferError
@@ -81,6 +81,35 @@ class ResultSerializationTest {
         val original = Response(Err(TransferError.NotFound(7)))
 
         assertEquals(original, Json.decodeFromString<Response>(Json.encodeToString(original)))
+    }
+
+    @Test
+    fun `every error a resultAll block collected round trips in order`() {
+        val failed: Result<Account, AllErrors<TransferError>> =
+            Err(AllErrors(listOf(TransferError.NotFound(7), TransferError.Declined)))
+
+        val back = Json.decodeFromString<Result<Account, AllErrors<TransferError>>>(Json.encodeToString(failed))
+
+        assertEquals(failed, back)
+    }
+
+    @Test
+    fun `a stopped batch round trips with what was done and the error`() {
+        val stopped: Result<List<Account>, Partial<Account, TransferError>> =
+            Err(Partial(listOf(Account(1, "ada")), TransferError.Declined))
+
+        val back = Json.decodeFromString<Result<List<Account>, Partial<Account, TransferError>>>(Json.encodeToString(stopped))
+
+        assertEquals(stopped, back)
+    }
+
+    @Test
+    fun `an AllErrors with no errors is refused when decoded`() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            Json.decodeFromString<AllErrors<TransferError>>("""{"errors":[]}""")
+        }
+
+        assertTrue("at least one error" in failure.message.orEmpty(), failure.message)
     }
 
     @Test

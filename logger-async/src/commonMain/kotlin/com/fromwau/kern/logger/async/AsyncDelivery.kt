@@ -19,7 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.incrementAndFetch
+import kotlin.concurrent.atomics.plusAssign
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -99,7 +99,7 @@ public class AsyncDelivery(
     }
 
     private fun dropOne() {
-        dropped.incrementAndFetch()
+        dropped += 1
         // A stopped writer publishes nothing more, so the logging thread does it.
         if (written.value == Long.MAX_VALUE) publishDrops()
     }
@@ -110,7 +110,7 @@ public class AsyncDelivery(
     }
 
     override fun submit(write: () -> Unit) {
-        submitted.incrementAndFetch()
+        submitted += 1
         // Refused when the queue is full under DropPolicy.NEWEST, or closed because an Error stopped the writer.
         if (queue.trySend(write).isFailure) dropOne()
     }

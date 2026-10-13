@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-private sealed interface Probe : IError {
+private sealed interface Probe : ResultError {
     data class Missing(val id: Long) : Probe
 
     data object Busy : Probe
@@ -47,41 +47,22 @@ class ResultAssertionsTest {
     }
 
     @Test
-    fun `assertSuccess with an expected value passes on an equal success`() {
-        found.assertSuccess("user")
+    fun `assertError with a check gives the error when the check holds`() {
+        val error = missing.assertError { it is Probe.Missing && it.id == 7L }
+
+        assertEquals(Probe.Missing(7), error)
     }
 
     @Test
-    fun `assertSuccess with an expected value fails naming both values on another success`() {
-        val failure = assertFailsWith<AssertionError> { found.assertSuccess("admin") }
+    fun `assertError with a check fails naming the error when the check does not hold`() {
+        val failure = assertFailsWith<AssertionError> { missing.assertError { it is Probe.Busy } }
 
-        assertTrue("admin" in failure.message.orEmpty() && "user" in failure.message.orEmpty(), failure.message)
+        assertTrue("Missing(id=7)" in failure.message.orEmpty(), failure.message)
     }
 
     @Test
-    fun `assertSuccess with an expected value on an error fails naming the value and the error`() {
-        val failure = assertFailsWith<AssertionError> { missing.assertSuccess("user") }
-
-        val message = failure.message.orEmpty()
-        assertTrue("user" in message && "Missing(id=7)" in message, failure.message)
-    }
-
-    @Test
-    fun `assertError with an expected error passes on an equal error`() {
-        missing.assertError(Probe.Missing(7))
-    }
-
-    @Test
-    fun `assertError with an expected error fails naming both errors on another error`() {
-        val failure = assertFailsWith<AssertionError> { missing.assertError(Probe.Missing(8)) }
-
-        val message = failure.message.orEmpty()
-        assertTrue("Missing(id=8)" in message && "Missing(id=7)" in message, failure.message)
-    }
-
-    @Test
-    fun `assertError with an expected error on a success fails naming the value`() {
-        val failure = assertFailsWith<AssertionError> { found.assertError(Probe.Busy) }
+    fun `assertError with a check on a success fails naming the value`() {
+        val failure = assertFailsWith<AssertionError> { found.assertError { it is Probe.Missing } }
 
         assertTrue("user" in failure.message.orEmpty(), failure.message)
     }

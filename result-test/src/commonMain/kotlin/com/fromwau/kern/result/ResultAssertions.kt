@@ -1,6 +1,5 @@
 package com.fromwau.kern.result
 
-import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
@@ -10,50 +9,38 @@ import kotlin.test.fail
  * val config = manager.load().assertSuccess()
  * ```
  */
-public fun <S> Result<S, IError>.assertSuccess(): S = when (this) {
+@IgnorableReturnValue
+public fun <S> Result<S, ResultError>.assertSuccess(): S = when (this) {
     is Result.Success -> value
     is Result.Error -> fail("expected Success but got $this")
 }
 
 /**
  * This error as the case [F] you expected, or a test failure naming what came instead: a success, or an error
- * of another case.
+ * of another case. [F] is not checked against the result's error type, so a case it can never produce compiles
+ * and fails when run.
  *
  * ```kotlin
  * val busy = manager.update { it }.assertError<ConfigWriteError.LockBusy>()
  * ```
  */
-public inline fun <reified F : IError> Result<Any?, IError>.assertError(): F = when (this) {
+@IgnorableReturnValue
+public inline fun <reified F : ResultError> Result<Any?, ResultError>.assertError(): F = when (this) {
     is Result.Success -> fail("expected Error ${F::class.simpleName} but got $this")
     is Result.Error -> error as? F ?: fail("expected ${F::class.simpleName} but got $error")
 }
 
 /**
- * Passes when this is a success equal to [expected], and fails naming what came instead: another value, or the
- * error.
+ * This error when [check] holds for it, or a test failure naming what came instead: a success, or an error the
+ * check refused. Inside [check] the error has the result's own type, so an `is` against a case the result can
+ * never hold does not compile, and a case's fields can be checked in the same call:
  *
  * ```kotlin
- * parsePort("8080").assertSuccess(8080)
+ * findUser(8).assertError { it is CrudError.NotFound && it.id == 8L }
  * ```
  */
-public fun <S> Result<S, IError>.assertSuccess(expected: S) {
-    when (this) {
-        is Result.Success -> assertEquals(expected, value)
-        is Result.Error -> fail("expected Success($expected) but got $this")
-    }
-}
-
-/**
- * Passes when this is an error equal to [expected], and fails naming what came instead: another error, or the
- * success.
- *
- * ```kotlin
- * findUser(8).assertError(CrudError.NotFound(8))
- * ```
- */
-public fun Result<Any?, IError>.assertError(expected: IError) {
-    when (this) {
-        is Result.Success -> fail("expected Error($expected) but got $this")
-        is Result.Error -> assertEquals(expected, error)
-    }
+@IgnorableReturnValue
+public fun <E : ResultError> Result<Any?, E>.assertError(check: (E) -> Boolean): E = when (this) {
+    is Result.Success -> fail("expected an error matching the check but got $this")
+    is Result.Error -> error.takeIf(check) ?: fail("expected an error matching the check but got $error")
 }

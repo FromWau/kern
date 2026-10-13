@@ -138,7 +138,7 @@ private fun Path.writeByRename(
         return Err(FileError.WriteFailed(this, failure))
     }
     // The content is in place once renamed, so a folder that will not sync costs durability, not the write.
-    syncDirectory(target.parent ?: Path("."))
+    val _ = syncDirectory(target.parent ?: Path("."))
     return Ok(Unit)
 }
 

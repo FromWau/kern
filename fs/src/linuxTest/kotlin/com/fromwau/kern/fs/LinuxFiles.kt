@@ -53,11 +53,13 @@ import platform.posix.timeval
 import platform.posix.unlink
 import platform.posix.utimes
 
+@IgnorableReturnValue
 internal fun Path.symlinkTo(target: Path): Path = also { check(symlink(target.toString(), toString()) == 0) }
 
 /** Makes this path a second name for [target]'s file. */
 internal fun Path.hardLinkTo(target: Path): Path = also { check(link(target.toString(), toString()) == 0) }
 
+@IgnorableReturnValue
 internal fun Path.makeFifo(): Path = also { check(mkfifo(toString(), (S_IRUSR or S_IWUSR).convert()) == 0) }
 
 /** Removes this symlink itself, which kotlinx-io's delete cannot do once the target is gone. */

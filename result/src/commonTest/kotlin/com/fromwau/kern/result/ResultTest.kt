@@ -10,14 +10,14 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private sealed interface CrudError : IError {
+private sealed interface CrudError : ResultError {
     data class NotFound(val id: Long) : CrudError
     data class Invalid(val reason: String) : CrudError
     data class DbError(val cause: Throwable) : CrudError
 }
 
 /** What the data layer's [CrudError] is mapped to once it crosses the boundary. */
-private sealed interface ApiError : IError {
+private sealed interface ApiError : ResultError {
     data class Missing(val message: String) : ApiError
     data object Unavailable : ApiError
 }

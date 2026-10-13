@@ -65,7 +65,8 @@ public class RetryingSink internal constructor(
         lock.withLock {
             lastConfig = config
             val wasIdle = retry.idle
-            retry.send(
+            // A refused entry is held or dropped by the rule and shows in health, so the failure is not needed here.
+            val _ = retry.send(
                 Held(entry, config),
                 rule,
                 write = { sink.write(it.entry, it.config) },

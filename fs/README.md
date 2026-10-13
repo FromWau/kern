@@ -19,7 +19,7 @@ dependencies {
 ```
 
 KMP consumers put it in `commonMain`. [`dirs`](../dirs/README.md), kern's `result` and kotlinx-io come along as
-`api`, since `AppDirs`, `Result`, `IError` and `Path` appear in this module's signatures. The JVM and Android
+`api`, since `AppDirs`, `Result`, `ResultError` and `Path` appear in this module's signatures. The JVM and Android
 artifacts are Java 17 bytecode, so those two need JDK 17 or newer, and Android needs `minSdk` 26 and `compileSdk`
 37; the native targets have no such requirement.
 
