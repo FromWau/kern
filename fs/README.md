@@ -1,7 +1,7 @@
 # fs
 
 `Path` helpers for Kotlin Multiplatform that return typed errors instead of throwing: read, write by rename or in
-place, list, walk, move, delete and lock files, and claim a run's temp folder.
+place, append, list, walk, move, delete and lock files, and claim a run's temp folder.
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.
 
@@ -19,9 +19,8 @@ dependencies {
 ```
 
 KMP consumers put it in `commonMain`. [`dirs`](../dirs/README.md), kern's `result` and kotlinx-io come along as
-`api`, since `AppDirs`, `Result`, `ResultError` and `Path` appear in this module's signatures. The JVM and Android
-artifacts are Java 17 bytecode, so those two need JDK 17 or newer, and Android needs `minSdk` 26 and `compileSdk`
-37; the native targets have no such requirement.
+`api`, since `AppDirs`, `Result`, `ResultError` and `Path` appear in this module's signatures. Needs what
+[every kern module needs](../README.md#requirements).
 
 ## Path names
 
@@ -73,6 +72,13 @@ dirs.state.createDirectories()        // EmptyResult<FileError>
   `Atomic` renames it. A file that cannot be read or written is refused either way, and anything at the path that is not
   a regular file is `NotRegularFile`, the same answer a read gives: opening a FIFO waits on a reader that may never
   come, and a device node would be replaced by a regular file.
+- **Appending.** `file.openAppend()` opens a file to add to, creating it and its missing folders, and hands over
+  an `AppendFile` to `close()` when you are done. Each `append(bytes)` lands at the end in one write, so lines two
+  processes append to one local file never tear each other. `state()` says whether the path still names the open
+  file: `Same`, `Moved` when the file still has a name elsewhere, `Deleted` when it has none, or `Unknown` where the
+  platform cannot tell those two apart, the JVM on macOS and Windows. `lastByte()` reads only the last byte, null for
+  an empty file, to see whether a line was left unfinished. A directory, FIFO or device at the path is
+  `NotRegularFile`, and a write the system refuses is `WriteFailed`.
 - **Leftover backups.** `leftoverBackups()` lists the backups a write left beside a file. A write disposes of
   its own when it can, so one left behind is a reason to check the file rather than proof that it is wrong, and
   neither copy is the one to trust by default. It is the one call here whose error names the folder instead of

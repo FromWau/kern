@@ -10,7 +10,7 @@ internal fun interface LocalClock {
     fun offsetAt(instant: Instant): UtcOffset
 }
 
-/** The system's local clock as it is now; the logger asks again on every configure. */
+/** The system's local clock as it is now; each text-rendering sink reads it once, on its first entry. */
 internal expect fun systemLocalClock(): LocalClock
 
 internal fun TimeZone.asLocalClock(): LocalClock = LocalClock { offsetAt(it) }

@@ -1,5 +1,10 @@
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.terminal.Stream
+import com.fromwau.kern.terminal.Terminal
+import com.fromwau.kern.terminal.WriteError
 import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -47,5 +52,25 @@ class StdioRenderingTest {
         assertTrue(colors(LogFormat.TEXT, ColorMode.ALWAYS, terminalTakesColor = false))
         assertFalse(colors(LogFormat.TEXT, ColorMode.NEVER, terminalTakesColor = true))
         assertFalse(colors(LogFormat.JSON, ColorMode.ALWAYS, terminalTakesColor = true))
+    }
+
+    @Test
+    fun `a standard error sink reports its own failure even after standard output failed`() {
+        val failures = mapOf(
+            Stream.Out to WriteError.BrokenPipe(Stream.Out),
+            Stream.Err to WriteError.Refused(Stream.Err, "No space left on device"),
+        )
+        val bothFailed = object : Terminal {
+            override fun out(text: String) = Unit
+
+            override fun err(text: String) = Unit
+
+            override fun writeResult(): EmptyResult<WriteError> = Err(failures.getValue(Stream.Out))
+
+            override fun writeResult(stream: Stream): EmptyResult<WriteError> = Err(failures.getValue(stream))
+        }
+        val write = streamWriter(Stream.Err, LogFormat.TEXT, ColorMode.NEVER, bothFailed)
+
+        assertEquals(Err(SinkError.Dropped(failures.getValue(Stream.Err))), write(entry, SinkConfig()))
     }
 }

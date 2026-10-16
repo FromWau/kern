@@ -1,8 +1,14 @@
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.errorOrNull
+import com.fromwau.kern.terminal.Stream
 import com.fromwau.kern.terminal.Style
 import com.fromwau.kern.terminal.Terminal
 import com.fromwau.kern.terminal.blue
+import com.fromwau.kern.terminal.bold
 import com.fromwau.kern.terminal.brightBlack
 import com.fromwau.kern.terminal.defaultTerminal
 import com.fromwau.kern.terminal.red
@@ -16,20 +22,29 @@ import com.fromwau.kern.terminal.yellow
 internal val console: Terminal by lazy(LazyThreadSafetyMode.PUBLICATION) { defaultTerminal() }
 
 /**
- * Prints the rendered line to the stream [LoggerConfig.console] names, with [ConsoleOutput.Platform] meaning
- * standard output. A [LogFormat.JSON] line is never coloured, so it stays one parseable object per line.
+ * Writes each entry as a line to [stream], coloured for its severity when [color] allows it. A [LogFormat.JSON]
+ * line is never coloured, so it stays one parseable object per line.
  */
-internal val stdioConsoleWriter: ConsoleWriter = ConsoleWriter { entry, line, config ->
-    val output = config.console
-    val (write, terminalTakesColor, mode) = when (output) {
-        ConsoleOutput.Off -> return@ConsoleWriter
-        is ConsoleOutput.Platform -> Triple(console::out, console.ansi, output.color)
-        is ConsoleOutput.Stdout -> Triple(console::out, console.ansi, output.color)
-        is ConsoleOutput.Stderr -> Triple(console::err, console.errAnsi, output.color)
+internal fun streamWriter(
+    stream: Stream,
+    format: LogFormat,
+    color: ColorMode,
+    terminal: Terminal = console,
+): (LogEntry, SinkConfig) -> EmptyResult<SinkError> {
+    val localClock by lazy(LazyThreadSafetyMode.PUBLICATION) { systemLocalClock() }
+    return { entry, config ->
+        val line = entry.render(format, localClock, config.timestamp)
+        val terminalTakesColor = if (stream == Stream.Out) terminal.ansi else terminal.errAnsi
+        val text = colorize(line, entry.level, enabled = colors(format, color, terminalTakesColor)) + "\n"
+        if (stream == Stream.Out) terminal.out(text) else terminal.err(text)
+        val failure = terminal.writeResult(stream).errorOrNull()
+        if (failure != null) Err(SinkError.Dropped(failure)) else Ok(Unit)
     }
-    val format = output.format ?: return@ConsoleWriter
-    write(colorize(line, entry.level, enabled = colors(format, mode, terminalTakesColor)) + "\n")
 }
+
+/** The [PlatformSink] writer where the program's own terminal is the platform's log: coloured text on stdout. */
+internal fun terminalWriter(): (LogEntry, SinkConfig) -> EmptyResult<SinkError> =
+    streamWriter(Stream.Out, LogFormat.TEXT, ColorMode.AUTO)
 
 /** Whether a console line is coloured, given what the stream's terminal would accept under `AUTO`. */
 internal fun colors(format: LogFormat, mode: ColorMode, terminalTakesColor: Boolean): Boolean =
@@ -48,9 +63,10 @@ private val LogLevel.style: Style
     get() = when (this) {
         LogLevel.VERBOSE -> brightBlack
         LogLevel.DEBUG -> blue
-        LogLevel.INFO -> white
+        LogLevel.INFO, LogLevel.OFF -> white
         LogLevel.WARN -> yellow
         LogLevel.ERROR -> red
+        LogLevel.WTF -> bold + red
     }
 
 /** Colours [line] for its severity, or returns it untouched when [enabled] is false. */

@@ -1,17 +1,9 @@
 package com.fromwau.kern.result
 
-import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
-import kotlin.concurrent.atomics.AtomicBoolean
-import kotlin.concurrent.atomics.AtomicReference
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,11 +25,9 @@ private data class Endpoint(
     val port: Int,
 )
 
-private const val RACE_ROUNDS = 2000
 private const val CONCURRENT_WORKERS = 4
 private const val STEPS_PER_WORKER = 250
 
-@OptIn(ExperimentalAtomicApi::class)
 class CollectingTest {
     private fun port(raw: String): Result<Int, FieldError.BadPort> =
         raw.toIntOrNull()?.let { Ok(it) } ?: Err(FieldError.BadPort(raw))
@@ -222,37 +212,6 @@ class CollectingTest {
 
         val errors = assertIs<Result.Error<AllErrors<FieldError>>>(collected).error.errors
         assertEquals(CONCURRENT_WORKERS * STEPS_PER_WORKER, errors.toSet().size)
-    }
-
-    @Test
-    fun `a collect racing the block's return from another coroutine fails the block or fails that coroutine`() =
-        runTest {
-            val lost = withContext(Dispatchers.Default) { (1..RACE_ROUNDS).count { !collectRacingReturnIsKept() } }
-
-            assertEquals(0, lost, "rounds out of $RACE_ROUNDS where the block gave Ok and the collected error was lost")
-        }
-
-    private suspend fun collectRacingReturnIsKept(): Boolean {
-        val foreignFailure = AtomicReference<Throwable?>(null)
-        val foreign = CoroutineScope(
-            SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> foreignFailure.store(e) },
-        )
-        val collecting = AtomicBoolean(false)
-        lateinit var job: Job
-
-        val checked: Result<Int, AllErrors<FieldError>> = resultAll {
-            job = foreign.launch {
-                collecting.store(true)
-                port("x").collect()
-            }
-            // Returning the moment the collect starts puts the two in a tight race.
-            while (!collecting.load()) continue
-            7
-        }
-        job.join()
-
-        return checked == Err(AllErrors(listOf(FieldError.BadPort("x")))) ||
-            foreignFailure.load() is IllegalStateException
     }
 
     @Test

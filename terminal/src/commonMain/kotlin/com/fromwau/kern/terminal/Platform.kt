@@ -12,13 +12,13 @@ internal class PlatformIo(
     val isTty: Boolean,
     // The JVM has no probe for standard error at all, so it keeps the default.
     val errIsTty: Boolean = false,
-    /** Detected width in columns, or null where the platform cannot detect it (every JVM and Android run). */
+    /** Detected width in columns, or null where it cannot be detected: JVM, Android, androidNative, WASI, a browser. */
     val width: Int?,
     /** Whether the output handle can render ANSI escapes right now. */
     val ansiCapable: Boolean,
     val env: (String) -> String?,
-    /** Why a write failed, stdout's failure before stderr's, or null while every write landed. */
-    val writeFailure: () -> WriteError? = { null },
+    /** Why a write to the stream failed, or null while every write to it landed. */
+    val failureOf: (Stream) -> WriteError? = { null },
 )
 
 /** The platform's own stdio. Constructing it may configure the terminal (Windows code page and VT mode). */
@@ -39,7 +39,10 @@ internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
     override val columns: Int = resolveColumns(env, width)
     override val ansi: Boolean = ansiEnabled(isTty, env, ansiCapable)
     override val errAnsi: Boolean = ansiEnabled(errIsTty, env, ansiCapable)
-    override fun writeResult(): EmptyResult<WriteError> = writeFailure()?.let { Err(it) } ?: Ok(Unit)
+    override fun writeResult(): EmptyResult<WriteError> =
+        (failureOf(Stream.Out) ?: failureOf(Stream.Err))?.let { Err(it) } ?: Ok(Unit)
+
+    override fun writeResult(stream: Stream): EmptyResult<WriteError> = failureOf(stream)?.let { Err(it) } ?: Ok(Unit)
 }
 
 /**
@@ -69,7 +72,7 @@ public fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Bool
  */
 private fun String?.forcesColor(): Boolean = !isNullOrEmpty() && this != "0"
 
-/** Terminal width: `COLUMNS` env override wins, then the [detected] ioctl/Win32 width, then an 80 fallback. */
+/** Terminal width: the `COLUMNS` environment variable wins, then the [detected] width, then 80. */
 public fun resolveColumns(env: (String) -> String?, detected: Int? = null): Int =
     env("COLUMNS")?.toIntOrNull()?.takeIf { it > 0 }
         ?: detected?.takeIf { it > 0 }

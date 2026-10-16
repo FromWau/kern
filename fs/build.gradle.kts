@@ -3,8 +3,8 @@ plugins {
 }
 
 description = "Path helpers for Kotlin Multiplatform that report failures as typed errors instead of throwing: " +
-    "build file paths, read, write by rename or in place, list, walk, move, delete and lock files, and claim a " +
-    "run's temp folder."
+    "build file paths, read, write by rename or in place, append, list, walk, move, delete and lock files, and " +
+    "claim a run's temp folder."
 
 kotlin {
     // Declaring a source set by hand switches the default hierarchy off, which strands nativeMain and every leaf

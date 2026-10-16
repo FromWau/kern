@@ -7,8 +7,8 @@ package com.fromwau.kern.terminal
  * (bold + red).render("failed", terminal.ansi)
  * ```
  *
- * The palette is [black], [red], [green], [yellow], [blue], [magenta], [cyan], [white], plus the attributes
- * [bold], [dim], [italic] and [underline]. Whether the escapes are actually emitted is not this type's
+ * The palette is [black], [red], [green], [yellow], [blue], [magenta], [cyan], [white] and [brightBlack], plus
+ * the attributes [bold], [dim], [italic] and [underline]. Whether the escapes are actually emitted is not this type's
  * decision: pass [Terminal.ansi], or [ansiEnabled] if you resolve the environment yourself.
  */
 public class Style internal constructor(internal val codes: List<Int>) {
@@ -27,21 +27,43 @@ public class Style internal constructor(internal val codes: List<Int>) {
     }
 }
 
+/** Black text. */
 public val black: Style = Style(listOf(30))
+
+/** Red text. */
 public val red: Style = Style(listOf(31))
+
+/** Green text. */
 public val green: Style = Style(listOf(32))
+
+/** Yellow text. */
 public val yellow: Style = Style(listOf(33))
+
+/** Blue text. */
 public val blue: Style = Style(listOf(34))
+
+/** Magenta text. */
 public val magenta: Style = Style(listOf(35))
+
+/** Cyan text. */
 public val cyan: Style = Style(listOf(36))
+
+/** White text. */
 public val white: Style = Style(listOf(37))
 
-/** Bright variants, for a foreground that needs to stand off a dark background. */
+/** Bright black, a grey that stands off a dark background. */
 public val brightBlack: Style = Style(listOf(90))
 
+/** Bold text. */
 public val bold: Style = Style(listOf(1))
+
+/** Dimmed text. */
 public val dim: Style = Style(listOf(2))
+
+/** Italic text. */
 public val italic: Style = Style(listOf(3))
+
+/** Underlined text. */
 public val underline: Style = Style(listOf(4))
 
 private val ESC = Char(27).toString()

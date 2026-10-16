@@ -1,33 +1,21 @@
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
-import org.jetbrains.kotlin.gradle.targets.js.EnvSpec
-
 plugins {
     id("kern-module")
     alias(libs.plugins.kotlinSerialization)
 }
 
-description = "A reactive Kotlin Multiplatform logger: logs with defaults at once, applies every change to " +
-    "the very next line, and can hold startup entries until your config is read."
+description = "A Kotlin Multiplatform logger that never throws: every destination is a sink with its own queue " +
+    "and worker, so a log call never waits for the disk, and every failure is a typed error."
 
 kotlin {
     // Declaring a source set by hand switches the default hierarchy off, which strands nativeMain and every leaf
     // under it. Re-applying it before the custom sets below keeps both.
     applyDefaultHierarchyTemplate()
 
-    // Tests run on Node.js only: the browser targets share every line of web code with it, and a browser test
-    // task needs a browser installed.
-    js {
-        browser { testTask { enabled = false } }
-        nodejs()
-    }
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs {
-        browser { testTask { enabled = false } }
-        nodejs()
-    }
+    kernLoggerTargets()
 
     sourceSets {
-        // Every target with standard streams and a terminal to ask: all but the browser-hosted JS and Wasm.
+        // Every target with standard streams, a file system and a thread that may block: all but the
+        // browser-hosted JS and Wasm.
         val stdioMain = create("stdioMain") {
             dependsOn(commonMain.get())
         }
@@ -38,47 +26,44 @@ kotlin {
         jvmTest.get().dependsOn(stdioTest)
         nativeTest.get().dependsOn(stdioTest)
 
-        // JVM and Android append to the log file through the same java.io call.
+        // JVM and Android block a thread and track the writing sink the same way.
         val jvmAndroidMain = create("jvmAndroidMain") {
             dependsOn(stdioMain)
         }
         jvmMain.get().dependsOn(jvmAndroidMain)
         androidMain.get().dependsOn(jvmAndroidMain)
 
-        // Linux and Apple append with POSIX open and write, which Windows does not have.
+        // Linux and Apple read the local zone through POSIX localtime_r, which Windows does not have.
         val posixMain = create("posixMain") {
             dependsOn(nativeMain.get())
         }
         linuxMain.get().dependsOn(posixMain)
         appleMain.get().dependsOn(posixMain)
 
+        // Where a program owns a terminal: StdoutSink and StderrSink. Android and iOS route both streams nowhere a
+        // user reads, so they are left out.
+        val desktopMain = create("desktopMain") {
+            dependsOn(stdioMain)
+        }
+        listOf(jvmMain, linuxMain, mingwMain, macosMain).forEach { it.get().dependsOn(desktopMain) }
+
         commonMain.dependencies {
-            // api: both types appear in the public surface (Logger.state, LoggerConfig.file).
+            // api: Result, EmptyResult and ResultError appear in every public signature; StateFlow in sinks and
+            // health.
+            api(project(":result"))
             api(libs.kotlinx.coroutines.core)
-            api(libs.kotlinx.io.core)
+
+            implementation(project(":terminal"))
 
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.serialization.json)
         }
 
-        stdioMain.dependencies {
-            // The console half: tty/NO_COLOR/FORCE_COLOR policy, Windows VT + UTF-8, broken pipes.
-            implementation(project(":terminal"))
-        }
-
         commonTest.dependencies {
+            implementation(project(":logger-test"))
+            implementation(project(":result-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
-    }
-}
-
-// The Kotlin plugin adds its own repositories for Node.js, Yarn and Binaryen, which settings.gradle.kts forbids and
-// declares itself instead.
-gradle.projectsEvaluated {
-    listOf(project, rootProject).forEach { owner ->
-        owner.extensions.extensionsSchema
-            .filter { EnvSpec::class.java.isAssignableFrom(it.publicType.concreteClass) }
-            .forEach { (owner.extensions.getByName(it.name) as EnvSpec<*>).downloadBaseUrl.set(null as String?) }
     }
 }

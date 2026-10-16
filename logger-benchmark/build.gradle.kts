@@ -1,4 +1,5 @@
-// Not published: measures what a log call costs the thread that logs. Run with `./gradlew :logger-benchmark:benchmark`.
+// Not published: measures what a log call costs the thread that logs, and how fast each sink drains. Run with
+// `./gradlew :logger-benchmark:benchmark`.
 
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
@@ -14,8 +15,7 @@ kotlin {
 
     sourceSets {
         jvmMain.dependencies {
-            implementation(project(":logger"))
-            implementation(project(":logger-async"))
+            implementation(project(":logger-file"))
             implementation(libs.kotlinx.benchmark.runtime)
         }
     }
@@ -44,7 +44,7 @@ benchmark {
 
 // Sustained load rather than per-call averages: many threads, a million entries, and a check of the file after.
 tasks.register<JavaExec>("stress") {
-    description = "Logs a million entries from up to 256 threads and checks every line that lands in the file."
+    description = "Logs from many threads at once into a FileSink and checks every line that lands in the file."
     group = "verification"
     val main = kotlin.jvm().compilations.getByName("main")
     classpath = files(main.output.allOutputs, main.runtimeDependencyFiles)

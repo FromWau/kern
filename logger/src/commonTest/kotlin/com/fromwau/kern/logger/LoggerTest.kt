@@ -1,227 +1,306 @@
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.logger.test.RecordingSink
+import com.fromwau.kern.logger.test.TestSink
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.ResultError
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.test.assertContains
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
+import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Instant
+import kotlinx.coroutines.test.runTest
 
-private class Recorder : LogSink {
-    val entries: MutableList<LogEntry> = mutableListOf()
-
-    override fun write(entry: LogEntry, config: LoggerConfig) {
-        entries += entry
-    }
-
-    fun messages(): List<String> = entries.map { it.message }
-}
+private data class NotFound(val id: Long) : ResultError
 
 class LoggerTest {
-
-    private val recorder = Recorder()
-    private val logger = Logger(sinks = listOf(recorder))
+    private val logger = testLogger()
 
     @AfterTest
     fun cleanup() {
-        logger.close()
-    }
-
-    /** Console off so a test run stays readable; the recorder is what the assertions read. */
-    private fun quiet(level: LogLevel) = LoggerConfig(level = level, console = ConsoleOutput.Off)
-
-    @Test
-    fun `a new logger writes at once with the default config`() {
-        val console = mutableListOf<String>()
-        val fresh = Logger(sinks = listOf(recorder), console = { entry, _, _ -> console += entry.message })
-
-        fresh.tag("app").d { "below the default INFO" }
-        fresh.tag("app").i { "written at once" }
-
-        assertEquals(listOf("written at once"), console)
-        assertEquals(listOf("written at once"), recorder.messages())
-        assertEquals(LoggerConfig(), fresh.state.value)
+        logger.removeAll()
     }
 
     @Test
-    fun `entries held until configured are replayed once the level is known`() {
-        logger.holdUntilConfigured()
-        logger.tag("boot").d { "reading config" }
-        logger.tag("boot").i { "config read" }
-        assertTrue(recorder.entries.isEmpty(), "nothing may be written while the level is unknown")
-
-        logger.configure(quiet(LogLevel.DEBUG))
-
-        assertEquals(listOf("reading config", "config read"), recorder.messages())
+    fun `Log starts with the platform sink`() {
+        assertEquals(listOf("platform"), Log.sinks.value.map { it.sink.name })
     }
 
     @Test
-    fun `a held entry below the configured level is dropped on replay`() {
-        logger.holdUntilConfigured()
-        logger.tag("boot").d { "debug detail" }
-        logger.tag("boot").w { "a warning" }
+    fun `PlatformSink is a class whose settings can be read back`() {
+        val sink: LogSink = PlatformSink(name = "console", capacity = 5)
 
-        logger.configure(quiet(LogLevel.WARN))
-
-        assertEquals(listOf("a warning"), recorder.messages())
+        val platform = assertIs<PlatformSink>(sink)
+        assertEquals("console", platform.name)
+        assertEquals(5, platform.capacity)
     }
 
     @Test
-    fun `a level change applies to the next entry without re-initializing`() {
-        logger.configure(quiet(LogLevel.INFO))
+    fun `entries reach every sink in the order they were logged`() = runTest {
+        val first = TestSink("first")
+        val second = TestSink("second")
+        val _ = logger.addOrFail(first)
+        val _ = logger.addOrFail(second)
 
-        logger.tag("app").d { "suppressed at INFO" }
-        assertTrue(recorder.entries.isEmpty())
+        repeat(200) { index -> logger.tag("app").i { "entry $index" } }
+        assertEquals(Ok(Flushed.FullyWritten), logger.awaitFlushed())
 
-        logger.configure(quiet(LogLevel.DEBUG))
-
-        logger.tag("app").d { "emitted at DEBUG" }
-        assertEquals(listOf("emitted at DEBUG"), recorder.messages())
+        val expected = List(200) { "entry $it" }
+        assertEquals(expected, first.messages)
+        assertEquals(expected, second.messages)
     }
 
     @Test
-    fun `state is null while holding and then mirrors every change`() {
-        logger.holdUntilConfigured()
-        assertNull(logger.state.value)
+    fun `each sink takes only entries at or above its own level`() = runTest {
+        val everything = TestSink("everything")
+        val warnings = TestSink("warnings")
+        val _ = logger.addOrFail(everything, SinkConfig(LogLevel.VERBOSE))
+        val _ = logger.addOrFail(warnings, SinkConfig(LogLevel.WARN))
 
-        logger.configure(quiet(LogLevel.INFO))
-        assertEquals(LogLevel.INFO, logger.state.value?.level)
+        logger.tag("app").d { "debug" }
+        logger.tag("app").w { "warn" }
+        logger.tag("app").e { "error" }
+        val _ = logger.awaitFlushed()
 
-        logger.configure(quiet(LogLevel.ERROR))
-        assertEquals(LogLevel.ERROR, logger.state.value?.level)
+        assertEquals(listOf("debug", "warn", "error"), everything.messages)
+        assertEquals(listOf("warn", "error"), warnings.messages)
     }
 
     @Test
-    fun `a filtered entry never builds its message`() {
-        logger.configure(quiet(LogLevel.ERROR))
-
+    fun `the message is not built when no configured sink takes the level`() {
+        val _ = logger.addOrFail(TestSink("warnings"), SinkConfig(LogLevel.WARN))
         var built = 0
+
         logger.tag("app").d {
             built++
-            "expensive to build"
+            "expensive"
         }
 
         assertEquals(0, built)
     }
 
     @Test
-    fun `a field key passed twice keeps its last value`() {
-        logger.configure(quiet(LogLevel.INFO))
+    fun `the message is not built with no sink installed`() {
+        var built = 0
 
-        logger.tag("app").i("id" to "first", "id" to "second") { "retrying" }
-
-        assertEquals(mapOf("id" to "second"), recorder.entries.single().fields)
-    }
-
-    @Test
-    fun `fields and the throwable reach a sink as data rather than text`() {
-        logger.configure(quiet(LogLevel.INFO))
-
-        val cause = IllegalStateException("boom")
-        logger.tag("Scanner").e(cause, "count" to 412, "cached" to true, "user" to null) { "scan failed" }
-
-        val entry = recorder.entries.single()
-        assertEquals(mapOf("count" to 412, "cached" to true, "user" to null), entry.fields)
-        assertEquals(cause, entry.throwable)
-    }
-
-    @Test
-    fun `holding more entries than the limit drops the oldest and the replay says how many`() {
-        logger.holdUntilConfigured()
-        repeat(1030) { index -> logger.tag("boot").i { "entry $index" } }
-
-        assertEquals(6, logger.health.value.heldDropped)
-        logger.configure(quiet(LogLevel.VERBOSE))
-
-        val warning = recorder.entries.first()
-        assertEquals(LogLevel.WARN, warning.level)
-        assertContains(warning.message, "dropped the 6 oldest held entries")
-        assertEquals((6..1029).map { "entry $it" }, recorder.messages().drop(1))
-    }
-
-    @Test
-    fun `close before configure writes the held entries with the defaults and then a warning`() {
-        val console = mutableListOf<String>()
-        val held = Logger(sinks = listOf(recorder), console = { entry, _, _ -> console += entry.message })
-        held.holdUntilConfigured()
-        held.tag("boot").i { "first" }
-        held.tag("boot").i { "second" }
-
-        held.close()
-
-        assertEquals(listOf("first", "second"), recorder.messages().take(2))
-        val warning = recorder.entries.last()
-        assertEquals(LogLevel.WARN, warning.level)
-        assertContains(warning.message, "before configure()")
-        assertEquals(3, console.size)
-        assertEquals(LoggerConfig(), held.state.value)
-    }
-
-    @Test
-    fun `close on a hold with nothing held ends it without a warning`() {
-        val console = mutableListOf<String>()
-        val empty = Logger(sinks = listOf(recorder), console = { entry, _, _ -> console += entry.message })
-        empty.holdUntilConfigured()
-
-        empty.close()
-
-        assertTrue(recorder.entries.isEmpty())
-        assertTrue(console.isEmpty())
-        assertEquals(LoggerConfig(), empty.state.value)
-    }
-
-    @Test
-    fun `an entry reaches the sinks before the console and a replay reaches every sink first`() {
-        val order = mutableListOf<String>()
-        val ordered = Logger(
-            sinks = listOf(LogSink { entry, _ -> order += "sink ${entry.message}" }),
-            console = { entry, _, _ -> order += "console ${entry.message}" },
-        )
-
-        ordered.tag("app").i { "live" }
-        assertEquals(listOf("sink live", "console live"), order)
-
-        order.clear()
-        ordered.holdUntilConfigured()
-        ordered.tag("app").i { "1" }
-        ordered.tag("app").i { "2" }
-        ordered.configure(LoggerConfig())
-
-        assertEquals(listOf("sink 1", "sink 2", "console 1", "console 2"), order)
-    }
-
-    @Test
-    fun `configure with a transform starts from the current config`() {
-        logger.configure(quiet(LogLevel.WARN))
-
-        logger.configure { it.copy(sinkFailure = SinkFailure.Throw) }
-
-        assertEquals(quiet(LogLevel.WARN).copy(sinkFailure = SinkFailure.Throw), logger.state.value)
-    }
-
-    @Test
-    fun `configure with a transform while holding starts from the defaults and replays`() {
-        logger.holdUntilConfigured()
-        logger.tag("boot").d { "held" }
-
-        logger.configure { it.copy(level = LogLevel.DEBUG, console = ConsoleOutput.Off) }
-
-        assertEquals(LoggerConfig(level = LogLevel.DEBUG, console = ConsoleOutput.Off), logger.state.value)
-        assertEquals(listOf("held"), recorder.messages())
-    }
-
-    @Test
-    fun `a field whose toString throws is written as a placeholder rather than failing the entry`() {
-        val written = mutableListOf<String>()
-        val rendering = Logger(sinks = listOf(recorder), console = { _, line, _ -> written += line })
-        val broken = object {
-            override fun toString(): String = error("no text for this")
+        logger.tag("app").e {
+            built++
+            "nobody listens"
         }
 
-        rendering.tag("app").i("value" to broken) { "still logged" }
+        assertEquals(0, built)
+    }
 
-        assertEquals(listOf("still logged"), recorder.messages())
-        assertContains(written.single(), "value=<toString() threw IllegalStateException>")
+    @Test
+    fun `a sink at OFF takes nothing and builds nothing`() = runTest {
+        val off = TestSink("off")
+        val _ = logger.addOrFail(off, SinkConfig(LogLevel.OFF))
+        var built = 0
+
+        logger.tag("app").wtf {
+            built++
+            "not even this"
+        }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(0, built)
+        assertTrue(off.received.isEmpty())
+    }
+
+    @Test
+    fun `an entry logged at OFF is discarded`() = runTest {
+        val everything = TestSink()
+        val _ = logger.addOrFail(everything)
+        var built = 0
+
+        logger.log("app", LogLevel.OFF) {
+            built++
+            "discarded"
+        }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(0, built)
+        assertTrue(everything.received.isEmpty())
+    }
+
+    @Test
+    fun `WTF ranks above ERROR`() = runTest {
+        val errors = TestSink("errors")
+        val wtfOnly = TestSink("wtf")
+        val _ = logger.addOrFail(errors, SinkConfig(LogLevel.ERROR))
+        val _ = logger.addOrFail(wtfOnly, SinkConfig(LogLevel.WTF))
+
+        logger.tag("app").e { "error" }
+        logger.tag("app").wtf { "impossible" }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(listOf("error", "impossible"), errors.messages)
+        assertEquals(listOf("impossible"), wtfOnly.messages)
+        assertEquals(LogLevel.WTF, wtfOnly.received.single().level)
+    }
+
+    @Test
+    fun `configure changes a sink's level from the next entry on`() = runTest {
+        val sink = TestSink("sink")
+        val installed = logger.addOrFail(sink, SinkConfig(LogLevel.INFO))
+        var built = 0
+
+        logger.tag("app").d { "before ${++built}" }
+        logger.configureOrFail(sink) { it.copy(level = LogLevel.DEBUG) }
+        logger.tag("app").d { "after ${++built}" }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(listOf("after 1"), sink.messages)
+        assertEquals(LogLevel.DEBUG, installed.config.value.level)
+    }
+
+    @Test
+    fun `a sink is handed its configured settings on the next write`() = runTest {
+        val sink = RecordingSink(LogSink("custom") { _, _ -> Ok(Unit) })
+        val _ = logger.addOrFail(sink)
+
+        logger.tag("app").i { "before" }
+        val _ = logger.awaitFlushed()
+        logger.configureOrFail(sink) { it.copy(timestamp = Timestamp.Off) }
+        logger.tag("app").i { "after" }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(listOf(Timestamp.On, Timestamp.Off), sink.received.map { it.config.timestamp })
+    }
+
+    @Test
+    fun `raising every sink's level stops building messages`() {
+        val sink = TestSink("sink")
+        val _ = logger.addOrFail(sink, SinkConfig(LogLevel.DEBUG))
+        logger.configureOrFail(sink) { it.copy(level = LogLevel.ERROR) }
+        var built = 0
+
+        logger.tag("app").i {
+            built++
+            "filtered now"
+        }
+
+        assertEquals(0, built)
+    }
+
+    @Test
+    fun `an entry logged with a time keeps it`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+        val then = Instant.parse("2020-01-02T03:04:05Z")
+
+        logger.log("forwarded", LogLevel.INFO, at = then) { "from another process" }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(then, sink.received.single().timestamp)
+    }
+
+    @Test
+    fun `fields throwable and error reach a sink as data`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+        val cause = IllegalStateException("boom")
+
+        logger.tag("Scanner").e(cause, "count" to 412, "cached" to true, "user" to null) { "scan failed" }
+        logger.tag("Scanner").w(NotFound(7), "id" to 7) { "no such user" }
+        val _ = logger.awaitFlushed()
+
+        val (thrown, typed) = sink.received
+        assertEquals(mapOf("count" to 412, "cached" to true, "user" to null), thrown.fields)
+        assertSame(cause, thrown.throwable)
+        assertEquals(NotFound(7), typed.error)
+        assertEquals(LogLevel.WARN, typed.level)
+        assertEquals(mapOf("id" to 7), typed.fields)
+    }
+
+    @Test
+    fun `a field key passed twice keeps its last value`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+
+        logger.tag("app").i("id" to "first", "id" to "second") { "retrying" }
+        val _ = logger.awaitFlushed()
+
+        assertEquals(mapOf("id" to "second"), sink.received.single().fields)
+    }
+
+    @Test
+    fun `logError logs an error result with its error and returns it unchanged`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+        val failed: Result<String, NotFound> = Err(NotFound(3))
+
+        val returned = failed.logError(logger.tag("Users"), LogLevel.WARN) { "lookup failed" }
+        val _ = logger.awaitFlushed()
+
+        assertSame(failed, returned)
+        val entry = sink.received.single()
+        assertEquals(NotFound(3), entry.error)
+        assertEquals(LogLevel.WARN, entry.level)
+        assertEquals("lookup failed", entry.message)
+    }
+
+    @Test
+    fun `logError on a success logs nothing and builds nothing`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+        val found: Result<String, NotFound> = Ok("ada")
+        var built = 0
+
+        val returned = found.logError(logger.tag("Users")) { "never ${++built}" }
+        val _ = logger.awaitFlushed()
+
+        assertSame(found, returned)
+        assertEquals(0, built)
+        assertTrue(sink.received.isEmpty())
+    }
+
+    @Test
+    fun `a message block that throws is logged as a placeholder`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+
+        logger.tag("app").i { error("no message today") }
+        val _ = logger.awaitFlushed()
+
+        assertEquals("<message threw IllegalStateException>", sink.messages.single())
+    }
+
+    @Test
+    fun `a message block that throws an Error is logged as a placeholder`() = runTest {
+        val sink = TestSink()
+        val _ = logger.addOrFail(sink)
+
+        logger.tag("app").i { TODO() }
+        val _ = logger.awaitFlushed()
+
+        assertEquals("<message threw NotImplementedError>", sink.messages.single())
+    }
+
+    @Test
+    fun `an entry a sink logs while writing reaches every other sink but never that one`() = runTest {
+        val other = TestSink("other")
+        val chatty = Recorder(
+            name = "chatty",
+            onWrite = { entry ->
+                if (entry.message == "trigger") logger.tag("chatty").i { "logged from inside write" }
+            },
+        )
+        // Other first, so the trigger reaches it before chatty's worker can log anything.
+        val _ = logger.addOrFail(other)
+        val _ = logger.addOrFail(chatty)
+
+        logger.tag("app").i { "trigger" }
+        eventually { other.messages.size == 2 }
+        realDelay(50.milliseconds)
+        val _ = logger.awaitFlushed()
+
+        assertEquals(listOf("trigger", "logged from inside write"), other.messages)
+        assertEquals(listOf("trigger"), chatty.messages)
     }
 }

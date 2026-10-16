@@ -2,6 +2,7 @@ package com.fromwau.kern.terminal
 
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.toKString
@@ -21,7 +22,7 @@ import platform.posix.strerror
 /**
  * Stdio shared by every native target; width and ANSI capability are the only per-family answers. A closed
  * pipe on POSIX ends the process with SIGPIPE before anything can ask, unless the program ignores that
- * signal; [PlatformIo.writeFailure] reports what remains: a full disk, a closed or unwritable handle.
+ * signal; [PlatformIo.failureOf] reports what remains: a full disk, a closed or unwritable handle.
  */
 @OptIn(ExperimentalForeignApi::class)
 internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
@@ -35,12 +36,12 @@ internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
         width = width,
         ansiCapable = ansiCapable,
         env = { getenv(it)?.toKString() },
-        writeFailure = { out.failure ?: err.failure },
+        failureOf = { if (it == Stream.Out) out.failure else err.failure },
     )
 }
 
 /** Writes to [file] at once, keeps the first write the system refused, and writes nothing after it. */
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, UnsafeNumber::class)
 internal class StdioSink(
     private val file: CPointer<FILE>?,
     private val stream: Stream,
@@ -55,7 +56,10 @@ internal class StdioSink(
         val written = if (bytes.isEmpty()) {
             0
         } else {
-            bytes.usePinned { pinned -> fwrite(pinned.addressOf(0), 1u, bytes.size.convert(), file).toInt() }
+            // size_t is 32 bits wide on the 32-bit Android targets and 64 on the rest; convert() bridges both.
+            bytes.usePinned { pinned ->
+                fwrite(pinned.addressOf(0), 1.convert(), bytes.size.convert(), file).convert<Int>()
+            }
         }
         // Flushed per write: text left in the buffer would fail only at exit, after the exit code was chosen.
         if (written != bytes.size || fflush(file) != 0) failure = errorOf(posix_errno())

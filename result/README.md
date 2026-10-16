@@ -5,7 +5,9 @@ A typed-error `Result<S, E>` for Kotlin Multiplatform.
 An expected failure is a value, not a thrown exception. It carries your own error type instead of a message
 string, so it reaches the caller with its payload intact, and the caller has to handle it to reach the value.
 
-**Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.
+**Targets:** JVM, Android, js, wasmJs, wasmWasi, linuxX64, linuxArm64, mingwX64, macosArm64, iosArm64,
+iosSimulatorArm64, tvosArm64, tvosSimulatorArm64, watchosArm64, watchosSimulatorArm64, watchosDeviceArm64,
+androidNativeArm64, androidNativeX64, androidNativeArm32, androidNativeX86.
 
 ```kotlin
 import com.fromwau.kern.result.*
@@ -35,7 +37,8 @@ dependencies {
 }
 ```
 
-The JVM and Android artifacts need JDK 17 or newer. `result` depends on nothing but the Kotlin standard library.
+Needs what [every kern module needs](../README.md#requirements). On the JVM and Android, `result` depends on nothing
+but the Kotlin standard library. On every other target it also brings `kotlinx-serialization-core`.
 For coroutines and flows, add [`result-coroutines`](../result-coroutines/README.md).
 
 Everything is in `com.fromwau.kern.result`. Import it with `import com.fromwau.kern.result.*`: Kotlin imports its

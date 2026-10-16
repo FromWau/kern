@@ -23,6 +23,7 @@ class SymlinksJvmTest {
         dir.deleteTree()
     }
 
+    @IgnorableReturnValue
     private fun Path.linkTo(target: Path): Path = also {
         Files.createSymbolicLink(Paths.get(toString()), Paths.get(target.toString()))
         links += it

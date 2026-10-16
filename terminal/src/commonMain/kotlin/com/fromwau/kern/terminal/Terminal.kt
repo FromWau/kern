@@ -1,9 +1,11 @@
 package com.fromwau.kern.terminal
 
 import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.ResultError
+import com.fromwau.kern.result.errorOrNull
 
 /** Exit code for a truncated output pipe: the shell's 128+N "killed by signal N" convention, N = SIGPIPE (13). */
 public const val BROKEN_PIPE_EXIT: Int = 128 + 13
@@ -47,11 +49,22 @@ public interface Terminal {
      * Whether every write so far reached its destination, or why one did not: standard output's failure before
      * standard error's. A stream writes nothing after its first failure. Ask after writing instead of reporting a
      * false success. A [WriteError.BrokenPipe] is the reader's choice and is usually reported through
-     * [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost output the user expected. Linux and macOS tell the two
-     * apart; the JVM answers [WriteError.Unknown]. The default success is right for any terminal whose writes
-     * cannot fail quietly.
+     * [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost output the user expected. Linux, macOS and WASI tell
+     * the two apart, and the JVM answers [WriteError.Unknown] for both. Under Node a closed pipe is reported as
+     * [WriteError.BrokenPipe] once Node signals it, just after the write returns, and the process keeps running;
+     * any other failure is [WriteError.Unknown]. The default success is right for any terminal whose writes cannot
+     * fail quietly.
      */
     public fun writeResult(): EmptyResult<WriteError> = Ok(Unit)
+
+    /**
+     * [writeResult] for [stream] alone: a failure on the other stream neither hides this one's nor stands in for it.
+     * The default reads [writeResult], so a terminal that only overrides that one reports at most the stream it names.
+     */
+    public fun writeResult(stream: Stream): EmptyResult<WriteError> {
+        val failure = writeResult().errorOrNull()
+        return if (failure != null && failure.stream == stream) Err(failure) else Ok(Unit)
+    }
 
     /** Whether a write has already failed. */
     @Deprecated(
@@ -72,6 +85,7 @@ public enum class Stream {
 
 /** Why output did not reach its destination, and on which [stream]. */
 public sealed interface WriteError : ResultError {
+    /** The stream whose write failed. */
     public val stream: Stream
 
     /** The reader went away, as when a downstream `| head` stops reading. */

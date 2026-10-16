@@ -1,5 +1,8 @@
+@file:OptIn(InternalKernApi::class)
+
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.result.ResultError
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.format
@@ -32,37 +35,48 @@ private data class JsonLine(
     @SerialName("message") val message: String,
     @SerialName("fields") val fields: JsonObject = JsonObject(emptyMap()),
     @SerialName("stackTrace") val stackTrace: String? = null,
+    @SerialName("error") val error: String? = null,
 )
 
 internal fun LogEntry.render(
     format: LogFormat,
     localClock: LocalClock,
+    timestamp: Timestamp,
 ): String = when (format) {
-    LogFormat.TEXT -> toTextLine(localClock)
+    LogFormat.TEXT -> toTextLine(localClock, timestamp)
     LogFormat.JSON -> toJsonLine()
 }
 
-internal fun LogEntry.toTextLine(localClock: LocalClock): String =
-    textLine(localClock).mapLoneSurrogates { REPLACEMENT }
+internal fun LogEntry.toTextLine(localClock: LocalClock, timestamp: Timestamp = Timestamp.On): String =
+    textLine(localClock, timestamp).mapLoneSurrogates { REPLACEMENT }
 
 // A JSON escape keeps a lone surrogate exactly, and a JSON reader gets the original string back.
 internal fun LogEntry.toJsonLine(): String =
     jsonLine().mapLoneSurrogates { "\\u${it.code.toString(16).padStart(4, '0')}" }
 
-private fun LogEntry.textLine(localClock: LocalClock): String = buildString {
-    append(timestamp.format(TEXT_TIMESTAMP, localClock.offsetAt(timestamp)))
-    append(' ')
+private fun LogEntry.textLine(localClock: LocalClock, stamp: Timestamp): String = buildString {
+    if (stamp == Timestamp.On) {
+        append(timestamp.format(TEXT_TIMESTAMP, localClock.offsetAt(timestamp)))
+        append(' ')
+    }
     append(level.name.padEnd(LEVEL_COLUMN))
     append(' ')
     append(tag.take(TAG_COLUMN))
     append(" - ")
-    append(message)
-    append(fields.asText())
+    append(body())
+}
+
+/** The message, its fields and error, then the stack trace on the lines below: a text line without its prefix. */
+internal fun LogEntry.body(): String = buildString {
+    append(summary())
     throwable?.let {
         append('\n')
-        append(it.stackTraceToString())
+        append(it.safeStackTrace())
     }
 }
+
+/** The message followed by its fields and its error, for a log that takes the stack trace separately. */
+internal fun LogEntry.summary(): String = message + fields.asText() + error.asErrorText()
 
 private fun LogEntry.jsonLine(): String = json.encodeToString(
     JsonLine(
@@ -71,30 +85,31 @@ private fun LogEntry.jsonLine(): String = json.encodeToString(
         level = level.name,
         message = message,
         fields = JsonObject(fields.mapValues { (_, value) -> value.toJsonField() }),
-        stackTrace = throwable?.stackTraceToString(),
+        stackTrace = throwable?.safeStackTrace(),
+        error = error?.let(::fieldText),
     ),
 )
 
-/** The JSON literal a field value carries its type in; JSON has no literal for NaN or an infinity. */
-private fun Any?.toJsonField(): JsonElement = when (this) {
+private fun Any?.toJsonField(): JsonElement = when (val typed = this?.let(::typedFieldValue)) {
     null -> JsonNull
-    is Boolean -> JsonPrimitive(this)
-    is Double -> if (isFinite()) JsonPrimitive(this) else JsonPrimitive(toString())
-    is Float -> if (isFinite()) JsonPrimitive(this) else JsonPrimitive(toString())
-    is Int, is Long, is Short, is Byte -> JsonPrimitive(this as Number)
-    else -> JsonPrimitive(safeText())
+    is String -> JsonPrimitive(typed)
+    is Boolean -> JsonPrimitive(typed)
+    else -> JsonPrimitive(typed as Number)
 }
+
+/** The error as ` error=<text>`, ready to follow the fields, or nothing without one. */
+private fun ResultError?.asErrorText(): String = if (this == null) "" else " error=${fieldText(this)}"
 
 /** The fields as ` key=value` pairs, ready to follow the message. */
-internal fun Map<String, Any?>.asText(): String = entries.joinToString(separator = "") { (key, value) ->
-    " $key=${value.safeText()}"
+private fun Map<String, Any?>.asText(): String = entries.joinToString(separator = "") { (key, value) ->
+    " $key=${fieldText(value)}"
 }
 
-/** The value's text, or a placeholder when its `toString()` throws, which would otherwise lose the whole entry. */
-private fun Any?.safeText(): String = try {
-    toString()
-} catch (e: Exception) {
-    "<toString() threw ${e::class.simpleName}>"
+/** The stack trace, or a placeholder when building it throws, as a `toString()` or `message` that throws makes it. */
+internal fun Throwable.safeStackTrace(): String = try {
+    stackTraceToString()
+} catch (e: Throwable) {
+    "${this::class.simpleName}: <stack trace threw ${e::class.simpleName}>"
 }
 
 // ISO 8601 with a fixed number of fraction digits, so stamps of one offset sort as text in time order.

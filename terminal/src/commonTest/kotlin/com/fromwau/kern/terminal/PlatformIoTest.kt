@@ -15,7 +15,7 @@ private fun io(
     width: Int? = null,
     ansiCapable: Boolean = true,
     env: Map<String, String> = emptyMap(),
-    writeFailure: () -> WriteError? = { null },
+    failureOf: (Stream) -> WriteError? = { null },
 ) = PlatformIo(
     writeOut = out,
     writeErr = err,
@@ -24,7 +24,7 @@ private fun io(
     width = width,
     ansiCapable = ansiCapable,
     env = { env[it] },
-    writeFailure = writeFailure,
+    failureOf = failureOf,
 )
 
 /**
@@ -79,7 +79,22 @@ class PlatformIoTest {
         assertEquals(Ok(Unit), io().toTerminal().writeResult())
         assertEquals(
             Err(WriteError.BrokenPipe(Stream.Out)),
-            io(writeFailure = { WriteError.BrokenPipe(Stream.Out) }).toTerminal().writeResult(),
+            io(failureOf = { WriteError.BrokenPipe(it) }).toTerminal().writeResult(),
         )
+    }
+
+    @Test
+    fun `each stream reports its own failure`() {
+        val failures = mapOf(
+            Stream.Out to WriteError.BrokenPipe(Stream.Out),
+            Stream.Err to WriteError.Refused(Stream.Err, "No space left on device"),
+        )
+        val both = io(failureOf = { failures[it] }).toTerminal()
+        val errOnly = io(failureOf = { if (it == Stream.Err) failures[it] else null }).toTerminal()
+
+        assertEquals(Err(failures.getValue(Stream.Out)), both.writeResult(Stream.Out))
+        assertEquals(Err(failures.getValue(Stream.Err)), both.writeResult(Stream.Err))
+        assertEquals(Ok(Unit), errOnly.writeResult(Stream.Out))
+        assertEquals(Err(failures.getValue(Stream.Err)), errOnly.writeResult(Stream.Err))
     }
 }

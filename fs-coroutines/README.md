@@ -24,7 +24,7 @@ dependencies {
 }
 ```
 
-The JVM and Android artifacts are Java 17 bytecode, so those two need JDK 17 or newer.
+Needs what [every kern module needs](../README.md#requirements).
 
 ## How it behaves
 

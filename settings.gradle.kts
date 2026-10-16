@@ -33,8 +33,8 @@ dependencyResolutionManagement {
         }
         mavenCentral()
 
-        // The tools the logger's JS and Wasm tests run with. The Kotlin plugin would add these repositories to the
-        // project, which the mode above forbids, so they are declared here and logger/build.gradle.kts turns its off.
+        // The tools the JS and Wasm tests run with. The Kotlin plugin would add these repositories to the project,
+        // which the mode above forbids, so they are declared here and the kern-module convention turns the plugin's off.
         ivy("https://nodejs.org/dist") {
             patternLayout { artifact("v[revision]/[artifact]-v[revision]-[classifier].[ext]") }
             metadataSources { artifact() }
@@ -68,7 +68,8 @@ include(":result-test")
 include(":result-coroutines")
 include(":terminal")
 include(":logger")
-include(":logger-async")
+include(":logger-file")
+include(":logger-test")
 include(":logger-benchmark")
 include(":dirs")
 include(":fs")

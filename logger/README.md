@@ -1,16 +1,12 @@
 # logger
 
-A logger for Kotlin Multiplatform that you reconfigure while it runs.
+A Kotlin Multiplatform logger that never throws and never makes your code wait for a sink.
 
-It logs from the first line, with defaults: `INFO` and above, as text, to the platform's console. Configure it
-and the next line obeys, with no re-initialization step. An app that logs before it has read its own config can
-have those early entries held and replayed once the config says what the level is.
-
-A destination that fails never crashes your app. A full disk, a deleted log directory or a broken sink costs
-the entries that destination refused, and every one is counted where you can see it.
+Every destination is a sink with its own queue and worker. A log call queues the entry and returns, so a slow
+disk or a failing network holds up only that one sink. Every failure is a typed error or a count you can read.
 
 ```kotlin
-Log.tag("Scanner").i { "scan complete" }   // printed, no setup needed
+Log.tag("Scanner").i { "scan complete" }   // printed to the platform's log, no setup needed
 ```
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64, js, wasmJs.
@@ -32,147 +28,42 @@ dependencies {
 }
 ```
 
-KMP consumers put it in `commonMain`. It is built with Kotlin 2.4.20, so use that or newer. The JVM and
-Android artifacts are Java 17 bytecode, so those two need JDK 17 or newer; the native targets have no such
-requirement. Everything is in one package, `com.fromwau.kern.logger`; `logger-async` adds
-`com.fromwau.kern.logger.async`.
+KMP consumers put it in `commonMain`. Needs what [every kern module needs](../README.md#requirements).
+Everything is in one package, `com.fromwau.kern.logger`.
 
-`kotlinx-coroutines-core` and `kotlinx-io-core` land on your compile classpath, because `StateFlow` and
-`Path` are part of the API you call. `atomicfu`, `kotlinx-datetime` and `kotlinx-serialization-json` come
-along at runtime only, and nothing in the API mentions them, nor does [`kern:terminal`](../terminal/README.md),
-which every target but JS and Wasm uses for the console.
+Your compile classpath gets [`kern:result`](../result/README.md) and `kotlinx-coroutines-core`, because `Result`
+and `StateFlow` are part of the API. On native, JS and Wasm, `kern:result` brings `kotlinx-serialization-core` onto
+it too. [`kern:terminal`](../terminal/README.md), `atomicfu`, `kotlinx-datetime` and `kotlinx-serialization-json`
+come along at runtime only; add `kern:terminal` yourself to match the `WriteError` a console sink fails with.
 
-## Logging before your config is read
-
-An app that reads its log level from its own config logs before it knows that level. Filtering those lines
-against the default loses the debug output the config turns on, and printing them means a `--quiet` run
-still prints startup noise. Ask the logger to hold them instead, first thing in `main`:
-
-```kotlin
-Log.holdUntilConfigured()
-
-Log.tag("Startup").d { "looking for a config file" }   // held, not printed
-Log.tag("Startup").i { "config loaded" }               // held, not printed
-
-Log.configure(LoggerConfig(level = LogLevel.DEBUG))
-// both lines print now, with the timestamps they were logged at
-```
-
-Configure at `INFO` instead and the first line is discarded on replay. A held entry builds its message when it
-is logged, since no level has decided against it yet.
-
-Calling `holdUntilConfigured()` again after a `configure` starts a new hold: the live config is gone until the
-next `configure`, and a `configure { }` then starts from the defaults.
-
-At most 1024 entries are held. Past that the oldest give way, the replay starts with a warning saying how
-many, and `Log.health.value.heldDropped` counts them. A hold that overflows usually means `configure` was
-forgotten or the hold is not needed.
-
-A program that ends before `configure` still keeps its startup lines, as long as it calls `close()`: that writes
-the held entries with the default `LoggerConfig`, followed by a warning that `close()` came first. With nothing
-held it only ends the hold, and warns about nothing. Without either call the held entries are lost when the
-process ends.
-
-**In a CLI, `configure` on every exit path, error paths included.** The default console is `Platform`, which is
-standard output on the JVM and native, so a `close()` straight after a bad flag replays the startup lines into
-the data a pipe reads: `tool --bad-flag | jq` gets log lines. `configure(LoggerConfig(console =
-ConsoleOutput.Stderr()))` first sends them where they belong.
-
-## Changing it while it runs
-
-`LoggerConfig` is the whole configuration, and it is live. Hand `configure` a whole config, or a change to
-the current one, and the next entry follows it:
-
-```kotlin
-Log.configure(LoggerConfig(level = LogLevel.INFO, file = FileOutput.Append(Path(stateDir, "app.log"))))
-Log.configure { it.copy(level = LogLevel.VERBOSE) }   // a settings screen
-```
-
-The second form reads and replaces under one lock, so a settings screen and a config reload on another thread
-cannot undo each other's change; passing a copy of `Log.state.value` instead can lose one of the two.
-
-Either form ends a hold. While holding, the lambda starts from the default `LoggerConfig` and the held
-entries are written with what it returns, so a settings screen or watchdog that runs before your config is
-read ends the hold early with defaults. Call it only once the first real `configure` has happened.
-
-The lambda runs under the logger's lock, so every thread that logs waits for it. Keep it to a `copy`, work
-out the new values beforehand, and never call `configure` or wait on a thread that logs from inside it: a
-`configure` made inside the lambda is replaced by what the lambda returns.
-
-Read `Log.state` to render the current setting, or collect it to react to one. It is a `StateFlow` and
-never a `MutableStateFlow`: writing goes through `configure` and `holdUntilConfigured` alone, so your config
-file stays the single authority and the logger cannot drift from it.
-
-```kotlin
-val level: LogLevel? = Log.state.value?.level   // null only while holding
-```
-
-| field         | type            | default                    | what it does                                         |
-|---------------|-----------------|----------------------------|------------------------------------------------------|
-| `level`       | `LogLevel`      | `LogLevel.INFO`            | the threshold; anything below it is dropped unbuilt  |
-| `console`     | `ConsoleOutput` | `ConsoleOutput.Platform()` | `Platform`, `Stdout`, `Stderr` or `Off`, each with its `format` and `color` |
-| `file`        | `FileOutput`    | `FileOutput.None`          | `None`, or `Append(path)` with its `format` and what a failure does |
-| `sinkFailure` | `SinkFailure`   | `SinkFailure.Drop()`       | what a throwing sink costs; see [Sinks](#sinks)      |
-
-Each setting is a type whose cases carry only what that case needs, so a combination that means nothing,
-such as a colour setting with the console off, cannot be written. A `when` over one is exhaustive.
-
-The console and the file each have a `format`, `LogFormat.TEXT` by default: `TEXT` for a person, `JSON` for a
-log shipper. Each is on or off on its own, so any mix works:
-
-| want                             | `LoggerConfig(...)`                                                                                  |
-|----------------------------------|------------------------------------------------------------------------------------------------------|
-| text to stdout                   | the defaults: `Platform` is standard output on the JVM, Linux, Windows and in a macOS CLI             |
-| JSON to stdout                   | `console = ConsoleOutput.Stdout(format = LogFormat.JSON)`                                            |
-| text to a file                   | `console = ConsoleOutput.Off, file = FileOutput.Append(path)`                                        |
-| JSON to a file                   | `console = ConsoleOutput.Off, file = FileOutput.Append(path, format = LogFormat.JSON)`               |
-| text to stdout, JSON to the file | `console = ConsoleOutput.Stdout(), file = FileOutput.Append(path, format = LogFormat.JSON)`          |
-| JSON to stdout, text to the file | `console = ConsoleOutput.Stdout(format = LogFormat.JSON), file = FileOutput.Append(path)`            |
-
-`Stderr` takes a `format` the same way. A JSON console line is never coloured, so each line stays parseable.
-
-```kotlin
-// A CLI: text on standard error so standard output stays clean for piping, JSON in a file
-Log.configure(
-    LoggerConfig(
-        console = ConsoleOutput.Stderr(),
-        file = FileOutput.Append(Path(stateDir, "app.log"), format = LogFormat.JSON),
-    ),
-)
-
-// On the JVM a terminal on standard error is coloured under ColorMode.AUTO only with FORCE_COLOR=1, since the
-// JVM cannot ask whether that stream is a terminal; map a --color=always flag to ColorMode.ALWAYS.
-
-// An audit log: a write the file refuses must not pass silently
-Log.configure { it.copy(file = FileOutput.Append(auditPath, onFailure = FileFailure.Throw)) }
-
-// Tests: a broken sink should fail loudly
-Log.configure { it.copy(sinkFailure = SinkFailure.Throw) }
-```
-
-Text lines are stamped in the system time zone, looked up on each `configure`, so a change of zone shows from
-the next one. On Linux and macOS the C library supplies it, so `TZ` means exactly what it means to `date`,
-rules with daylight saving such as `CET-1CEST,M3.5.0,M10.5.0/3` included. The JVM reads `TZ` its own way:
-`GMT+3` is three hours ahead of UTC there and behind it in C, and an empty `TZ` is the system zone there and
-UTC in C. Windows uses the system zone, and a zone the platform cannot name gives UTC.
+The log file sink, `FileSink`, is a module of its own: [`logger-file`](../logger-file/README.md).
 
 ## Logging
 
-`tag` names the source, and the level methods take the message as a lambda so a filtered entry never pays
-to build one:
-
 ```kotlin
-import com.fromwau.kern.logger.Log
-
 private val log = Log.tag("Scanner")
 
+log.v { "visiting $dir" }
+log.d { "cache hit for $key" }
 log.i { "scan complete" }
-log.e(cause) { "scan failed" }
+log.w { "disk is slow" }
+log.e { "scan failed" }
+log.wtf { "index went negative" }
 ```
 
-Add fields when a value matters on its own, such as a count, a duration or a request id, so a log tool can
-filter on it without parsing the sentence. They become a `fields` object in JSON, and `key=value` after the
-message in text:
+The levels, least severe first, are `VERBOSE`, `DEBUG`, `INFO`, `WARN`, `ERROR` and `WTF`. `OFF` is a sink level
+that takes nothing. An entry logged at `OFF` is discarded.
+
+The message is a lambda. It is built only when a configured sink takes the level, so a filtered
+`log.d { expensive() }` costs a level check. A message block that throws anything, an `Error` included, is
+logged with `<message threw IllegalStateException>` in its place.
+
+A log call never suspends and never throws, from any thread. It never waits for a sink to write. It may wait
+briefly for a lock while it queues the entry, and while a hold is on.
+
+### Fields
+
+Add a field for a value a log tool should filter on, such as a count, a duration or a request id:
 
 ```kotlin
 log.i("count" to files.size, "ms" to elapsed.inWholeMilliseconds, "cached" to true) { "scan complete" }
@@ -180,241 +71,623 @@ log.i("count" to files.size, "ms" to elapsed.inWholeMilliseconds, "cached" to tr
 
 ```
 2026-08-11T14:34:56.789+02:00 INFO    Scanner - scan complete count=412 ms=1200 cached=true
-
-{"timestamp":"2026-08-11T12:34:56.789123456Z","tag":"Scanner","level":"INFO",
- "message":"scan complete","fields":{"count":412,"ms":1200,"cached":true}}
+{"timestamp":"2026-08-11T12:34:56.789000000Z","tag":"Scanner","level":"INFO","message":"scan complete","fields":{"count":412,"ms":1200,"cached":true}}
 ```
 
-A JSON entry is always one line, whatever is in the message, so a shipper can read the stream a line at a
-time. Both stamps are ISO 8601. Text uses your local time to the millisecond with its offset, for reading
-alongside `journalctl`; JSON uses UTC with all nine fraction digits, so its stamps sort as text. The
-timestamp is taken when you log, before the entry waits for the logger, so under contention the file's order
-can differ from timestamp order by a few milliseconds.
+| value                                             | JSON                     | text         |
+|---------------------------------------------------|--------------------------|--------------|
+| `Int`, `Long`, `Short`, `Byte`, `Float`, `Double` | a number: `5001`         | `port=5001`  |
+| `Boolean`                                         | `true` or `false`        | `tls=true`   |
+| `null`                                            | `null`                   | `user=null`  |
+| `NaN` or an infinity                              | a string: `"NaN"`        | `ratio=NaN`  |
+| an array, a collection or a map                   | its contents: `"[1, 2]"` | `ids=[1, 2]` |
+| anything else                                     | its `toString()`         | the same     |
 
-A JSON field carries its type in the literal, so a log tool can run a numeric query on `count`:
+A value is turned into text when the sink writes the entry, on that sink's worker. Pass values that will not
+change, such as a copy of a list rather than the list itself. A `toString()` or an iteration that throws is written as
+`<toString() threw IllegalStateException>`. A key passed twice keeps its last value.
 
-| value                                            | JSON                 | text           |
-|--------------------------------------------------|----------------------|----------------|
-| `Int`, `Long`, `Short`, `Byte`, `Float`, `Double` | a number: `5001`     | `port=5001`    |
-| `Boolean`                                        | `true` or `false`    | `tls=true`     |
-| `null`                                           | `null`               | `user=null`    |
-| `NaN` or an infinity                             | a string: `"NaN"`    | `ratio=NaN`    |
-| anything else                                    | its `toString()`     | the same       |
-
-A value is turned into text when the entry is written, which under a hold or `AsyncDelivery` is later and on
-another thread, so pass a value that will not change, such as a copy of a list rather than the list itself. A
-`toString()` that throws is written as `<toString() threw IllegalStateException>` instead of losing the entry.
-
-A null is written, not left out, so "logged but empty" stays apart from "never logged": `"user":null`, never
-the four-character string `"null"`. A `Long` above 2^53 loses precision in log viewers built on JavaScript. A
-key passed twice keeps its last value.
-
-A throwable goes in as a throwable, not as text you flattened first. The stack trace renders under the
-message, and a `LogSink` still receives the original:
+### Exceptions and errors
 
 ```kotlin
-log.w(timeout, "attempt" to "3") { "retrying" }
+log.e(cause) { "scan failed" }                    // the stack trace goes under the message
+log.w(timeout, "attempt" to 3) { "retrying" }
+log.w(DbError.NotFound(id)) { "no such user" }    // a ResultError, written as error=NotFound(id=7)
 ```
 
-Every entry is written on the thread that logged, before the call returns, which costs a few microseconds
-with a file. [`kern:logger-async`](../logger-async/README.md) moves the writing to a background writer, for a
-thread that must stay smooth: `Logger(delivery = AsyncDelivery())`.
-
-Use `Logger()` directly instead of `Log` when one process needs more than one, when you want sinks, or when you
-want `AsyncDelivery`: `Log` has no sinks and always writes on the thread that logged. A `Logger` has everything
-`Log` has: `configure`, `holdUntilConfigured`, `state`, `health`, `tag` and `close`. Its `log(tag, level,
-throwable, fields) { message }` takes the level as a value, for code that forwards entries from elsewhere.
-
-Each entry reaches a sink as a `LogEntry`: `timestamp` (a `kotlin.time.Instant`), `tag`, `level`, `message`,
-`fields` (a `Map<String, Any?>`, values as logged) and `throwable`.
-
-## The log file
-
-You hand over a path that is already finished, and kern opens exactly that. It never expands a `~` and
-never picks a directory for you, because where an app keeps its files is the app's decision:
+`logError` logs a `Result`'s error, when it is one, and hands the result back unchanged:
 
 ```kotlin
-Log.configure(
-    LoggerConfig(
-        level = LogLevel.INFO,
-        file = FileOutput.Append(Path(stateDir, "app.log")),
-    ),
-)
+val user = repository.find(id).logError(log) { "lookup of $id failed" }
 ```
 
-Missing parent directories are created. Point `file` somewhere else later and the next line lands there,
-so a config reload can move the log without a restart. Set it to `FileOutput.None` to stop writing one.
+It logs at `ERROR` unless you pass `level`. On a success it logs nothing and never builds the message.
 
-Each line is written to the file in one append as it is logged, so a crash keeps everything up to the last
-entry, and two processes logging to the same file never split each other's lines. `close()` releases the
-handle at shutdown; logging again reopens it.
+### Forwarding entries from elsewhere
 
-The open file is kept while `file` stays the same. A log that is deleted or rotated away keeps being written
-to the old file until you call `close()`, so call it from your rotation hook to start a fresh file at the
-path. Call it from an ordinary thread, not from inside a native signal handler, since it waits for the logger's
-lock. A `copytruncate` rotation needs no hook, because every write appends.
+`Logger.log` takes the level as a value, and `at` keeps the time the entry happened rather than now:
 
-A full disk or a deleted directory is your environment, not a bug in your app, so it never crashes it.
-`Append(path, onFailure = ...)` decides what happens to an entry the file refuses:
-
-| `onFailure`                | a refused entry                                              | the code that logged |
-|----------------------------|--------------------------------------------------------------|----------------------|
-| `FileFailure.Retry()`      | held in memory and written, in order, once the file recovers | never sees it        |
-| `FileFailure.Drop`         | lost, and counted                                            | never sees it        |
-| `FileFailure.Throw`        | lost, and counted                                            | gets the exception   |
-
-`Retry` is the default. It holds up to `capacity` entries (1000), and when they run out `drop` decides which
-end gives way: `DropPolicy.OLDEST` keeps recent context, `DropPolicy.NEWEST` keeps the lead-up to the failure.
-While the file refuses, it tries again at most once per `backoff` (one second), so a dead disk costs one failing
-write per second rather than one per entry. When the file takes writes again after entries were dropped, a
-line in their place says how many and when:
-
+```kotlin
+Log.log(remote.tag, remote.level, at = remote.time) { remote.message }
 ```
-2026-08-11T14:05:40.112+02:00 WARN    kern.logger - dropped 312 entries the log file refused, logged between 2026-08-11T12:02:11.034Z and 2026-08-11T12:05:40.101Z dropped=312
-```
-
-The console and the sinks get every entry either way, and never wait for the file. `Throw` is for an audit
-log, where a lost entry is itself a failure; the exception reaches your call only after the console and the
-sinks have the entry.
-
-The first failure of each file is reported in one line on standard error; later ones only count. `close()`
-makes one last attempt at the held entries, and reports what it still could not write in a single line rather
-than one per entry.
 
 ## Sinks
 
-The console and the file are built in. A `LogSink` is anything else: a crash reporter, an in-app log
-viewer, a platform facility kern does not use.
+Every destination is a `LogSink`, the built-in ones included. `Log` and every new `Logger()` start with one,
+`PlatformSink()`, at `INFO`:
+
+| platform                         | `PlatformSink` writes to                                                   |
+|----------------------------------|----------------------------------------------------------------------------|
+| JVM, Linux, Windows              | standard output, as text coloured for its level                            |
+| macOS, a command-line tool       | standard output, as on Linux                                               |
+| iOS, a macOS app                 | the unified log (`os_log`)                                                 |
+| Android                          | logcat, at the matching priority                                           |
+| JS, Wasm                         | `console.debug`, `info`, `warn` or `error`, by level                       |
+
+The sinks live in the logger's config, each in a `ConfiguredSink` with its `SinkConfig`: the least severe `level`
+it takes, `INFO` by default, and its `timestamp`. Add one with `configure`, here a `FileSink` from
+[`logger-file`](../logger-file/README.md):
 
 ```kotlin
-val logger = Logger(
-    sinks = listOf(
-        LogSink { entry, _ -> crashReporter.record(entry.message, entry.throwable) }.atLeast(LogLevel.ERROR),
-    ),
-)
+import com.fromwau.kern.logger.*
+import com.fromwau.kern.logger.file.FileSink
+import com.fromwau.kern.result.*
+import kotlinx.io.files.Path
+
+val file = FileSink(Path(stateDir, "app.log"), format = LogFormat.JSON)
+Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(file, SinkConfig(level = LogLevel.DEBUG))) }
+    .onError { error -> log.w(error) { "logging to the console only" } }
 ```
 
-`atLeast` offers the sink only entries at that level or above. Filter that way rather than with an `if` inside
-the sink: an entry the sink returns from at once counts as a success, which resets the breaker below, so a
-crash reporter that is down would never be skipped while routine entries keep arriving.
+`configure`, `flush` and `close` return a [`kern:result`](../result/README.md#consuming-one) `Result`.
+`import com.fromwau.kern.result.*` brings in `Ok`, `Err` and the `onSuccess`, `onError` and `isError()` the
+snippets here use. Without it the compiler says `Unresolved reference 'onError'`.
 
-A sink is handed the `LogEntry`, not a rendered line, so it reads `fields` and `throwable` as data instead of
-parsing them back out of text. The second argument is the `LoggerConfig` the entry is written under, for a
-sink that follows the configured formats or `level` itself. It runs holding the logger's lock, on the thread
-that logged unless you chose `AsyncDelivery`, so hand work to your own queue rather than blocking.
+`configure` swaps the whole list in one step. Every entry logged before the change goes to the old list's sinks by
+their old levels, and every entry after it to the new list's sinks by their new ones. It returns a
+`Result<Unit, ConfigError>`, and on an error nothing changes:
 
-A sink that throws costs that sink the entry, and nothing else: the other sinks, the file and the console
-still get it, and the line that logged never sees the failure. `sinkFailure` decides:
+- `ConfigError.NameTaken`: two sinks in the new list share a name, or one sink is listed twice.
+- `ConfigError.Invalid`: a new sink's capacity is below one, its backoff is negative, or one of its properties
+  throws.
 
-- `SinkFailure.Drop()`, the default, drops the entry for that sink and counts it. Its `breaker` stops calling a
-  sink that keeps failing, so one that times out on every call cannot slow every line down:
-  `Breaker.Trip(consecutiveFailures = 10, cooldown = 60.seconds)` skips the sink after ten failures in a row,
-  and tries it again once a minute until one call succeeds. `Breaker.Off` offers every entry regardless.
-- `SinkFailure.Throw` throws the sink's exception to the line that logged, after everything else has the
-  entry. Use it in tests, where a broken sink should fail loudly. Under `AsyncDelivery` it cannot reach that
-  line, so the logger reports it once on standard error instead and `delivery.health` counts it: test a sink
-  with the default inline delivery.
+The lambda runs under the logger's lock, so keep it to a `copy`. Two calls from different threads never undo each
+other's change. If the lambda throws, nothing changes and the exception reaches you.
 
-Only an `Exception` is handled, a `CancellationException` included: `write` does not suspend, so one thrown
-there is the sink's own, such as a timeout inside its `runBlocking`. An `Error` such as `OutOfMemoryError`
-propagates untouched.
+A sink in both lists, the same object, keeps its queue and health, and takes the `config` of its `ConfiguredSink`
+in the new list. A removed sink takes no further entries. It writes what it had queued and is then closed in the
+background, so `configure` returns at once. A removed sink that keeps failing under `Retry` gives up after five
+seconds and counts what it had left as dropped. One whose single write runs for five seconds without returning is
+abandoned, as [a write that hangs](#a-write-that-hangs) explains. A sink added back, while it still drains or after
+it was closed or abandoned, takes the `config` it is given then.
 
-A sink without durability of its own, such as one posting to your own HTTP endpoint, can be wrapped to hold
-and retry what it refuses instead of dropping it, with the same capacity, drop policy and backoff as the file:
+`Log.config` holds the `LoggerConfig` in force. `Log.sinks` holds an `InstalledSink` for each of its sinks, in the
+same order, which is also the order each entry reaches them. An `InstalledSink` is your handle to one sink's
+`name`, `config`, `health`, `queued` count, `state` and `close()`. Find the one for a sink you added by comparing
+`sink`:
 
 ```kotlin
-val logger = Logger(sinks = listOf(RetryingSink(httpSink.atLeast(LogLevel.ERROR), capacity = 500, backoff = 5.seconds)))
+val installed: InstalledSink? = Log.sinks.value.firstOrNull { it.sink === file }
 ```
 
-It retries when the next entry for it arrives after `backoff` has passed; there is no timer of its own. It holds
-only the levels its sink takes, so put `atLeast` inside it, as above, and routine entries never take a slot.
-`close()` makes one last attempt and reports in one line what it still could not deliver. A crash reporting SDK
-that already persists and retries does not need it.
+A removed sink leaves `Log.sinks` at once, while it still writes what it had queued. Keep its `InstalledSink` from
+before the change to watch it drain: `queued` counts down as the sink writes, `health` goes on counting its
+failures and drops, and `config` keeps the settings it had when it was removed. Its `state` is a
+`StateFlow<SinkState>`:
 
-Every entry reaches the file, then the sinks in list order, then the console. An entry a sink logs from
-inside `write` goes all the way through first, to every destination except that sink: it never comes back to
-the sink that logged it, so a failing sink that logs its own failure cannot loop.
+- `Active` while the sink is configured, also after you call its `close()`.
+- `Draining` from the `configure` that removed it until it has written its queue, given up on it under `Retry`,
+  or been abandoned. Added back now, it keeps its handle and is `Active` again.
+- `Closed` once it is closed for good. Its `close()` then returns `ClosedAlready`, and adding the sink back gives
+  it a new handle.
+- `Abandoned` when, after the removal, one write ran for five seconds without returning. The entries in that
+  write and those still queued count as lost, and no flush or close waits for the sink again. Its `close()` and
+  adding it back behave as after `Closed`.
 
-## Watching for failures
-
-`health` counts what each destination failed to take, and changes only when something fails, recovers or is
-dropped, so it costs nothing to collect while all is well:
+To wait until a removed sink is closed, before you delete the file it wrote, say:
 
 ```kotlin
-Log.health.collect { health ->
-    if (health.file.dropped > 0) showBanner("Logging to disk failed: ${health.file.lastError}")
+val old = Log.sinks.value.single { it.sink === file }
+Log.configure { config -> config.copy(sinks = config.sinks.filter { it.sink !== file }) }
+    .onError { error -> System.err.println("still logging to the file: $error") }
+withTimeoutOrNull(10.seconds) { old.state.first { it == SinkState.Closed } }
+```
+
+An `Abandoned` sink may still be inside the write it hung in, so this waits for `Closed` alone.
+
+`Log.sinks` lists what the config says, in config order. `Log.draining` lists the removed sinks still `Draining`,
+oldest removal first. A sink leaves it once it is closed or abandoned, or added back. An `Abandoned` sink moves
+from `Log.draining` to `Log.abandoned`, oldest abandonment first, and leaves that once its stuck call has returned
+and its `close()` has run. Only a removed sink whose one write has run for five seconds reaches `Log.abandoned`. It
+joins `Log.abandoned` before it leaves `Log.draining`, so a panel never loses it, though for a moment it may show
+in both. To show every sink in a panel:
+
+```kotlin
+scope.launch {
+    combine(Log.sinks, Log.draining, Log.abandoned) { sinks, draining, abandoned ->
+        sinks.map { "${it.name}: active" } +
+            draining.map { "${it.name}: ${it.queued} left to write" } +
+            abandoned.map { "${it.name}: stuck in a write, its entries lost" }
+    }.collect { lines -> panel.show(lines) }
 }
 ```
 
-`health.value` is a `LoggerHealth`:
+An `InstalledSink` prints as `InstalledSink(name=file:app.log, state=Draining, queued=4)`.
 
-| field         | type               | what it counts                                                           |
-|---------------|--------------------|--------------------------------------------------------------------------|
-| `file`        | `BufferHealth`     | the file's `failures` and `dropped` (`Long`), `buffered` (`Int`, held for a retry) and `lastError` (`Throwable?`) |
-| `sinks`       | `List<SinkHealth>` | one per sink, in the order you passed them: `failures`, `dropped`, `lastError`, `breakerOpen` |
-| `heldDropped` | `Long`             | entries `holdUntilConfigured` dropped because more than 1024 were held   |
+### Built-in sinks
 
-A `RetryingSink` has its own `health`, a `BufferHealth` like `file`.
+Each built-in sink is a class, so you can read back what it was built with. Every parameter has a default but
+`FileSink`'s `path`:
 
-The logger also writes one line to standard error the first time each destination fails, and one when
-`close()` gives up on what it held, whatever the configured level, since those are the cases where its own
-output may be what is lost. Read `health` to show the rest in your own words.
+| sink          | parameters, with their defaults                                                                       |
+|---------------|-------------------------------------------------------------------------------------------------------|
+| `PlatformSink`| `name = "platform"`, `onFailure = SinkFailure.Drop()`, `capacity = 10_000`, `drop = DropPolicy.OLDEST` |
+| `StdoutSink`  | `format = LogFormat.TEXT`, `color = ColorMode.AUTO`, `name = "stdout"`, then `onFailure`, `capacity`, `drop` as above |
+| `StderrSink`  | the same as `StdoutSink`, with `name = "stderr"`                                                      |
+| `FileSink`    | `path`, `format = LogFormat.TEXT`, `name = "file:<path>"`, `onFailure = SinkFailure.Retry()`, then `capacity`, `drop` as above |
 
-## Per-platform consoles
+Pass `name` to add two of one kind. A name is free again in the same change that removes its sink.
 
-`ConsoleOutput.Platform`, the default, is the platform's own log. `Stdout` and `Stderr` are always that
-stream, whatever the platform.
+`FileSink` writes the lines waiting in its queue together, up to 256 in one append, and a lone entry at once. The
+console sinks, and every sink of your own, get one `write` per entry.
 
-| platform            | `Platform` goes to                         |
-|---------------------|--------------------------------------------|
-| JVM, Linux, Windows | standard output, colour permitting         |
-| Android             | logcat at the matching severity            |
-| iOS, a macOS app    | the unified log (`os_log`)                 |
-| a macOS CLI         | standard output, colour permitting         |
-| JS, Wasm            | `console.debug`, `info`, `warn` or `error` |
+### Console sinks
 
-`ConsoleOutput.Stderr()` keeps standard output for a CLI's data, so `app | jq` reads only what the app printed.
-On the JVM both streams are written to the process's file descriptors, not through `System.out` and
-`System.err`, so `System.setOut` does not capture them: test what reaches the console with a `LogSink`.
+`StdoutSink()` and `StderrSink()` write text or JSON to that stream. They exist on the JVM, Linux, Windows and
+macOS. A CLI usually wants its logs on standard error, so `app | jq` reads only its data. Swap the platform sink
+for one in a single change:
 
-**A closed console stream ends a native process.** On Linux and macOS, when the reader of a pipe goes away
-(`app | head -1`), the next console line ends the process with `SIGPIPE`, the usual Unix behaviour for a
-command-line tool. The entry is already in the file and the sinks by then. An app that has to keep running,
-such as a daemon writing to a pipe, ignores `SIGPIPE` at the start of `main`; the console lines are then lost
-and the file and sinks keep every entry, as on the JVM.
+```kotlin
+Log.configure { config ->
+    config.copy(sinks = config.sinks.filterNot { it.sink is PlatformSink } + ConfiguredSink(StderrSink()))
+}.onError { error -> System.err.println("no log output: $error") }
+```
 
-**A file size limit ends a native process too.** Under `ulimit -f`, systemd's `LimitFSIZE=` or a container's
-limit, the write that crosses it ends the process with `SIGXFSZ`, leaving that entry torn. Ignore `SIGXFSZ` at
-the start of `main` to keep running: the write then fails like a full disk, and the next entry tries again. The
-JVM ignores it by itself.
+For a log file at a path the user typed on the command line, choose `SinkFailure.Drop()`. Under
+`FileSink`'s default `Retry`, a path that cannot be opened, such as one in a directory the user may not write to,
+keeps its entries queued, and `close()` retries them for its whole timeout before it gives up. Under `Drop` they
+are lost at once and `close()` returns without waiting, reporting the failure:
 
-**Colour follows `ColorMode`**, set on each stream case: `ConsoleOutput.Stderr(color = ColorMode.ALWAYS)`.
-`AUTO`, the default, colours only when the console would accept it, so a piped or redirected run stays plain
-without you doing anything, `NO_COLOR` is obeyed, and `FORCE_COLOR=1` colours a pipe anyway. `ALWAYS` colours
-a pipe too, which is what CI logs usually want, and `NEVER` never colours. JSON is never coloured, and neither
-is the log file. Under `AUTO` each stream is asked on its own, so `app 2>err.log` stays plain while standard
-output is a terminal. The JVM can only ask whether stdin and stdout are both terminals, so there standard
-output is coloured only when stdin is a terminal too, and standard error only under `FORCE_COLOR`.
+```kotlin
+val logFile = FileSink(Path(arg), onFailure = SinkFailure.Drop())
+Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(logFile)) }
+    .onError { error -> System.err.println("no log file: $error") }
+```
 
-Windows consoles are opted into virtual-terminal processing and UTF-8 on the first line written. That policy
-lives in [`kern:terminal`](../terminal/README.md), so a CLI and its logger cannot disagree about it.
+### A sink of your own
 
-On JS and Wasm, `Stdout` is `console.log` and `Stderr` is `console.error`, which Node.js writes to those
-streams. Nothing is coloured there, since a browser console shows ANSI codes as text. There is no file to
-append to either: a configured `file` refuses every write, which its `onFailure` handles like any other
-refusal, so leave it at `FileOutput.None` on these targets.
+```kotlin
+val crashes = LogSink("crashes") { entry, _ ->
+    crashReporter.record(entry.message, entry.throwable)
+    Ok(Unit)
+}
+Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(crashes, SinkConfig(level = LogLevel.ERROR))) }
+    .onError { error -> log.w(error) { "no crash reports" } }
+```
 
-Android's logcat ignores the console's `format` and colour, because it carries the tag, severity and timestamp
-itself; it is given the message and fields alone. Set a `file` to get JSON on Android, or choose `Stdout` to
-get the rendered line under logcat's `System.out` tag.
+`LogSink(name, onFailure, capacity, drop) { entry, config -> }` takes:
 
-On Apple platforms `Platform` writes to the unified log, so release builds show up in Console.app and in device
-logs, not only in Xcode. Each entry goes under your app's bundle identifier as the subsystem, with its tag as
-the category, at the matching type: `DEBUG` for `VERBOSE` and `DEBUG`, `INFO`, `DEFAULT` for `WARN`, and
-`ERROR`. The unified log stamps its own time and level, so it gets the message, fields and stack trace rather
-than the rendered line, marked public so a release build does not redact it as `<private>`. A command-line tool
-has no bundle identifier, so on macOS it prints to standard output as on Linux; choose `Stdout` or `Stderr` to
-print from an app too.
+| parameter   | default              | what it sets                                                                    |
+|-------------|----------------------|---------------------------------------------------------------------------------|
+| `name`      | none, required       | the sink's name in `Log.sinks`, errors and health; unique within a config       |
+| `onFailure` | `SinkFailure.Drop()` | what a failed write leads to, see [Failures](#failures)                         |
+| `capacity`  | `10_000`             | how many entries may wait for the sink                                          |
+| `drop`      | `DropPolicy.OLDEST`  | which waiting entry gives way when the queue is full                            |
+| the lambda  | none, required       | writes one entry, given its settings; returns `Ok(Unit)` or `Err(SinkError)`    |
+
+Your sink is handed a `LogEntry`: `timestamp`, `tag`, `level`, `message`, `fields`, `throwable` and `error`, as
+data, and the `SinkConfig` its `ConfiguredSink` gives it. It runs on the sink's own worker, one entry at a time and
+in the order they were logged, so it may block. Return an `Err`, or throw anything, an `Error` included, and the sink's
+`onFailure` decides what happens next. A throw is the failure `SinkError.Dropped(Thrown(e))`; it never ends the
+sink's worker. An entry your sink logs while writing goes to every other sink, never back to itself.
+
+#### A write that hangs
+
+The logger never interrupts a write. While the sink is configured, it never times one out either: a call that
+hangs holds up that sink's queue, and every flush or close waits for it until its own timeout.
+
+A sink you removed with `configure` gets five seconds per write. Once one write has run for five seconds without
+returning, whether it started before or after the removal, the sink is `Abandoned`: the entries in that write and
+those still queued count as lost under its name, and no flush or close waits for it from then on. A flush or close
+already waiting stops waiting for it at that moment. If the write returns later, its result is ignored and the
+sink's `close()` runs; entries it wrote then still count in `Lost`, since they were counted when it was
+abandoned. A removed sink whose writes keep returning, however slowly, writes its whole queue.
+
+The sink then leaves `Log.draining` and is listed in `Log.abandoned` until its stuck call returns. Added back
+while that call still runs, the same object gets a new handle at once, which makes no call into it until the
+abandoned write and its `close()` have returned; until then its queue fills and drops as its `drop` says. So when
+the old sink may be stuck, build a new sink instance on reload rather than adding the same object back.
+
+On the JVM and native, a write that hangs holds its own thread until it returns, never one that other sinks or
+your app need, so other sinks go on writing and your own `Dispatchers.IO` work goes on running.
+
+So give a network call its client's own timeout, and return `Err(SinkError.Dropped(reason))` when it fails, with
+your own `ResultError` as the reason or `Thrown(e)` for the exception:
+
+```kotlin
+val remote = LogSink("remote", onFailure = SinkFailure.Drop(backoff = 30.seconds)) { entry, _ ->
+    try {
+        httpClient.send(entry)   // with the client's own timeout set
+        Ok(Unit)
+    } catch (e: IOException) {
+        Err(SinkError.Dropped(Thrown(e)))
+    }
+}
+```
+
+Implement the `LogSink` interface instead when your sink holds something open. Its `close()` is called when the
+logger closes the sink, never during a `write`, and the next entry after a close must reopen what it needs. A
+`close()` that returns an error, or throws, is a failure of the sink like a failed write. The interface's members:
+
+| member                 | default             | what it does                                                         |
+|------------------------|---------------------|----------------------------------------------------------------------|
+| `name`                 | none, required      | as for the lambda form above                                         |
+| `onFailure`            | `SinkFailure.Drop()`| as above                                                             |
+| `capacity`             | `10_000`            | as above                                                             |
+| `drop`                 | `DropPolicy.OLDEST` | as above                                                             |
+| `write(entry, config)` | none, required      | writes one entry; returns `Ok(Unit)` or `Err(SinkError)`             |
+| `close()`              | returns `Ok(Unit)`  | releases what the sink holds open; returns `Ok(Unit)` or an `Err`    |
+
+```kotlin
+class UploadSink(private val client: UploadClient) : LogSink {
+    override val name = "upload"
+    override val onFailure = SinkFailure.Retry(backoff = 5.seconds)
+
+    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> =
+        if (client.send(entry.message)) Ok(Unit) else Err(SinkError.Dropped(UploadError.Refused))
+
+    override fun close(): EmptyResult<SinkError> {
+        client.disconnect()
+        return Ok(Unit)
+    }
+}
+```
+
+### Changing levels
+
+Change a sink's settings with `configure`, giving its `ConfiguredSink` a new `SinkConfig`. A settings screen that
+sets one level for every sink maps each one:
+
+```kotlin
+fun setLogLevel(level: LogLevel): Result<Unit, ConfigError> = Log.configure { config ->
+    config.copy(sinks = config.sinks.map { it.copy(config = it.config.copy(level = level)) })
+}
+```
+
+To change one sink, change only its `ConfiguredSink`:
+
+```kotlin
+fun setLogLevel(sink: LogSink, level: LogLevel): Result<Unit, ConfigError> = Log.configure { config ->
+    config.copy(
+        sinks = config.sinks.map { each ->
+            if (each.sink === sink) each.copy(config = each.config.copy(level = level)) else each
+        },
+    )
+}
+```
+
+A new `level` applies from the next entry logged, to every sink of the change at once, so no entry
+is taken by one sink's old level and another's new one. A new `timestamp` also applies to entries already queued.
+`Timestamp.Off` starts each text line at the level, for a collector such as journald that stamps lines itself.
+Under load an entry waits in the sink's queue before it reaches the console, so the collector's stamp is when the
+line arrived, not when it was logged. Keep `Timestamp.On` where exact times matter.
+Read an `InstalledSink`'s `config` to show the current setting, or collect it to react to a change.
+
+## Failures
+
+A sink that fails costs that sink the entry and nothing else. The other sinks still get it, and the code that
+logged never sees the failure. Each sink chooses what a failed write leads to:
+
+| `onFailure`                    | the failed entry                                   | default for          |
+|--------------------------------|----------------------------------------------------|----------------------|
+| `SinkFailure.Drop(backoff)`    | lost and counted; so is every entry for `backoff`  | every sink but files |
+| `SinkFailure.Retry(backoff)`   | tried again after `backoff` until it is written    | `FileSink`           |
+
+`backoff` is one second by default. Under `Drop` the sink is not called while the backoff runs, so a sink that
+times out on every call cannot slow anything down. Under `Retry` later entries wait in line behind the failed one,
+and a flush or close makes the sink try again at once.
+
+Each sink queues up to `capacity` entries, 10,000 by default. When the queue is full, `drop` decides which entry
+gives way: `DropPolicy.OLDEST`, the default, keeps the most recent context, and `DropPolicy.NEWEST` keeps the
+lead-up to the failure.
+
+Once the sink takes a write again after dropping entries, a warning in their place says how many and when:
+
+```
+2026-08-11T14:05:40.112+02:00 WARN    kern.logger - dropped 312 entries this sink did not take, logged between 2026-08-11T12:02:11.034Z and 2026-08-11T12:05:40.101Z dropped=312
+```
+
+The warning is logged at `WARN` with the tag `kern.logger`, and carries the count in its field `dropped`, a `Long`.
+It reaches the sink that dropped the entries whatever that sink's level, so a crash reporter at `ERROR` sees it
+too. A sink gets at most one such warning a second. Drops in between add to the next warning's count, and a close
+writes one still pending.
+
+### Watching a sink's health
+
+```kotlin
+Log.sinks.value.forEach { sink ->
+    scope.launch {
+        sink.health.collect { health ->
+            val since = health.failingSince
+            if (since != null) showBanner("Logging has failed since $since: ${health.lastError}")
+        }
+    }
+}
+```
+
+| field          | what it holds                                                                 |
+|----------------|-------------------------------------------------------------------------------|
+| `dropped`      | entries the sink never got: a full queue, a `Drop` failure or its backoff,    |
+|                | what a close gave up on, or lines of a deleted log file a `FileSink` could    |
+|                | not write again                                                               |
+| `failures`     | writes that failed, retries included, and closes that failed                  |
+| `failingSince` | when the current run of failures began; null once a write succeeds again      |
+| `lastError`    | the most recent `SinkError`, kept after the sink recovers                     |
+
+`health` belongs to one `InstalledSink` and starts at zero for a new one, so a reload that builds its sinks anew
+starts a fresh count. A flush and a close sum every sink of a name, removed ones included, as
+[shutdown and tests](#shutdown-and-tests) explains.
+
+`health` changes only when something is dropped, fails or recovers, so collecting it costs nothing while all is
+well. Entries a full queue drops show in it once the sink takes its next entry or a flush or close starts, and
+reading `health` counts them at once.
+
+`queued`, on the `InstalledSink`, is an `Int`: how many entries are waiting at the moment you read it, those being
+written included. It is not a flow, so read it again to see it change. Any sink can hold its `capacity` plus the
+entry being written, and a `FileSink` its `capacity` plus up to 256, which it writes at once.
+
+A `SinkError` is one of four cases:
+
+- `Dropped(error)` is a sink that could not take the entry, with its own typed reason: a console stream's
+  `WriteError` from [`kern:terminal`](../terminal/README.md#failed-writes) saying which stream and why, a
+  `FileSink`'s `FileError` from [`kern:fs`](../fs/README.md), or `Thrown(throwable)` for anything the sink's write or
+  close threw, passed through as it is.
+- `TimedOut(pending)` is a close whose time ran out with `pending` entries not yet written.
+- `Lost(count)` is a close finding `count` entries lost under a sink's name since it was first added, a sink
+  removed and added back included.
+- `ClosedAlready` comes in the `CloseError` that `close()` on an `InstalledSink` returns once its sink was removed
+  and has been closed for good. `Log.close()` never reports it. A sink of your own that cannot take an entry once
+  closed may return it from `write`, where it shows in `health.lastError`. No built-in sink does, since each
+  reopens what it needs.
+
+```kotlin
+when (val error = health.lastError) {
+    is SinkError.Dropped -> showBanner("Logging failed: ${error.error}")
+    is SinkError.TimedOut, is SinkError.Lost, SinkError.ClosedAlready, null -> Unit
+}
+```
+
+The first failure under each sink name is also reported in one line on standard error, or `console.error` on JS and
+Wasm, whatever the levels say. In an Android app standard error goes nowhere, and in an iOS app it shows only in
+Xcode's console while you debug, so watch `health` there:
+
+```
+kern.logger: sink "file:/var/log/app.log" failed: Dropped(error=WriteFailed(path=/var/log/app.log, reason=Permission denied))
+```
+
+Later failures under that name only count in `health`, until a sink of that name writes successfully; its next
+failure is reported again. A reload that builds a failing sink anew under the same name does not repeat the line.
+Like console lines, it goes to the process's own standard error, so `System.setErr` does not capture it.
+
+## Holding startup entries
+
+An app that reads its log level from its own config logs before it knows that level. Hold those entries and let
+the config decide what they were worth:
+
+```kotlin
+Log.holdUntilConfigured()
+Log.tag("Startup").d { "looking for a config file" }       // held
+val config = readConfig()
+setLogLevel(config.logLevel)                               // from "Changing levels"
+    .onError { error -> Log.tag("Startup").w(error) { "keeping the default level" } }
+Log.flush()                                                // replayed if DEBUG is on
+    .onError { error -> System.err.println("startup logs were lost: $error") }
+```
+
+`flush()`, `awaitFlushed()`, `close()` and `awaitClosed()` end the hold. The held entries then reach each sink
+configured at that moment whose level takes them, with the time they were logged. A sink you add during the hold
+gets them too, and one you remove gets none. A held entry builds its message at once, since no level has
+decided against it yet.
+
+At most 1024 entries are held. Past that the oldest give way, `heldDropped` counts them, and the replay starts
+with a warning saying how many.
+
+**End the hold yourself, on every way out of your startup**, error paths included. Nothing ends it for you, and
+entries still held when the process ends are lost. In a CLI that logs to standard output, swap in `StderrSink`
+before you end the hold, so a bad flag does not replay startup lines into the data a pipe reads.
+
+## Shutdown and tests
+
+Close the logger where your app exits:
+
+```kotlin
+fun main() {
+    try {
+        run()
+    } finally {
+        Log.close().onError { failed ->
+            failed.errors.forEach { (name, errors) -> System.err.println("$name: $errors") }
+        }
+    }
+}
+```
+
+`close(timeout)` waits up to `timeout`, five seconds by default, for every sink's queue, then closes each sink. It
+waits for a sink you removed with `configure` too, while that sink still writes what it had queued. A sink in a
+`Retry` backoff tries again at once. A `Retry` write that fails while close waits is tried again after the sink's
+backoff, until it is written or the time runs out.
+
+`close` returns `Ok` only when every sink wrote everything queued before the call, never lost an entry since it
+was added, and closed cleanly, so its result alone can decide an exit status. Dropping an entry is a failure,
+whatever dropped it: a full queue, a `Drop` write, a line a `FileSink` could not write again, or an earlier close
+that ran out of time. A sink you removed with `configure` that dropped entries counts too, after it was closed.
+Otherwise it returns `CloseError`, whose `errors` map the name of each sink that failed to its `SinkError`s, in
+this order:
+
+- `TimedOut(pending)` when the time ran out. `pending` counts every entry not yet written, a write still running
+  included. The others are dropped. The running write may yet land, and the sink is closed once it returns.
+- The sink's own error when its close failed, such as a `FileSink` that could not write lines again after its file
+  was deleted, or an error when the warning for entries the sink dropped could not be written.
+- `Lost(count)` when `count` entries were lost under that name since it was first added, a sink removed and added
+  back included. Every close reports the whole count, a loss an earlier flush or close reported included. The
+  entries a timed-out close drops are counted in its `TimedOut`, and in `Lost` from the next close on.
+
+Each name is one entry: a sink removed while still draining, or one that lost entries before it was removed, adds
+into the entry of its name, while each sink's own [`health`](#watching-a-sinks-health) counts only what it dropped.
+Its list then has one `TimedOut` and one `Lost`, each summed over those sinks. Look a sink up by its name:
+
+```kotlin
+Log.close().onError { failed ->
+    failed.errors["file:app.log"]?.let { errors -> System.err.println("app.log: $errors") }
+}
+```
+
+`health.dropped` counts each dropped entry once, as it is dropped, whatever dropped it, a close that ran out of
+time included. A `TimedOut(pending)` also counts a write still running, which is dropped only if it then fails, so
+`pending` can be one more than what that close added to `health.dropped`.
+
+The sinks stay configured and take the next entry, so call `close` to shut down, not to stop logging. To stop logging
+to a sink, remove it with `configure`. The logger has no exit hook of its own: on the JVM and native, entries
+still queued when the process ends are lost.
+
+The workers never keep a JVM or Android process alive: each sink runs on its own view of `Dispatchers.IO`, whose
+threads are daemon threads. On JS and Wasm they run on the event loop, where a sink waiting out a `Retry` backoff
+holds a timer that keeps Node.js running until it fires.
+
+| call                 | waits for                              | returns                                            |
+|----------------------|----------------------------------------|----------------------------------------------------|
+| `Log.flush()`        | every queue, blocking                  | `Flushed`, or `FlushError.Lost(lost, stillQueued)` |
+| `Log.awaitFlushed()` | every queue, suspending                | `Flushed`, or `FlushError.Lost(lost, stillQueued)` |
+| `Log.close()`        | every queue, blocking, then closes     | `Unit`, or `CloseError(errors)` by sink name       |
+| `Log.awaitClosed()`  | every queue, suspending, then closes   | `Unit`, or `CloseError(errors)` by sink name       |
+| `sink.close()`       | that queue, blocking, then closes it   | `Unit`, or `CloseError` with that sink alone; in it `ClosedAlready` once removed and closed |
+
+`flush(timeout)` waits the same way, five seconds by default, for configured and removed sinks alike, and keeps
+every entry queued. It fails only when a sink lost entries, with `FlushError.Lost(lost, stillQueued)`. `lost` says
+how many entries each sink name lost since the last flush or close. `stillQueued` maps each sink name still holding
+entries to its `Pending`, as `StillQueued` below does, and is empty when every sink wrote everything. Both are keyed by
+sink name, and each name is one entry: a sink removed while still draining, or one that lost entries before it was
+removed, adds into the entry of its name:
+
+```kotlin
+Log.flush().onError { error ->
+    when (error) {
+        is FlushError.Lost -> error.lost.forEach { (name, count) -> System.err.println("$name lost $count") }
+        FlushError.CannotWait -> Unit
+    }
+}
+```
+
+A flush reports each loss once; the next flush reports only what was lost after it, while `close` still counts it.
+A close resets it too: a flush after a close reports only what was lost since that close. Otherwise flush succeeds
+with one of two `Flushed` values:
+
+- `FullyWritten` when every sink wrote everything queued before the call.
+- `StillQueued(pending)` when some sinks still hold entries, nothing lost. Each name has a `Pending`:
+  `GaveUp(count, error)` for a `Retry` sink whose write failed while flush waited, which ends the wait for that
+  sink at once, or `TimedOut(count)` for a sink still writing when the time ran out. The sink writes them as its
+  `onFailure` says. When a removed sink still draining shares the name, the counts add up, and the entry is a
+  `GaveUp` if any of them gave up, with the configured sink's error before a removed one's.
+
+A test or an audit that needs every entry written compares with `Ok(Flushed.FullyWritten)`. `isError()` is not
+that check: it is false for `StillQueued`, where nothing is lost but some entries are not written yet.
+
+```kotlin
+val everythingWritten = Log.flush() == Ok(Flushed.FullyWritten)
+```
+
+Called from inside a sink's own write, `flush()` and `close()` do not wait for that sink. They report it as
+pending at once, and `close()` leaves it open. A sink removed with `configure` from inside its own write is
+removed at once, and closed once that write returns.
+
+JS and Wasm have one thread, so `flush()` and `close()` cannot wait there. `flush()` ends a hold and returns
+`FlushError.CannotWait` at once. `close()` drops whatever is still queued and closes each sink. Call
+`awaitFlushed()` and `awaitClosed()` instead, which work on every target.
+
+In a test, record entries with `TestSink` from [`kern:logger-test`](../logger-test/README.md), and test a sink of
+your own by wrapping it in its `RecordingSink`. `assertSuccess()` comes from
+[`kern:result-test`](../result/README.md#testing):
+
+```kotlin
+@Test
+fun `the scan logs its count`() = runTest {
+    val sink = TestSink()
+    val logger = Logger()
+    logger.configure { LoggerConfig(listOf(ConfiguredSink(sink, SinkConfig(level = LogLevel.VERBOSE)))) }
+        .assertSuccess()
+
+    Scanner(logger.tag("Scanner")).scan()
+
+    assertEquals(412, sink.awaitEntry().fields["count"])
+}
+```
+
+`awaitEntry()` waits in real time, even under `runTest`'s virtual clock, and so do `awaitFlushed()` and
+`awaitClosed()`. All three suspend: a test that runs on threads instead of in `runTest` wraps them in
+`runBlocking { }`, as [`kern:logger-test`](../logger-test/README.md#tests-on-threads) shows.
+
+## The log file
+
+`FileSink` lives in [`logger-file`](../logger-file/README.md), which covers rotation, deletion, failures and the
+Windows notes.
+
+## Line formats
+
+`LogFormat.TEXT`, the default, is one line for a person, with a stack trace on the lines below it:
+
+```
+<time> <LEVEL> <tag> - <message> key=value ... error=...
+```
+
+A tag longer than 35 characters is cut. `LogFormat.JSON` is one object per line, whatever is in the message, so a
+shipper reads the file a line at a time. Its keys are `timestamp`, `tag`, `level`, `message`, `fields`,
+`stackTrace` and `error`; the last three are left out when the entry has none.
+
+Both timestamps are ISO 8601. Text uses local time to the millisecond with its offset from UTC, for reading
+alongside `journalctl`. JSON uses UTC with nine fraction digits, so its stamps sort as text.
+
+## Platform notes
+
+**Colour.** `StdoutSink` and `StderrSink` take a `ColorMode`, and `PlatformSink` uses `AUTO`. `AUTO` colours a line
+when the stream is a terminal, and the environment overrides that, first match wins:
+
+1. `NO_COLOR` set and not empty: no colour.
+2. `FORCE_COLOR` or `CLICOLOR_FORCE` set, not empty and not `0`: colour, even into a pipe or under `TERM=dumb`.
+3. `CLICOLOR=0` or `TERM=dumb`: no colour.
+
+`ALWAYS` colours a pipe too, which CI logs usually want, and `NEVER` never colours. Each stream is
+asked on its own, so `app 2>err.log` stays plain while standard output is a terminal. A JSON line and the log file
+are never coloured. The rules are [`kern:terminal`'s](../terminal/README.md#colour), so a CLI and its logger agree.
+
+**The JVM** can only ask whether stdin and stdout are both terminals. There standard output is coloured only when
+stdin is a terminal too, and standard error only under `FORCE_COLOR`. Console lines go to the process's own file
+descriptors, so `System.setOut` does not capture them: test what you log with a sink of your own.
+
+**Windows** consoles are switched to virtual-terminal processing and UTF-8 before the first console line.
+
+**A closed pipe ends a native process.** On Linux and macOS, once the reader of a pipe goes away
+(`app | head -1`), the next console line ends the process with `SIGPIPE`. To keep running, ignore `SIGPIPE` at
+the start of `main`. The console sink then fails with `SinkError.Dropped`, carrying a `WriteError`, and the other
+sinks keep every entry.
+
+**Time zone.** Each sink looks up the local zone once, on its first entry, whatever its format. On Linux and macOS
+the C library supplies it, so `TZ` means what it means to `date`, daylight saving rules included. The JVM reads
+`TZ` its own way. Windows, JS and Wasm use the system zone, and a zone that cannot be named gives UTC.
+
+**Android.** Logcat stamps its own time and level, so `PlatformSink` gives it the message, fields and error, and
+ignores `Timestamp`. `WTF` is logged at `ASSERT`, without calling `Log.wtf`, which can end the process. Add a
+[`FileSink`](../logger-file/README.md) to get JSON on Android.
+
+**iOS and macOS apps.** `PlatformSink` writes to the unified log, so release builds show up in Console.app and in
+device logs. Each entry goes under your bundle identifier as the subsystem, with its tag as the category.
+`VERBOSE` and `DEBUG` map to `DEBUG`, `WARN` to `DEFAULT`, and `WTF` to `FAULT`. The unified log keeps `DEBUG`
+entries in memory only, so they show only in a live Console.app stream with debug messages included. `INFO`
+entries show in a live stream with info messages included, and are not saved by default. `WARN` and above are
+saved and show without any setting. The text is marked public, so a release build does not redact it as
+`<private>`. A command-line tool has no bundle identifier, so it prints to standard output instead.
+
+**JS and Wasm.** `PlatformSink` is the only built-in sink. Its lines are never coloured, since a browser console
+shows ANSI codes as text.
 
 ## License
 

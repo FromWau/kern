@@ -20,7 +20,7 @@ internal fun jvmPlatformIo(isTty: Boolean, outSink: OutputStream, errSink: Outpu
         width = null,
         ansiCapable = true,
         env = { System.getenv(it) },
-        writeFailure = { out.failure ?: err.failure },
+        failureOf = { if (it == Stream.Out) out.failure else err.failure },
     )
 }
 

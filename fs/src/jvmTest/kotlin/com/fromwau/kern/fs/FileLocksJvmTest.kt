@@ -58,7 +58,7 @@ class FileLocksJvmTest {
     fun `a holder on another thread is LockBusy within the wait instead of queueing`() {
         val held = CountDownLatch(1)
         val holder = thread {
-            lockFile.withLock {
+            val _ = lockFile.withLock {
                 held.countDown()
                 Thread.sleep(HOLD_MILLIS)
             }
@@ -82,7 +82,7 @@ class FileLocksJvmTest {
     fun `an interrupted wait behind another thread is LockBusy and leaves the interrupt set`() {
         val held = CountDownLatch(1)
         val holder = thread {
-            lockFile.withLock {
+            val _ = lockFile.withLock {
                 held.countDown()
                 Thread.sleep(HOLD_MILLIS)
             }

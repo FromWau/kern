@@ -1,5 +1,6 @@
 package com.fromwau.kern.logger
 
+import com.fromwau.kern.result.ResultError
 import kotlinx.datetime.TimeZone
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -86,6 +87,17 @@ class RenderingTest {
     }
 
     @Test
+    fun `a throwable whose message and toString throw is still rendered`() {
+        val hostile = entry.copy(throwable = HostileException())
+
+        val text = hostile.toTextLine(TimeZone.UTC.asLocalClock())
+        val json = hostile.toJsonLine()
+
+        assertContains(text, "scan complete")
+        assertContains(json, "scan complete")
+    }
+
+    @Test
     fun `a json field carries its type in the literal`() {
         val typed = entry.copy(
             fields = mapOf(
@@ -115,9 +127,156 @@ class RenderingTest {
     }
 
     @Test
+    fun `arrays are written as their contents at any depth in text and json`() {
+        val arrays = entry.copy(
+            fields = mapOf(
+                "ints" to intArrayOf(1, 2),
+                "nested" to arrayOf<Any>(intArrayOf(1), arrayOf("x")),
+                "inList" to listOf(intArrayOf(1)),
+                "inMap" to mapOf("k" to byteArrayOf(7)),
+            ),
+        )
+
+        assertContains(
+            arrays.toTextLine(TimeZone.UTC.asLocalClock()),
+            "scan complete ints=[1, 2] nested=[[1], [x]] inList=[[1]] inMap={k=[7]}",
+        )
+        assertContains(
+            arrays.toJsonLine(),
+            "\"fields\":{\"ints\":\"[1, 2]\",\"nested\":\"[[1], [x]]\",\"inList\":\"[[1]]\",\"inMap\":\"{k=[7]}\"}",
+        )
+    }
+
+    @Test
+    fun `a container that holds itself is written without overflowing the stack`() {
+        val cycles = entry.copy(
+            fields = mapOf(
+                "list" to mutableListOf<Any>().apply { add(this) },
+                "map" to mutableMapOf<String, Any>().apply { put("self", this) },
+                "array" to arrayOfNulls<Any>(1).apply { set(0, listOf(this)) },
+            ),
+        )
+
+        assertContains(
+            cycles.toTextLine(TimeZone.UTC.asLocalClock()),
+            "scan complete list=[(this Collection)] map={self=(this Map)} array=[[[...]]]",
+        )
+    }
+
+    @Test
+    fun `a value whose toString or iterator throws is written as a placeholder`() {
+        val hostile = entry.copy(
+            fields = mapOf(
+                "value" to ToStringThrows,
+                "iterator" to IteratorThrows(IllegalStateException()),
+                "modified" to IteratorThrows(ConcurrentModificationException()),
+            ),
+        )
+
+        val expected = "scan complete value=<toString() threw IllegalStateException> " +
+            "iterator=<toString() threw IllegalStateException> " +
+            "modified=<toString() threw ConcurrentModificationException>"
+        assertContains(hostile.toTextLine(TimeZone.UTC.asLocalClock()), expected)
+        assertContains(
+            hostile.toJsonLine(),
+            "\"modified\":\"<toString() threw ConcurrentModificationException>\"",
+        )
+    }
+
+    @Test
+    fun `a json field keeps Short and Byte as numbers and writes any other Number as text`() {
+        val numbers = entry.copy(
+            fields = mapOf("short" to 3.toShort(), "byte" to 4.toByte(), "custom" to Ratio(1, 3)),
+        )
+
+        assertContains(numbers.toJsonLine(), "\"fields\":{\"short\":3,\"byte\":4,\"custom\":\"1/3\"}")
+    }
+
+    @Test
     fun `a text field is written as key=value with null spelled out`() {
         val typed = entry.copy(fields = mapOf("port" to 5001, "tls" to true, "user" to null))
 
         assertContains(typed.toTextLine(TimeZone.UTC.asLocalClock()), "scan complete port=5001 tls=true user=null")
     }
+
+    @Test
+    fun `a text line ends the fields with the error`() {
+        val failed = entry.copy(error = Missing(7))
+
+        assertContains(failed.toTextLine(TimeZone.UTC.asLocalClock()), "scan complete count=412 error=Missing(id=7)")
+    }
+
+    @Test
+    fun `a json line carries the error as a string`() {
+        val failed = entry.copy(error = Missing(7))
+
+        assertContains(failed.toJsonLine(), "\"error\":\"Missing(id=7)\"")
+    }
+
+    @Test
+    fun `a json line without an error has no error key`() {
+        assertFalse(entry.toJsonLine().contains("error"))
+    }
+
+    @Test
+    fun `a text line without its timestamp starts at the level`() {
+        val line = entry.render(LogFormat.TEXT, TimeZone.UTC.asLocalClock(), Timestamp.Off)
+
+        assertEquals("INFO    Scanner - scan complete count=412", line)
+    }
+
+    @Test
+    fun `a json line keeps its timestamp when the text one is off`() {
+        val line = entry.render(LogFormat.JSON, TimeZone.UTC.asLocalClock(), Timestamp.Off)
+
+        assertContains(line, "\"timestamp\":\"2026-08-11T12:34:56.789000000Z\"")
+    }
+
+    @Test
+    fun `WTF is labelled WTF`() {
+        val line = entry.copy(level = LogLevel.WTF).toTextLine(TimeZone.UTC.asLocalClock())
+
+        assertContains(line, " WTF     Scanner - ")
+        assertContains(entry.copy(level = LogLevel.WTF).toJsonLine(), "\"level\":\"WTF\"")
+    }
+}
+
+private data class Missing(val id: Int) : ResultError
+
+private object ToStringThrows {
+    override fun toString(): String = throw IllegalStateException("toString")
+}
+
+/** A collection whose iteration fails with [failure], as one changed while it is read does. */
+private class IteratorThrows(private val failure: Throwable) : AbstractList<Int>() {
+    override val size: Int = 1
+
+    override fun get(index: Int): Int = 1
+
+    override fun iterator(): Iterator<Int> = throw failure
+}
+
+/** A [Number] of its own, written as its `toString()`. */
+private class Ratio(private val over: Int, private val under: Int) : Number() {
+    override fun toDouble(): Double = over.toDouble() / under
+
+    override fun toFloat(): Float = toDouble().toFloat()
+
+    override fun toLong(): Long = toDouble().toLong()
+
+    override fun toInt(): Int = toDouble().toInt()
+
+    override fun toShort(): Short = toInt().toShort()
+
+    override fun toByte(): Byte = toInt().toByte()
+
+    override fun toString(): String = "$over/$under"
+}
+
+/** An exception whose every description throws, as a broken `toString()` override does. */
+internal class HostileException : Exception() {
+    override val message: String
+        get() = throw IllegalStateException("message")
+
+    override fun toString(): String = throw IllegalStateException("toString")
 }

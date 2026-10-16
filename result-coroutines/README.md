@@ -22,7 +22,7 @@ dependencies {
 ```
 
 It brings `result` and kotlinx-coroutines with it, from the same repository as
-[`result`](../result/README.md#add-to-your-build). The JVM and Android artifacts need JDK 17 or newer.
+[`result`](../result/README.md#add-to-your-build). Needs what [every kern module needs](../README.md#requirements).
 
 ## What each does
 

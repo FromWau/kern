@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.targets.js.EnvSpec
 
 // The Android namespace and framework name are derived from the Gradle project name, like the coordinates
 // kern-publish sets, so a new module declares none of them. The one thing it must set is `description`.
@@ -81,3 +82,14 @@ val jvmTestOnTarget = tasks.register<Test>("jvmTestOnTarget") {
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(targetJdk) }
 }
 tasks.named("check") { dependsOn(jvmTestOnTarget) }
+
+// The Kotlin plugin adds its own repositories for Node.js, Yarn and Binaryen, which settings.gradle.kts forbids and
+// declares itself instead.
+// Every EnvSpec loses its download URL, so D8, Wasmtime and Swc need their repository added to settings before use.
+gradle.projectsEvaluated {
+    listOf(project, rootProject).forEach { owner ->
+        owner.extensions.extensionsSchema
+            .filter { EnvSpec::class.java.isAssignableFrom(it.publicType.concreteClass) }
+            .forEach { (owner.extensions.getByName(it.name) as EnvSpec<*>).downloadBaseUrl.set(null as String?) }
+    }
+}
