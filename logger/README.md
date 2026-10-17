@@ -36,7 +36,8 @@ and `StateFlow` are part of the API. On native, JS and Wasm, `kern:result` bring
 it too. [`kern:terminal`](../terminal/README.md), `atomicfu`, `kotlinx-datetime` and `kotlinx-serialization-json`
 come along at runtime only; add `kern:terminal` yourself to match the `WriteError` a console sink fails with.
 
-The log file sink, `FileSink`, is a module of its own: [`logger-file`](../logger-file/README.md).
+The log file sink, `FileSink`, is a module of its own: [`logger-file`](../logger-file/README.md). So is
+`SentrySink`, which sends entries to Sentry: [`logger-sentry`](../logger-sentry/README.md).
 
 ## Logging
 
