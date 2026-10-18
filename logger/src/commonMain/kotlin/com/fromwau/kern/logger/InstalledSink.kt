@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicLong
@@ -253,9 +254,9 @@ public class InstalledSink internal constructor(
                         deliver(batchFrom(entry))
                         closeIfRequested()
                     } else if (isDrainedAndRetired()) {
-                        callLock.withLock { val _ = closeSinkLocked(once = true) }
+                        val closed = callLock.withLock { closeSinkLocked(once = true) }
                         // Added back while that close ran: the next entry reopens what the sink needs.
-                        if (finishRetirement()) break
+                        if (finishRetirement(closed)) break
                     } else {
                         select {
                             queue.onReceive { deliver(batchFrom(it)) }
@@ -308,6 +309,11 @@ public class InstalledSink internal constructor(
     internal fun applyConfig(config: SinkConfig) {
         mutableConfig.value = config
     }
+
+    /** What the close that ended the sink's removal failed with, once it is [SinkState.Closed]. */
+    @Volatile
+    internal var retiredWith: SinkError? = null
+        private set
 
     /** Whether the sink was removed for good and its worker has finished or was let go of. */
     internal val isDone: Boolean
@@ -638,11 +644,12 @@ public class InstalledSink internal constructor(
         intakeEnded && retireDeadline.load() != null && queued == 0
     }
 
-    /** Ends the worker unless the sink was added back meanwhile. */
-    private fun finishRetirement(): Boolean {
+    /** Ends the worker unless the sink was added back meanwhile; [closed] is how its last close went. */
+    private fun finishRetirement(closed: EmptyResult<SinkError>): Boolean {
         val finished = lifeLock.withLock {
             isDrainedAndRetired().also { finished ->
                 if (finished) {
+                    retiredWith = closed.errorOrNull()
                     mutableState.value = SinkState.Closed
                     stallWatch?.cancel()
                     stallWatch = null

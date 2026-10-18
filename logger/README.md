@@ -521,9 +521,9 @@ backoff, until it is written or the time runs out.
 `close` returns `Ok` only when every sink wrote everything queued before the call, never lost an entry since it
 was added, and closed cleanly, so its result alone can decide an exit status. Dropping an entry is a failure,
 whatever dropped it: a full queue, a `Drop` write, a line a `FileSink` could not write again, or an earlier close
-that ran out of time. A sink you removed with `configure` that dropped entries counts too, after it was closed.
-Otherwise it returns `CloseError`, whose `errors` map the name of each sink that failed to its `SinkError`s, in
-this order:
+that ran out of time. A sink you removed with `configure` counts too, after it was closed, when it dropped entries
+or its close failed. Otherwise it returns `CloseError`, whose `errors` map the name of each sink that failed to its
+`SinkError`s, in this order:
 
 - `TimedOut(pending)` when the time ran out. `pending` counts every entry not yet written, a write still running
   included. The others are dropped. The running write may yet land, and the sink is closed once it returns.
@@ -533,8 +533,8 @@ this order:
   back included. Every close reports the whole count, a loss an earlier flush or close reported included. The
   entries a timed-out close drops are counted in its `TimedOut`, and in `Lost` from the next close on.
 
-Each name is one entry: a sink removed while still draining, or one that lost entries before it was removed, adds
-into the entry of its name, while each sink's own [`health`](#watching-a-sinks-health) counts only what it dropped.
+Each name is one entry: a sink removed with `configure`, while it drains and after it was closed, adds into the
+entry of its name, while each sink's own [`health`](#watching-a-sinks-health) counts only what it dropped.
 Its list then has one `TimedOut` and one `Lost`, each summed over those sinks. Look a sink up by its name:
 
 ```kotlin

@@ -72,9 +72,9 @@ public class Logger {
     // Abandoned sinks whose call may still be running, so a new handle for the same object waits for it.
     private val stalled = mutableListOf<InstalledSink>()
 
-    // By name, what removed sinks done draining lost: in all, which every close reports, and since the last flush or
-    // close, which the next flush reports.
-    private val removedLost = mutableMapOf<String, Long>()
+    // By name, what removed sinks done draining report: their last close's failure and all they lost, which every
+    // close reports, and what they lost since the last flush or close, which the next flush reports.
+    private val removedErrors = mutableMapOf<String, List<SinkError>>()
     private val removedLostSinceReport = mutableMapOf<String, Long>()
     private val mutableDraining = MutableStateFlow<List<InstalledSink>>(emptyList())
     private val mutableAbandoned = MutableStateFlow<List<InstalledSink>>(emptyList())
@@ -286,7 +286,7 @@ public class Logger {
                 else -> sink.closeAfter(drained = sink !in undrained, deadline, once = sink in waited.retiring)
             }
         }
-        return closeResult(closed + waited.removedLost)
+        return closeResult(closed + waited.removedErrors)
     }
 
     /**
@@ -312,7 +312,7 @@ public class Logger {
                 }
             }
         }
-        return closeResult(closed + waited.removedLost)
+        return closeResult(closed + waited.removedErrors)
     }
 
     /** Names the source of the entries you are about to log: `Log.tag("Scanner").i { "done" }`. */
@@ -461,15 +461,14 @@ public class Logger {
     private fun waitedOn(closing: Boolean = false): Waited = lock.withLock {
         pruneRetiring()
         if (closing) removedLostSinceReport.clear()
-        val removedLost = removedLost.map { (name, count) -> name to listOf<SinkError>(SinkError.Lost(count)) }
-        Waited(mutableSinks.value, retiring.toList(), removedLost)
+        Waited(mutableSinks.value, retiring.toList(), removedErrors.toList())
     }
 
-    /** Lets go of each removed sink done draining, keeping what it lost under its name. */
+    /** Lets go of each removed sink done draining, keeping what it reports under its name. */
     private fun pruneRetiring() {
         val pruned = retiring.removeAll { sink ->
             sink.isDone.also { done ->
-                if (done) keepLoss(sink)
+                if (done) keepErrors(sink)
                 if (sink.state.value == SinkState.Abandoned && !sink.callsReturned.isCompleted) stalled += sink
             }
         }
@@ -488,8 +487,9 @@ public class Logger {
         mutableDraining.value = retiring.filter { it.state.value == SinkState.Draining }
     }
 
-    private fun keepLoss(sink: InstalledSink) {
-        removedLost.add(sink.name, sink.lostInAll)
+    private fun keepErrors(sink: InstalledSink) {
+        val errors = listOfNotNull(sink.retiredWith, SinkError.Lost(sink.lostInAll))
+        removedErrors[sink.name] = foldCloseErrors(removedErrors[sink.name].orEmpty() + errors)
         removedLostSinceReport.add(sink.name, sink.takeLostSinceReport())
     }
 
@@ -514,7 +514,7 @@ public class Logger {
     private class Waited(
         configured: List<InstalledSink>,
         val retiring: List<InstalledSink>,
-        val removedLost: List<Pair<String, List<SinkError>>>,
+        val removedErrors: List<Pair<String, List<SinkError>>>,
     ) {
         /** What a flush or close waits for. */
         val draining: List<InstalledSink> = configured + retiring

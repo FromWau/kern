@@ -28,7 +28,7 @@ internal fun closeResult(errors: List<Pair<String, List<SinkError>>>): EmptyResu
 }
 
 /** One [SinkError.TimedOut] and one [SinkError.Lost], each summed, every other error once, Lost last. */
-private fun foldCloseErrors(errors: List<SinkError>): List<SinkError> {
+internal fun foldCloseErrors(errors: List<SinkError>): List<SinkError> {
     val timedOut = SinkError.TimedOut(errors.filterIsInstance<SinkError.TimedOut>().sumOf { it.pending })
     val lost = errors.filterIsInstance<SinkError.Lost>().sumOf { it.count }
     val failures = errors

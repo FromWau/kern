@@ -1,6 +1,7 @@
 package com.fromwau.kern.logger
 
 import com.fromwau.kern.logger.test.TestSink
+import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import kotlin.test.AfterTest
@@ -283,6 +284,31 @@ class FlushCloseTest {
     }
 
     @Test
+    fun `every close after a removed sink's close failed reports that failure and its loss`() = runTest {
+        val unclosable = SinkError.Dropped(Thrown(IllegalStateException("close refused")))
+        val sink = object : LogSink {
+            override val name = "unclosable"
+            override val onFailure = SinkFailure.Drop(backoff = Duration.ZERO)
+
+            override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> =
+                if (entry.message == "lost") Err(refused) else Ok(Unit)
+
+            override fun close(): EmptyResult<SinkError> = Err(unclosable)
+        }
+        val installed = logger.addOrFail(sink)
+        logger.tag("app").i { "lost" }
+        eventually { installed.health.value.dropped == 1L }
+        logger.removeOrFail(sink)
+
+        val closed = logger.awaitClosed()
+        eventually { installed.state.value == SinkState.Closed }
+        val closedAgain = logger.awaitClosed()
+
+        assertEquals(installed.closeFailed(unclosable, SinkError.Lost(1)), closed)
+        assertEquals(installed.closeFailed(unclosable, SinkError.Lost(1)), closedAgain)
+    }
+
+    @Test
     fun `close reports what a removed sink dropped when it gave up retrying`() = runTest {
         val logger = testLogger(retireTimeout = 200.milliseconds)
         val (sink, installed) = failingSink("stuck", backoff = 20.milliseconds, logger = logger)
@@ -291,7 +317,7 @@ class FlushCloseTest {
         logger.removeOrFail(sink)
         eventually { installed.isDone }
 
-        assertEquals(installed.closeFailed(SinkError.Lost(2)), logger.awaitClosed())
+        assertEquals(installed.closeFailed(refused, SinkError.Lost(2)), logger.awaitClosed())
     }
 
     @Test

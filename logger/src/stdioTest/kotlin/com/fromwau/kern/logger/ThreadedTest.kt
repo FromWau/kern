@@ -943,15 +943,13 @@ class ThreadedTest {
 
         val flushed = withContext(Dispatchers.Default) { logger.flush(300.milliseconds) }
         val closed = withContext(Dispatchers.Default) { logger.close(300.milliseconds) }
-        // While still draining, the old sink repeats its last close's failure; once closed it reports only its losses.
-        eventually { oldInstalled.state.value == SinkState.Closed }
         val closedAgain = withContext(Dispatchers.Default) { logger.close(300.milliseconds) }
         release.open()
         logger.removeAll()
 
         assertEquals(Ok(Flushed.StillQueued(mapOf("file" to Pending.GaveUp(3, refused)))), flushed)
         assertEquals(Err(CloseError(mapOf("file" to listOf(SinkError.TimedOut(3))))), closed)
-        val stillWriting = listOf(SinkError.TimedOut(1), SinkError.Lost(2))
+        val stillWriting = listOf(SinkError.TimedOut(1), refused, SinkError.Lost(2))
         assertEquals(Err(CloseError(mapOf("file" to stillWriting))), closedAgain)
     }
 
@@ -1375,7 +1373,7 @@ class ThreadedTest {
         assertTrue(old !== second, "the closed handle came back")
         assertEquals(SinkState.Closed, old.state.value)
         assertEquals(
-            Err(CloseError(mapOf("returning" to listOf(SinkError.Lost(1))))),
+            Err(CloseError(mapOf("returning" to listOf(refused, SinkError.Lost(1))))),
             withContext(Dispatchers.Default) { logger.close(5.seconds) },
         )
     }
