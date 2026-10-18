@@ -12,7 +12,9 @@ Something enters kern once two real projects already need it, never because one 
 | [`result`](result/README.md) | a typed-error `Result<S, E>`: an expected failure is a value, not an exception     | nothing on JVM/Android, serialization-core elsewhere |
 | [`result-test`](result/README.md#testing) | test assertions for a `Result`: `assertSuccess()`, and `assertError { it is … }` checked by the compiler | `result`, kotlin-test |
 | [`result-coroutines`](result-coroutines/README.md) | `suspendCatching`, flows of results (`asResult`, `mapSuccess`) and `parMapResult`, which stops at the first error | `result`, coroutines |
-| [`terminal`](terminal/README.md) | stdout/stderr, tty and width detection, and one ANSI colour policy that honours `NO_COLOR` | `result` |
+| [`terminal`](terminal/README.md) | stdout/stderr, tty and width detection, styled text, and one ANSI colour policy that honours `NO_COLOR` | `result` |
+| [`terminal-test`](terminal-test/README.md) | `RecordingTerminal`: a test terminal that keeps what each stream was sent and fails a stream's writes when told to | `terminal`; at runtime atomicfu |
+| [`terminal-coroutines`](terminal-coroutines/README.md) | `outEach` for a `Flow`: writes it to stdout in chunks of about 64 K characters, stopping at the first failed write to stdout | `terminal`, coroutines |
 | [`logger`](logger/README.md) | a logger that never throws: every destination is a sink with its own queue, so a log call never waits for a sink to write | `result`, coroutines; at runtime `terminal`, atomicfu, datetime, serialization-json |
 | [`logger-file`](logger-file/README.md) | `FileSink`: a log file that survives rotation and deletion and fails with `fs`'s typed `FileError` | `logger`, `fs`; at runtime atomicfu |
 | [`logger-sentry`](logger-sentry/README.md) | `SentrySink`: entries as Sentry events, breadcrumbs and logs, each from its own level | `logger`; at runtime the Sentry KMP SDK |
@@ -39,8 +41,9 @@ dropped `Result` warns; `onSuccess`, `onError`, `bind`, `collect` and the `resul
 [must-use results](result/README.md#must-use-results)).
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64. `logger`, `logger-sentry`
-and `logger-test` add js and wasmJs. `terminal` adds linuxArm64, the four androidNative targets, js, wasmJs and
-wasmWasi. `result` and `result-test` add those and tvOS and watchOS too. Each module's README lists its own.
+and `logger-test` add js and wasmJs. `terminal`, `terminal-test` and `terminal-coroutines` add linuxArm64, the four
+androidNative targets, js, wasmJs and wasmWasi. `result` and `result-test` add those and tvOS and watchOS too. Each
+module's README lists its own.
 
 ## Requirements
 

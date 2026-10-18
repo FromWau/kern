@@ -42,10 +42,16 @@ class TerminalPolicyTest {
     }
 
     @Test
-    fun `any force value other than zero forces colour`() {
-        // "1" is covered above; the rule is "anything but 0", so pin a value that is neither.
+    fun `any force value other than zero or false forces colour`() {
         assertTrue(ansiEnabled(isTty = false, env = envOf(mapOf("CLICOLOR_FORCE" to "2"))))
         assertTrue(ansiEnabled(isTty = false, env = envOf(mapOf("FORCE_COLOR" to "true"))))
+        assertTrue(ansiEnabled(isTty = false, env = envOf(mapOf("FORCE_COLOR" to "yes"))))
+    }
+
+    @Test
+    fun `a force value of false turns colour off like zero`() {
+        assertFalse(ansiEnabled(isTty = false, env = envOf(mapOf("FORCE_COLOR" to "false"))))
+        assertFalse(ansiEnabled(isTty = false, env = envOf(mapOf("CLICOLOR_FORCE" to "false"))))
     }
 
     @Test
@@ -101,11 +107,19 @@ class TerminalPolicyTest {
     }
 
     @Test
+    fun `COLUMNS may carry a leading plus sign`() {
+        assertEquals(100, resolveColumns(envOf(mapOf("COLUMNS" to "+100"))))
+    }
+
+    @Test
     fun `an unset malformed or non positive COLUMNS falls back to eighty`() {
         assertEquals(80, resolveColumns(envOf(emptyMap())))
         assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to ""))))
         assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to "abc"))))
         assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to "0"))))
+        assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to "-5"))))
+        assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to " 100 "))))
+        assertEquals(80, resolveColumns(envOf(mapOf("COLUMNS" to "99999999999"))))
     }
 
     @Test
@@ -119,8 +133,9 @@ class TerminalPolicyTest {
     }
 
     @Test
-    fun `an absent or zero detected width falls back to eighty`() {
+    fun `an absent or non positive detected width falls back to eighty`() {
         assertEquals(80, resolveColumns(envOf(emptyMap()), detected = 0))
+        assertEquals(80, resolveColumns(envOf(emptyMap()), detected = -3))
         assertEquals(80, resolveColumns(envOf(emptyMap()), detected = null))
     }
 }

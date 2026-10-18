@@ -3,22 +3,28 @@ package com.fromwau.kern.terminal
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /** What a platform knows about its own stdio. Policy over these answers lives in [toTerminal], never in an actual. */
 internal class PlatformIo(
     val writeOut: (String) -> Unit,
     val writeErr: (String) -> Unit,
-    // The JVM's only probe covers stdin and stdout together; native asks about stdout alone.
+    /** Whether standard output is a tty. The JVM's only probe covers stdin and stdout together. */
     val isTty: Boolean,
-    // The JVM has no probe for standard error at all, so it keeps the default.
+    /** Whether standard error is a tty. The JVM has no probe for it. */
     val errIsTty: Boolean = false,
     /** Detected width in columns, or null where it cannot be detected: JVM, Android, androidNative, WASI, a browser. */
     val width: Int?,
-    /** Whether the output handle can render ANSI escapes right now. */
+    /** Whether the standard output handle can render ANSI escapes right now. */
     val ansiCapable: Boolean,
+    /** Whether the standard error handle can render ANSI escapes right now. */
+    val errAnsiCapable: Boolean = ansiCapable,
     val env: (String) -> String?,
     /** Why a write to the stream failed, or null while every write to it landed. */
     val failureOf: (Stream) -> WriteError? = { null },
+    /** Calls back once every write so far has landed or failed, for a platform that reports failures later. */
+    val afterPendingWrites: (landed: () -> Unit) -> Unit = { landed -> landed() },
 )
 
 /** The platform's own stdio. Constructing it may configure the terminal (Windows code page and VT mode). */
@@ -27,22 +33,39 @@ internal expect fun platformIo(): PlatformIo
 /**
  * The real terminal for this process, with [ansiEnabled] and [resolveColumns] already applied.
  *
- * On Windows the first call also opts the console into virtual-terminal processing and UTF-8 output, both
- * of which must happen before anything is written, so ask for it early rather than per line.
+ * In a Windows native (mingwX64) build the first call also opts the console into virtual-terminal processing and
+ * UTF-8 output, both of which must happen before anything is written, so ask for it early rather than per line. The
+ * JVM on Windows does neither.
  */
 public fun defaultTerminal(): Terminal = platformIo().toTerminal()
 
 /** Applies the shared width and colour policy to a platform's answers. */
 internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
     override fun out(text: String) = writeOut(text)
+
     override fun err(text: String) = writeErr(text)
+
     override val columns: Int = resolveColumns(env, width)
+
     override val ansi: Boolean = ansiEnabled(isTty, env, ansiCapable)
-    override val errAnsi: Boolean = ansiEnabled(errIsTty, env, ansiCapable)
+
+    override val errAnsi: Boolean = ansiEnabled(errIsTty, env, errAnsiCapable)
+
+    override val outIsTerminal: Boolean = isTty
+
+    override val errIsTerminal: Boolean = errIsTty
+
     override fun writeResult(): EmptyResult<WriteError> =
         (failureOf(Stream.Out) ?: failureOf(Stream.Err))?.let { Err(it) } ?: Ok(Unit)
 
     override fun writeResult(stream: Stream): EmptyResult<WriteError> = failureOf(stream)?.let { Err(it) } ?: Ok(Unit)
+
+    override fun afterWrites(block: (EmptyResult<WriteError>) -> Unit) = afterPendingWrites {
+        super.afterWrites(block)
+    }
+
+    override suspend fun awaitWriteResult(): EmptyResult<WriteError> =
+        suspendCoroutine { answered -> afterPendingWrites { answered.resume(writeResult()) } }
 }
 
 /**
@@ -67,10 +90,10 @@ public fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Bool
     }
 
 /**
- * `FORCE_COLOR` / `CLICOLOR_FORCE` force colour when set to anything other than the opt-out value `"0"`. An empty
- * value counts as not set, as it does for `NO_COLOR`.
+ * `FORCE_COLOR` and `CLICOLOR_FORCE` both force colour when set to anything other than `"0"` or `"false"`. An
+ * empty value counts as not set, as it does for `NO_COLOR`.
  */
-private fun String?.forcesColor(): Boolean = !isNullOrEmpty() && this != "0"
+private fun String?.forcesColor(): Boolean = !isNullOrEmpty() && this != "0" && this != "false"
 
 /** Terminal width: the `COLUMNS` environment variable wins, then the [detected] width, then 80. */
 public fun resolveColumns(env: (String) -> String?, detected: Int? = null): Int =

@@ -8,6 +8,7 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
 import platform.windows.CONSOLE_SCREEN_BUFFER_INFO
 import platform.windows.CP_UTF8
+import platform.windows.DWORD
 import platform.windows.DWORDVar
 import platform.windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING
 import platform.windows.GetConsoleMode
@@ -21,8 +22,11 @@ import platform.windows.SetConsoleOutputCP
 
 // Both console steps must land before the first byte is written, so they run unconditionally here rather
 // than inside a probe the color ladder can skip.
-internal actual fun platformIo(): PlatformIo =
-    nativePlatformIo(width = configureConsoleAndDetectWidth(), ansiCapable = enableVirtualTerminal())
+internal actual fun platformIo(): PlatformIo = nativePlatformIo(
+    width = configureConsoleAndDetectWidth(),
+    ansiCapable = enableVirtualTerminal(STD_OUTPUT_HANDLE),
+    errAnsiCapable = enableVirtualTerminal(STD_ERROR_HANDLE),
+)
 
 // The UTF-8 opt-in rides along because it needs the attached-console handle this loop already finds;
 // without it non-ASCII text is reinterpreted under the box's legacy code page and mojibaked on screen.
@@ -43,10 +47,11 @@ private fun configureConsoleAndDetectWidth(): Int? = memScoped {
     null
 }
 
-// The classic console host renders escape bytes literally until VT processing is opted into per-handle.
+// The classic console host renders escape bytes literally until VT processing is opted into per handle, and a
+// redirected handle is no console at all, so each standard handle answers for itself.
 @OptIn(ExperimentalForeignApi::class)
-private fun enableVirtualTerminal(): Boolean = memScoped {
-    val handle = GetStdHandle(STD_OUTPUT_HANDLE)
+private fun enableVirtualTerminal(stdHandle: DWORD): Boolean = memScoped {
+    val handle = GetStdHandle(stdHandle)
     if (handle == null || handle == INVALID_HANDLE_VALUE) return@memScoped false
     val mode = alloc<DWORDVar>()
     if (GetConsoleMode(handle, mode.ptr) == 0) return@memScoped false

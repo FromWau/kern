@@ -20,12 +20,16 @@ import platform.posix.stdout
 import platform.posix.strerror
 
 /**
- * Stdio shared by every native target; width and ANSI capability are the only per-family answers. A closed
- * pipe on POSIX ends the process with SIGPIPE before anything can ask, unless the program ignores that
+ * Stdio shared by every native target; width and each stream's ANSI capability are the only per-family answers. A
+ * closed pipe on POSIX ends the process with SIGPIPE before anything can ask, unless the program ignores that
  * signal; [PlatformIo.failureOf] reports what remains: a full disk, a closed or unwritable handle.
  */
 @OptIn(ExperimentalForeignApi::class)
-internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
+internal fun nativePlatformIo(
+    width: Int?,
+    ansiCapable: Boolean,
+    errAnsiCapable: Boolean = ansiCapable,
+): PlatformIo {
     val out = StdioSink(stdout, Stream.Out)
     val err = StdioSink(stderr, Stream.Err)
     return PlatformIo(
@@ -35,6 +39,7 @@ internal fun nativePlatformIo(width: Int?, ansiCapable: Boolean): PlatformIo {
         errIsTty = isatty(fileno(stderr)) != 0,
         width = width,
         ansiCapable = ansiCapable,
+        errAnsiCapable = errAnsiCapable,
         env = { getenv(it)?.toKString() },
         failureOf = { if (it == Stream.Out) out.failure else err.failure },
     )
@@ -68,3 +73,8 @@ internal class StdioSink(
     private fun errorOf(errno: Int): WriteError =
         if (errno == EPIPE) WriteError.BrokenPipe(stream) else WriteError.Refused(stream, strerror(errno)?.toKString())
 }
+
+@kotlin.native.concurrent.ThreadLocal
+private val queue = AfterWritesQueue()
+
+internal actual fun afterWritesQueue(): AfterWritesQueue = queue

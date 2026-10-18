@@ -8,8 +8,8 @@ escape sequence. This module answers that once, the same way, on every target.
 
 **Output only.** Reading stdin, asking whether stdin is a pipe, exiting the process and looking up
 environment variables are all outside it, so a program that needs those still keeps its own `expect`
-declarations for them. `ansi` and `errAnsi` are decided partly from whether that *output* handle is a
-terminal, and neither is exposed as a general tty probe.
+declarations for them. `outIsTerminal` and `errIsTerminal` say whether each *output* stream is a terminal, from
+the same probe that decides its colour.
 
 **Targets:** JVM, Android, js, wasmJs, wasmWasi, linuxX64, linuxArm64, mingwX64, macosArm64, iosArm64,
 iosSimulatorArm64, androidNativeArm64, androidNativeX64, androidNativeArm32, androidNativeX86.
@@ -24,14 +24,19 @@ repositories {
 
 dependencies {
     implementation("com.fromwau.kern:terminal:$kernVersion")
+    testImplementation("com.fromwau.kern:terminal-test:$kernVersion")  // RecordingTerminal, for your tests
 }
 ```
 
-KMP consumers put it in `commonMain`. Needs what [every kern module needs](../README.md#requirements).
+KMP consumers put it in `commonMain`, and `terminal-test` in `commonTest`. Everything is in the package
+`com.fromwau.kern.terminal`, so the snippets below start from `import com.fromwau.kern.terminal.*`. Needs what
+[every kern module needs](../README.md#requirements).
 
 ## Writing
 
 ```kotlin
+import com.fromwau.kern.terminal.*
+
 val terminal = defaultTerminal()
 
 terminal.out("hello\n")
@@ -39,63 +44,95 @@ terminal.err("something went wrong\n")
 ```
 
 `defaultTerminal()` is the real process stdout/stderr with the colour and width policy already applied. Ask
-for it once and keep it: on Windows the first call opts the console into virtual-terminal processing and
-UTF-8 output, and both have to happen before anything is written.
+for it once and keep it: in a Windows native (mingwX64) build the first call opts the console into
+virtual-terminal processing and UTF-8 output, and both have to happen before anything is written. The JVM on
+Windows does neither.
 
-`Terminal` is an interface, so a test substitutes its own without touching the process streams:
-
-```kotlin
-class Recorder : Terminal {
-    val written = StringBuilder()
-    override fun out(text: String) { written.append(text) }
-    override fun err(text: String) = Unit
-}
-```
+Each `out` and `err` call is one write to the stream, with no buffering in between. When you write many small
+pieces and speed matters, join them into one string first.
 
 ## Colour
 
 ```kotlin
-val terminal = defaultTerminal()
-
-println((bold + red).render("failed", terminal.ansi))
+terminal.err(red("error: ", bold(path), " is missing\n"))
 ```
 
-`render` takes the decision rather than making it, so nothing in your code branches on colour. Pass
-`terminal.ansi` and a piped run prints plain text on its own. Text you write with `terminal.err` takes
-`terminal.errAnsi` instead, so `2>errors.log` stays plain while standard output is a terminal.
+Invoking a style gives `Styled` text, which turns into escape codes only when a `Terminal` writes it, and only
+when that stream takes colour: `terminal.out` asks `terminal.ansi`, and `terminal.err` asks `terminal.errAnsi`.
+A piped run prints plain text on its own, and `2>errors.log` stays plain while standard output is a terminal.
+
+`out(Styled)` and `err(Styled)` are extension functions. If you import names one by one instead of
+`com.fromwau.kern.terminal.*`, also import `com.fromwau.kern.terminal.out` and `com.fromwau.kern.terminal.err`;
+without them the call fails with "actual type is 'Styled', but 'String' was expected".
 
 The palette is `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `brightBlack`, plus
-`bold`, `dim`, `italic` and `underline`. Combine with `+`. A styled piece may sit inside another, and the text
-after it keeps the outer style.
+`bold`, `dim`, `italic` and `underline`, and `plain`, which adds nothing. Combine styles with `+`:
+`(bold + red)("failed")`. Two colours in one style write both codes in number order, and the terminal shows the
+last, so `red + green` and `green + red` both show green.
+
+- A style takes any mix of strings and `Styled` pieces. Text after a nested piece is written in the outer style
+  again, and an empty piece writes nothing.
+- Each line is closed on its own: the reset goes before every line break and the next line opens its styles again,
+  so `app --color=always | head -1` leaves no colour behind, and line breaks alone are written without codes.
+- Join pieces with `+`: `red("a") + " b"` is `Styled`. But `"a " + red("b")` is a plain `String`, because a
+  `String` on the left of `+` wins, so start with the styled piece or write `plain("a ", red("b"))`.
+- `length`, `padEnd` and `padStart` count the text without the codes a style adds: `red(name).padEnd(12)`.
+  They count characters as Kotlin's `String.length` does, so columns line up for text whose every character takes
+  one column. A CJK character counts one but takes two columns, a combining accent counts one but takes none, and
+  emoji vary, so such text does not line up. A line break counts as one character too, so
+  `red("a\n").padEnd(4)` puts the padding after the break: pad first, then add the newline.
+- `toString()` and a string template give the plain text, never escape codes.
+- An escape code you put inside a `String` piece yourself is written unchanged. That is the one way to write a code
+  the palette does not have. `length` and padding count its characters like any other text.
+
+To hand styled text to something that is not a `Terminal`, `render(ansi)` gives the string with or without codes.
+
+**Overriding the decision.** For a `--color=always|never` option, wrap the terminal:
+
+```kotlin
+val terminal = when (colorOption) {
+    "always" -> defaultTerminal().withAnsi(out = true, err = true)
+    "never" -> defaultTerminal().withAnsi(out = false, err = false)
+    else -> defaultTerminal()
+}
+```
+
+`withAnsi` changes `ansi` and `errAnsi` only. Writes, width and failures still come from the terminal it wraps.
 
 **What `ansi` actually decides**, highest precedence first:
 
 | rule | effect |
 |---|---|
 | `NO_COLOR` set and non-empty | off, always ([no-color.org](https://no-color.org)) |
-| `FORCE_COLOR` / `CLICOLOR_FORCE` set, not empty and not `0` | on, even when piped |
+| `FORCE_COLOR` / `CLICOLOR_FORCE` set, not empty, not `0` and not `false` | on, even when piped. Any other value forces, `yes` included |
 | handle cannot render escapes | off |
 | `CLICOLOR=0` | off |
 | `TERM=dumb` | off |
 | otherwise | on when that stream is a real tty |
 
+Forcing is the one rule that ignores what the handle can render, which is what makes `FORCE_COLOR=1` work
+for CI logs that are captured rather than displayed.
+
 `ansi` answers for standard output and `errAnsi` for standard error, each from its own stream, as
 `ls --color=auto` and git do: a piped stdout loses colour while a stderr still on the terminal keeps it.
 
-**The JVM cannot ask about one stream.** Its only probe, `System.console().isTerminal()`, is true only when
-stdin *and* stdout are both terminals, so `app < input.txt` prints plain text on the JVM though stdout is a
-terminal, and `errAnsi` is on only when forced. Set `FORCE_COLOR=1` where that matters. Natively each stream
-is asked with `isatty`, under Node with `isTTY`, and under WASI from the host's file descriptor.
+**The JVM and Android cannot ask about one stream.** The JDK's console probe is true only when stdin and stdout
+are both terminals, so `app < input.txt` prints plain text on the JVM though stdout is a terminal, and `errAnsi`
+is on only when forced. Set `FORCE_COLOR=1` where that matters. Natively each stream is asked with `isatty`, and
+on Windows each handle also has to accept virtual-terminal processing. Under Node it is `isTTY`, and under WASI
+the host's file descriptor.
 
 **A browser console is never coloured.** It shows escape codes as text, and a page has no environment, so not
 even `FORCE_COLOR` turns colour on there. `out` goes to `console.log` and `err` to `console.error`, each call one
 console line, so the newline that ends your text is dropped. Under Node both write to the process streams.
 
-Forcing is the one rung that ignores what the handle can render, which is what makes `FORCE_COLOR=1` work
-for CI logs that are captured rather than displayed.
+**Resolving the environment yourself?** The default terminal uses these two functions, and you can call them with
+your own lookup, such as `{ System.getenv(it) }` or `myEnv::get`:
 
-Resolving the environment yourself instead? `ansiEnabled(isTty, env, supported)` is the same function the
-default terminal uses.
+```kotlin
+fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Boolean = true): Boolean
+fun resolveColumns(env: (String) -> String?, detected: Int? = null): Int
+```
 
 ## Width
 
@@ -105,44 +142,204 @@ Windows and the stream's `columns` under Node, each falling back to stderr when 
 Android, androidNative and WASI cannot detect it, so there only `COLUMNS` sets it. A browser has neither a
 terminal nor an environment, so there the width is always `80`.
 
-`0` is never returned by `defaultTerminal()`, but a hand-written `Terminal` may return it to mean "unknown,
-do not wrap".
+Because of that fallback, a piped stdout still reports stderr's width, so `columns` is no evidence that stdout is a
+terminal. To wrap only for a person reading, ask `outIsTerminal`:
+
+```kotlin
+val width = if (terminal.outIsTerminal) terminal.columns else 0  // 0: do not wrap
+```
+
+`outIsTerminal` comes from the probe that decides `ansi`, and `errIsTerminal` from the one that decides `errAnsi`.
+On the JVM and Android `outIsTerminal` is false whenever stdin is redirected, and `errIsTerminal` is always false.
+
+`resolveColumns` takes `COLUMNS` when it is a whole number above 0 with no spaces around it, so `" 100 "`, `"0"`,
+`"-5"` and a number too large for an `Int` are ignored. A leading `+` is allowed: `COLUMNS=+100` gives 100. Then
+it takes `detected` when that is above 0, and otherwise answers `80`.
 
 ## Failed writes
 
 ```kotlin
-terminal.out(everything)
-when (val written = terminal.writeResult()) {
-    is Result.Success -> return 0
-    is Result.Error -> when (val error = written.error) {
-        is WriteError.BrokenPipe, is WriteError.Unknown -> return BROKEN_PIPE_EXIT
-        is WriteError.Refused -> {
-            val name = if (error.stream == Stream.Out) "standard output" else "standard error"
-            terminal.err("error: cannot write to $name\n")
-            return 1
+import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Result
+import com.fromwau.kern.terminal.*
+
+fun main() {
+    val terminal = defaultTerminal()
+    terminal.out("done\n")
+    terminal.afterWrites { written -> exit(exitCode(terminal, written)) }
+}
+
+fun exitCode(terminal: Terminal, written: EmptyResult<WriteError>): Int =
+    when (written) {
+        is Result.Success -> 0
+        is Result.Error -> when (val error = written.error) {
+            is WriteError.BrokenPipe -> BROKEN_PIPE_EXIT
+            is WriteError.Refused -> cannotWrite(terminal, error.stream, error.detail)
+            is WriteError.Unknown -> cannotWrite(terminal, error.stream, error.detail)
         }
     }
+
+fun cannotWrite(terminal: Terminal, stream: Stream, detail: String?): Int {
+    val name = if (stream == Stream.Out) "standard output" else "standard error"
+    terminal.err("error: cannot write to $name: $detail\n")
+    return 1
 }
 ```
 
-`yourtool | head -1` closes the pipe while you are still writing, and `yourtool > /dev/full` runs out of
-space. Neither throws, so a program that never asks reports success having written nothing. `writeResult()`
-asks, and `BROKEN_PIPE_EXIT` is the shell's 128+SIGPIPE convention for reporting a pipe the reader closed.
+`exit` is yours, since ending the process is outside this module:
 
-`writeResult()` reports standard output's failure before standard error's. To ask about one stream alone, call
-`writeResult(Stream.Out)` or `writeResult(Stream.Err)`: a failure on the other stream neither hides it nor stands
-in for it.
+```kotlin
+// commonMain
+expect fun exit(code: Int): Nothing
+
+// jvmMain, androidMain and nativeMain
+actual fun exit(code: Int): Nothing = exitProcess(code)  // import kotlin.system.exitProcess
+
+// jsMain and wasmJsMain, or webMain for both: under Node (import kotlin.js.ExperimentalWasmJsInterop)
+actual fun exit(code: Int): Nothing {
+    processExit(code)
+    error("process.exit returned")
+}
+
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun processExit(code: Int): Unit = js("process.exit(code)")
+
+// wasmWasiMain (import kotlin.wasm.ExperimentalWasmInterop and kotlin.wasm.WasmImport)
+actual fun exit(code: Int): Nothing {
+    procExit(code)
+    error("proc_exit returned")
+}
+
+@OptIn(ExperimentalWasmInterop::class)
+@WasmImport("wasi_snapshot_preview1", "proc_exit")
+private external fun procExit(code: Int)
+```
+
+Under WASI the host decides what becomes of the code: the Node launcher Kotlin generates for a WASI executable
+ignores it, so the process exits 0 there.
+
+Import kern's `Result`: without it, `Result` is Kotlin's own and the `when` does not compile.
+
+`yourtool | head -1` closes the pipe while you are still writing, and `yourtool > /dev/full` runs out of
+space. Neither throws, so a program that never asks can exit 0 having written nothing. `afterWrites` asks,
+and `BROKEN_PIPE_EXIT` is the shell's 128+SIGPIPE convention for reporting a pipe the reader closed.
+
+`afterWrites` calls your block once, with `writeResult()`, after every write so far has landed or failed. Only Node
+needs the wait: it reports a failed write after the write returns, so `writeResult()` right after writing answers
+success there. Under Node the block runs later, and the pending writes keep the process alive until it does, so
+the block can end the process with nothing left to write. Everywhere else it runs at once, unless you call
+`afterWrites` from inside another block, as [Writing a long output](#writing-a-long-output) describes.
+
+Make `afterWrites` your last call. Code after it runs after the block on the JVM, Android, natively and under WASI,
+but before the block under Node.
+
+Under Node on Linux, a message the block writes, like `cannotWrite`'s, still reaches standard error before the block
+ends the process, also when standard error is a pipe: Node hands it to the pipe at once. Only what the pipe cannot
+take at once is lost, so a message longer than the pipe's 64 KiB can be cut short. Other systems are untested.
+
+Code that already suspends can ask `awaitWriteResult()` instead, which waits the same way:
+
+```kotlin
+suspend fun finish(terminal: Terminal): Int = exitCode(terminal, terminal.awaitWriteResult())
+```
+
+`writeResult()`, `afterWrites` and `awaitWriteResult()` report standard output's failure before standard error's.
+To ask about one stream alone, call `writeResult(Stream.Out)` or `writeResult(Stream.Err)`: on `defaultTerminal()`
+and `RecordingTerminal`, a failure on the other stream neither hides it nor stands in for it. A terminal of your own
+that overrides only `writeResult()` reports at most the stream that one names.
 
 | failure | Linux and macOS | WASI | JVM and Android | Node |
 |---|---|---|---|---|
-| the reader closed the pipe | the process ends with `SIGPIPE` first, or `BrokenPipe` if you ignore that signal | `BrokenPipe` | `Unknown` | `BrokenPipe`, once Node reports it |
-| a full disk, a closed handle | `Refused`, with the system's message | `Refused`, with the WASI error number | `Unknown`, with the JDK's message | `Unknown` |
+| the reader closed the pipe | the process ends with `SIGPIPE` first, or `BrokenPipe` if you ignore that signal | `BrokenPipe` | `Unknown` | `BrokenPipe`, from `afterWrites` |
+| a full disk | `Refused`, with the system's message | `Refused`, with the WASI error number | `Unknown`, with the JDK's message | `Unknown`, with Node's message, from `afterWrites` |
+| a closed handle (`>&-`, `2>&-`) | `Refused`, with the system's message | `Refused`, with the WASI error number | `Unknown`, with the JDK's message | success: Node opens `/dev/null` in its place at startup, for standard output and standard error alike |
 
-The JVM raises every failed write as the same exception, without the system's error code, so it cannot
-tell a closed pipe from a full disk. Node reports a closed pipe as an error on the stream just after the write
-returns. The process keeps running, and `writeResult()` answers `BrokenPipe` for that stream from then on. A
-browser console write cannot fail. On Windows the answer follows the C runtime's error code, which is untested.
-Each error names its `stream`. A stream writes nothing after its first failure.
+The JVM raises every failed write as the same exception, without the system's error code, so it cannot tell a
+closed pipe from a full disk. `yourtool | head -1` reaches the `Unknown` branch there, which is why the snippet
+above prints the failure and exits 1 rather than guessing. Its `detail` is the JDK's message, in the system's language,
+and its `cause` is the `IOException` the JDK threw, for you to inspect or log. Elsewhere `cause` is null. Under
+Node the process keeps running after a closed pipe. A browser console write cannot fail. Under WASI only a write the
+host refuses outright is tested; the closed pipe and full disk answers are untested. On Windows the answer follows
+the C runtime's error code, which is untested. Each error names its `stream`. A stream writes nothing after its
+first failure.
+
+### Writing a long output
+
+`outEach` writes a sequence of pieces, each as given, and stops soon after the reader goes away:
+
+```kotlin
+fun main() {
+    val terminal = defaultTerminal()
+    val lines = (1..10_000_000).asSequence().map { "line $it\n" }
+    terminal.outEach(lines) { written -> exit(exitCode(terminal, written)) }
+}
+```
+
+It joins the pieces into writes of about 64 K characters, and a longer piece is written alone, never split. After
+each write it waits as `afterWrites` does, and it takes no more pieces once a write to standard output has failed.
+A failed standard error does not stop the output and is reported at the end. Your block gets what `afterWrites`
+would pass: success, or standard output's failure before standard error's. On the JVM a closed pipe arrives as
+`Unknown`, so `exitCode` prints the error and exits 1. Code that suspends can write a `Flow` the same way with
+`outEach` from [`kern:terminal-coroutines`](../terminal-coroutines/README.md).
+
+A call to `afterWrites` from inside a block does not run inside it: its block runs once the running one returns. A
+loop that writes and calls `afterWrites` again from its block therefore keeps a flat stack however long it runs, as
+`outEach` does. This holds per thread, for every terminal: inside a block, another terminal's `afterWrites` waits too.
+Waiting blocks run in the order they were added. If a block throws, the exception reaches the outermost
+`afterWrites` call (under Node it is uncaught), and the blocks still waiting are dropped.
+
+### Writing your last message after a closed pipe
+
+On Linux and macOS a write to a closed pipe ends the process with `SIGPIPE` before `writeResult()` can answer.
+That is usually what you want: `yourtool | head -1` stops quietly. kern does not change it. Ignore the signal
+yourself when you still need to act after the pipe closes, such as writing a last message to stderr or choosing
+your own exit code:
+
+```kotlin
+import kotlinx.cinterop.ExperimentalForeignApi
+import platform.posix.SIGPIPE
+import platform.posix.SIG_IGN
+import platform.posix.signal
+
+@OptIn(ExperimentalForeignApi::class)
+fun ignoreBrokenPipes() {
+    signal(SIGPIPE, SIG_IGN)
+}
+```
+
+Call it first thing in `main`. Windows has no `SIGPIPE`, so with a mingw target this goes in `linuxMain`,
+`appleMain` or `androidNativeMain` rather than `nativeMain`. Writes to the closed pipe then fail as `BrokenPipe`.
+
+## Testing
+
+`RecordingTerminal`, from `kern:terminal-test`, keeps what each stream was sent and fails a stream's writes when
+you tell it to, with the error you build:
+
+```kotlin
+import com.fromwau.kern.terminal.test.RecordingTerminal
+
+val terminal = RecordingTerminal()
+terminal.failWith(WriteError.BrokenPipe(Stream.Out))
+terminal.failWith(WriteError.Refused(Stream.Err, "disk full"))
+```
+
+`WriteError.Unknown(Stream.Out, "No space left on device")` builds the third kind; its `cause` is optional, as it
+is null outside the JVM and Android. See the [terminal-test README](../terminal-test/README.md).
+
+`Terminal` is an interface, so a terminal of your own works too:
+
+```kotlin
+class Recorder : Terminal {
+    val written = StringBuilder()
+    override fun out(text: String) { written.append(text) }
+    override fun err(text: String) = Unit
+}
+```
+
+One that overrides only `out` and `err` has a `columns` of `0`, `ansi`, `errAnsi`, `outIsTerminal` and
+`errIsTerminal` false, and every write succeeds: no wrapping and no escape codes. To report failures, override
+`writeResult()`. `writeResult(stream)`, `afterWrites` and `awaitWriteResult()` read it, so overriding only
+`writeResult(stream)` leaves `writeResult()` answering success.
 
 ## License
 

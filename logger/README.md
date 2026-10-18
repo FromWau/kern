@@ -653,7 +653,7 @@ alongside `journalctl`. JSON uses UTC with nine fraction digits, so its stamps s
 when the stream is a terminal, and the environment overrides that, first match wins:
 
 1. `NO_COLOR` set and not empty: no colour.
-2. `FORCE_COLOR` or `CLICOLOR_FORCE` set, not empty and not `0`: colour, even into a pipe or under `TERM=dumb`.
+2. `FORCE_COLOR` or `CLICOLOR_FORCE` set, not empty, not `0` and not `false`: colour, even into a pipe or under `TERM=dumb`.
 3. `CLICOLOR=0` or `TERM=dumb`: no colour.
 
 `ALWAYS` colours a pipe too, which CI logs usually want, and `NEVER` never colours. Each stream is
@@ -664,7 +664,8 @@ are never coloured. The rules are [`kern:terminal`'s](../terminal/README.md#colo
 stdin is a terminal too, and standard error only under `FORCE_COLOR`. Console lines go to the process's own file
 descriptors, so `System.setOut` does not capture them: test what you log with a sink of your own.
 
-**Windows** consoles are switched to virtual-terminal processing and UTF-8 before the first console line.
+**Windows** consoles are switched to virtual-terminal processing and UTF-8 before the first console line in a
+native (mingwX64) build. The JVM on Windows does neither.
 
 **A closed pipe ends a native process.** On Linux and macOS, once the reader of a pipe goes away
 (`app | head -1`), the next console line ends the process with `SIGPIPE`. To keep running, ignore `SIGPIPE` at

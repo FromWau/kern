@@ -24,6 +24,16 @@ class PlatformWasiTest {
     }
 
     @Test
+    fun `a write the host refuses is refused with its errno`() {
+        // WASI's EBADF: the host has no descriptor 99.
+        val stream = WasiStream(99, Stream.Out)
+
+        stream.write("lost\n")
+
+        assertEquals(WriteError.Refused(Stream.Out, "WASI errno 8"), stream.failure)
+    }
+
+    @Test
     fun `the environment is read from the host`() {
         assertNotNull(platformIo().env("PATH"))
     }

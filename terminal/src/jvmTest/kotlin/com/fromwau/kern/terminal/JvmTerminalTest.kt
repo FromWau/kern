@@ -1,14 +1,18 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import kotlinx.coroutines.test.runTest
 import java.io.IOException
 import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 private class FailingStream : OutputStream() {
-    override fun write(b: Int): Unit = throw IOException("No space left on device")
+    val thrown = IOException("No space left on device")
+
+    override fun write(b: Int): Unit = throw thrown
 }
 
 private class WorkingStream : OutputStream() {
@@ -30,17 +34,25 @@ class JvmTerminalTest {
     }
 
     @Test
-    fun `a failed write is Unknown with the platform's message`() {
-        val terminal = terminal(FailingStream(), WorkingStream())
+    fun `a failed write is Unknown with the platform's message and exception`() {
+        val sink = FailingStream()
+        val terminal = terminal(sink, WorkingStream())
         terminal.out("doomed")
-        assertEquals(Err(WriteError.Unknown(Stream.Out, "No space left on device")), terminal.writeResult())
+        assertEquals(
+            Err(WriteError.Unknown(Stream.Out, "No space left on device", sink.thrown)),
+            terminal.writeResult(),
+        )
     }
 
     @Test
     fun `a fresh terminal is not tainted by another terminal's failure`() {
-        val broken = terminal(FailingStream(), WorkingStream())
+        val sink = FailingStream()
+        val broken = terminal(sink, WorkingStream())
         broken.out("doomed")
-        assertEquals(Err(WriteError.Unknown(Stream.Out, "No space left on device")), broken.writeResult())
+        assertEquals(
+            Err(WriteError.Unknown(Stream.Out, "No space left on device", sink.thrown)),
+            broken.writeResult(),
+        )
 
         val healthy = terminal(WorkingStream(), WorkingStream())
         healthy.out("fine")
@@ -49,10 +61,14 @@ class JvmTerminalTest {
 
     @Test
     fun `a failed write to standard error names standard error`() {
-        val terminal = terminal(WorkingStream(), FailingStream())
+        val sink = FailingStream()
+        val terminal = terminal(WorkingStream(), sink)
         terminal.out("fine")
         terminal.err("doomed")
-        assertEquals(Err(WriteError.Unknown(Stream.Err, "No space left on device")), terminal.writeResult())
+        assertEquals(
+            Err(WriteError.Unknown(Stream.Err, "No space left on device", sink.thrown)),
+            terminal.writeResult(),
+        )
     }
 
     @Test
@@ -61,5 +77,28 @@ class JvmTerminalTest {
         terminal.err("doomed first")
         terminal.out("doomed")
         assertEquals(Stream.Out, (terminal.writeResult() as Err).error.stream)
+    }
+
+    @Test
+    fun `awaiting the write result answers what writeResult answers`() = runTest {
+        val sink = FailingStream()
+        val terminal = terminal(sink, WorkingStream())
+        terminal.out("doomed")
+        assertEquals(
+            Err(WriteError.Unknown(Stream.Out, "No space left on device", sink.thrown)),
+            terminal.awaitWriteResult(),
+        )
+        assertEquals(terminal.writeResult(), terminal.awaitWriteResult())
+    }
+
+    @Test
+    fun `the block after writes runs at once with the write result`() {
+        val terminal = terminal(FailingStream(), WorkingStream())
+        terminal.out("doomed")
+        var answer: EmptyResult<WriteError>? = null
+
+        terminal.afterWrites { answer = it }
+
+        assertEquals(terminal.writeResult(), answer)
     }
 }

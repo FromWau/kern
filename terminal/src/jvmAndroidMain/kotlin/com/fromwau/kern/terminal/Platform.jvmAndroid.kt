@@ -42,7 +42,11 @@ internal class StreamSink(
         } catch (e: IOException) {
             // The JDK raises every failed write as a plain IOException, with no errno to tell a closed pipe
             // from a full disk.
-            failure = WriteError.Unknown(stream, e.message)
+            failure = WriteError.Unknown(stream, e.message, e)
         }
     }
 }
+
+private val queues = ThreadLocal.withInitial { AfterWritesQueue() }
+
+internal actual fun afterWritesQueue(): AfterWritesQueue = queues.get()

@@ -63,6 +63,7 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":logger-test"))
             implementation(project(":result-test"))
+            implementation(project(":terminal-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
     }

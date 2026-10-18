@@ -1,10 +1,13 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private fun io(
@@ -14,8 +17,10 @@ private fun io(
     errIsTty: Boolean = false,
     width: Int? = null,
     ansiCapable: Boolean = true,
+    errAnsiCapable: Boolean = ansiCapable,
     env: Map<String, String> = emptyMap(),
     failureOf: (Stream) -> WriteError? = { null },
+    afterPendingWrites: (() -> Unit) -> Unit = { it() },
 ) = PlatformIo(
     writeOut = out,
     writeErr = err,
@@ -23,8 +28,10 @@ private fun io(
     errIsTty = errIsTty,
     width = width,
     ansiCapable = ansiCapable,
+    errAnsiCapable = errAnsiCapable,
     env = { env[it] },
     failureOf = failureOf,
+    afterPendingWrites = afterPendingWrites,
 )
 
 /**
@@ -57,6 +64,17 @@ class PlatformIoTest {
     }
 
     @Test
+    fun `each stream says whether it is a terminal from the probe that decides its colour`() {
+        val errRedirected = io(isTty = true, errIsTty = false).toTerminal()
+        assertTrue(errRedirected.outIsTerminal)
+        assertFalse(errRedirected.errIsTerminal)
+
+        val outRedirected = io(isTty = false, errIsTty = true).toTerminal()
+        assertFalse(outRedirected.outIsTerminal)
+        assertTrue(outRedirected.errIsTerminal)
+    }
+
+    @Test
     fun `the detected width is used but COLUMNS still wins`() {
         assertEquals(120, io(width = 120).toTerminal().columns)
         assertEquals(40, io(width = 120, env = mapOf("COLUMNS" to "40")).toTerminal().columns)
@@ -72,6 +90,17 @@ class PlatformIoTest {
     fun `a handle that cannot render colour gates it unless colour is forced`() {
         assertFalse(io(isTty = true, ansiCapable = false).toTerminal().ansi)
         assertTrue(io(isTty = false, ansiCapable = false, env = mapOf("FORCE_COLOR" to "1")).toTerminal().ansi)
+    }
+
+    @Test
+    fun `each stream's handle decides whether that stream can render colour`() {
+        val outRedirected = io(isTty = true, errIsTty = true, ansiCapable = false, errAnsiCapable = true).toTerminal()
+        assertFalse(outRedirected.ansi)
+        assertTrue(outRedirected.errAnsi)
+
+        val errRedirected = io(isTty = true, errIsTty = true, ansiCapable = true, errAnsiCapable = false).toTerminal()
+        assertTrue(errRedirected.ansi)
+        assertFalse(errRedirected.errAnsi)
     }
 
     @Test
@@ -96,5 +125,35 @@ class PlatformIoTest {
         assertEquals(Err(failures.getValue(Stream.Err)), both.writeResult(Stream.Err))
         assertEquals(Ok(Unit), errOnly.writeResult(Stream.Out))
         assertEquals(Err(failures.getValue(Stream.Err)), errOnly.writeResult(Stream.Err))
+    }
+
+    @Test
+    fun `awaiting the write result waits for the platform and then answers`() = runTest {
+        var failure: WriteError? = null
+        val terminal = io(
+            failureOf = { failure },
+            afterPendingWrites = { landed ->
+                failure = WriteError.Unknown(Stream.Out, "ENOSPC")
+                landed()
+            },
+        ).toTerminal()
+
+        assertEquals(Ok(Unit), terminal.writeResult())
+        assertEquals(Err(WriteError.Unknown(Stream.Out, "ENOSPC")), terminal.awaitWriteResult())
+    }
+
+    @Test
+    fun `the block after writes waits for the platform and gets the answer it has then`() {
+        var failure: WriteError? = null
+        var landed: () -> Unit = {}
+        val terminal = io(failureOf = { failure }, afterPendingWrites = { landed = it }).toTerminal()
+        var answer: EmptyResult<WriteError>? = null
+
+        terminal.afterWrites { answer = it }
+        assertNull(answer)
+
+        failure = WriteError.Unknown(Stream.Out, "ENOSPC")
+        landed()
+        assertEquals(Err(WriteError.Unknown(Stream.Out, "ENOSPC")), answer)
     }
 }

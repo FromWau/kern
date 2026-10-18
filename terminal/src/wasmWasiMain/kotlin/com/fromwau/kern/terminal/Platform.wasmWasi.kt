@@ -27,7 +27,7 @@ internal actual fun platformIo(): PlatformIo {
 }
 
 /** Writes to [fd] at once, keeps the first write the host refused, and writes nothing after it. */
-private class WasiStream(private val fd: Int, private val stream: Stream) {
+internal class WasiStream(private val fd: Int, private val stream: Stream) {
     var failure: WriteError? = null
         private set
 
@@ -114,3 +114,7 @@ private const val FDSTAT_SIZE = 24
 private const val FILETYPE_CHARACTER_DEVICE: Byte = 2
 private const val RIGHT_FD_SEEK = 1L shl 2
 private const val RIGHT_FD_TELL = 1L shl 5
+
+private val queue = AfterWritesQueue()
+
+internal actual fun afterWritesQueue(): AfterWritesQueue = queue

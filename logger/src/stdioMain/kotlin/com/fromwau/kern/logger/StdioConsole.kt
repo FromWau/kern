@@ -6,13 +6,17 @@ import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.errorOrNull
 import com.fromwau.kern.terminal.Stream
 import com.fromwau.kern.terminal.Style
+import com.fromwau.kern.terminal.Styled
 import com.fromwau.kern.terminal.Terminal
 import com.fromwau.kern.terminal.blue
 import com.fromwau.kern.terminal.bold
 import com.fromwau.kern.terminal.brightBlack
 import com.fromwau.kern.terminal.defaultTerminal
+import com.fromwau.kern.terminal.err
+import com.fromwau.kern.terminal.out
 import com.fromwau.kern.terminal.red
 import com.fromwau.kern.terminal.white
+import com.fromwau.kern.terminal.withAnsi
 import com.fromwau.kern.terminal.yellow
 
 /**
@@ -32,11 +36,12 @@ internal fun streamWriter(
     terminal: Terminal = console,
 ): (LogEntry, SinkConfig) -> EmptyResult<SinkError> {
     val localClock by lazy(LazyThreadSafetyMode.PUBLICATION) { systemLocalClock() }
+    val inColorMode by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        terminal.withAnsi(out = colors(format, color, terminal.ansi), err = colors(format, color, terminal.errAnsi))
+    }
     return { entry, config ->
-        val line = entry.render(format, localClock, config.timestamp)
-        val terminalTakesColor = if (stream == Stream.Out) terminal.ansi else terminal.errAnsi
-        val text = colorize(line, entry.level, enabled = colors(format, color, terminalTakesColor)) + "\n"
-        if (stream == Stream.Out) terminal.out(text) else terminal.err(text)
+        val line = colorize(entry.render(format, localClock, config.timestamp), entry.level) + "\n"
+        if (stream == Stream.Out) inColorMode.out(line) else inColorMode.err(line)
         val failure = terminal.writeResult(stream).errorOrNull()
         if (failure != null) Err(SinkError.Dropped(failure)) else Ok(Unit)
     }
@@ -69,5 +74,5 @@ private val LogLevel.style: Style
         LogLevel.WTF -> bold + red
     }
 
-/** Colours [line] for its severity, or returns it untouched when [enabled] is false. */
-internal fun colorize(line: String, level: LogLevel, enabled: Boolean): String = level.style.render(line, enabled)
+/** [line] in the colour of its severity. */
+internal fun colorize(line: String, level: LogLevel): Styled = level.style(line)

@@ -22,6 +22,24 @@ fun KotlinMultiplatformExtension.kernLoggerTargets() {
 }
 
 /**
+ * kern:terminal's targets on top of the kern-module convention's, which kern:terminal-test shares: every target a
+ * command-line program may run on. tvOS and watchOS have none.
+ */
+fun KotlinMultiplatformExtension.kernTerminalTargets() {
+    linuxArm64()
+    androidNativeArm64()
+    androidNativeX64()
+    androidNativeArm32()
+    androidNativeX86()
+
+    kernWebTargets()
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmWasi {
+        nodejs()
+    }
+}
+
+/**
  * Every non-deprecated target on top of the kern-module convention's: kern:result, the base any kern module builds
  * on, and kern:result-test, which every module's tests use.
  */

@@ -1,10 +1,11 @@
 package com.fromwau.kern.logger
 
-import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.terminal.Stream
-import com.fromwau.kern.terminal.Terminal
+import com.fromwau.kern.terminal.Styled
 import com.fromwau.kern.terminal.WriteError
+import com.fromwau.kern.terminal.out
+import com.fromwau.kern.terminal.test.RecordingTerminal
 import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,6 +15,8 @@ import kotlin.time.Instant
 
 // Named zones and ANSI colour: JS and Wasm need a zone database for the first and never print the second.
 class StdioRenderingTest {
+
+    private fun coloured(text: Styled): String = RecordingTerminal(ansi = true).also { it.out(text) }.out
 
     private val entry = LogEntry(
         timestamp = Instant.parse("2026-08-11T12:34:56.789Z"),
@@ -33,16 +36,44 @@ class StdioRenderingTest {
 
     @Test
     fun `colorize leaves the line alone when colour is disabled`() {
-        assertEquals("plain line", colorize("plain line", LogLevel.ERROR, enabled = false))
+        val terminal = RecordingTerminal(ansi = false)
+        terminal.out(colorize("plain line", LogLevel.ERROR))
+        assertEquals("plain line", terminal.out)
     }
 
     @Test
     fun `colorize wraps each severity in its own colour`() {
         val esc = Char(27)
-        assertEquals("$esc[31mboom$esc[0m", colorize("boom", LogLevel.ERROR, enabled = true))
-        assertEquals("$esc[33mcareful$esc[0m", colorize("careful", LogLevel.WARN, enabled = true))
+        assertEquals("$esc[31mboom$esc[0m", coloured(colorize("boom", LogLevel.ERROR)))
+        assertEquals("$esc[33mcareful$esc[0m", coloured(colorize("careful", LogLevel.WARN)))
         // VERBOSE is the bright-black/grey slot, distinct from the plain black in the palette.
-        assertEquals("$esc[90mnoise$esc[0m", colorize("noise", LogLevel.VERBOSE, enabled = true))
+        assertEquals("$esc[90mnoise$esc[0m", coloured(colorize("noise", LogLevel.VERBOSE)))
+    }
+
+    @Test
+    fun `a console line takes colour from its own stream under AUTO`() {
+        val esc = Char(27)
+        val terminal = RecordingTerminal(ansi = false, errAnsi = true)
+
+        val _ = streamWriter(Stream.Out, LogFormat.TEXT, ColorMode.AUTO, terminal)(entry, SinkConfig())
+        val _ = streamWriter(Stream.Err, LogFormat.TEXT, ColorMode.AUTO, terminal)(entry, SinkConfig())
+
+        assertFalse(esc in terminal.out)
+        assertTrue(terminal.err.startsWith("$esc[37m"))
+        assertTrue(terminal.err.endsWith("scan complete$esc[0m\n"))
+    }
+
+    @Test
+    fun `a console line follows ALWAYS and NEVER whatever the terminal says`() {
+        val esc = Char(27)
+        val noColour = RecordingTerminal()
+        val colour = RecordingTerminal(ansi = true)
+
+        val _ = streamWriter(Stream.Out, LogFormat.TEXT, ColorMode.ALWAYS, noColour)(entry, SinkConfig())
+        val _ = streamWriter(Stream.Out, LogFormat.TEXT, ColorMode.NEVER, colour)(entry, SinkConfig())
+
+        assertTrue(noColour.out.startsWith("$esc[37m"))
+        assertFalse(esc in colour.out)
     }
 
     @Test
@@ -60,15 +91,8 @@ class StdioRenderingTest {
             Stream.Out to WriteError.BrokenPipe(Stream.Out),
             Stream.Err to WriteError.Refused(Stream.Err, "No space left on device"),
         )
-        val bothFailed = object : Terminal {
-            override fun out(text: String) = Unit
-
-            override fun err(text: String) = Unit
-
-            override fun writeResult(): EmptyResult<WriteError> = Err(failures.getValue(Stream.Out))
-
-            override fun writeResult(stream: Stream): EmptyResult<WriteError> = Err(failures.getValue(stream))
-        }
+        val bothFailed = RecordingTerminal()
+        failures.values.forEach { bothFailed.failWith(it) }
         val write = streamWriter(Stream.Err, LogFormat.TEXT, ColorMode.NEVER, bothFailed)
 
         assertEquals(Err(SinkError.Dropped(failures.getValue(Stream.Err))), write(entry, SinkConfig()))

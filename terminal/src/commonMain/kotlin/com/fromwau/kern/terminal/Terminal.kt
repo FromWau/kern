@@ -11,8 +11,8 @@ import com.fromwau.kern.result.errorOrNull
 public const val BROKEN_PIPE_EXIT: Int = 128 + 13
 
 /**
- * Where text goes. [defaultTerminal] hands you the process's real stdout/stderr; implement this yourself to
- * capture output instead, which is how a test drives a program without touching the process streams:
+ * Where text goes. [defaultTerminal] hands you the process's real stdout/stderr. In a test, use `RecordingTerminal`
+ * from `kern:terminal-test`, or implement this yourself:
  *
  * ```kotlin
  * class Recorder : Terminal {
@@ -22,8 +22,10 @@ public const val BROKEN_PIPE_EXIT: Int = 128 + 13
  * }
  * ```
  *
- * [columns] and [ansi] default to "unknown, assume neither", which is the safe reading for a capture like
- * the one above: no wrapping and no escape codes unless something says otherwise.
+ * A terminal of your own that overrides only [out] and [err] has a [columns] of 0, [ansi], [errAnsi], [outIsTerminal]
+ * and [errIsTerminal] false, and every write succeeds: no wrapping and no escape codes unless something says
+ * otherwise. To report failures, override [writeResult]; the per-stream [writeResult], [afterWrites] and
+ * [awaitWriteResult] read it.
  */
 public interface Terminal {
     /** Writes [text] to standard output. No newline is added, so include one when you want one. */
@@ -40,20 +42,34 @@ public interface Terminal {
 
     /**
      * Whether ANSI colour is appropriate for standard error right now, decided like [ansi] but for that stream,
-     * so `2>file` stays plain while standard output is a terminal. The JVM cannot ask whether standard error is a
-     * terminal, so there it is true only when `FORCE_COLOR` or `CLICOLOR_FORCE` asks for colour.
+     * so `2>file` stays plain while standard output is a terminal. The JVM and Android cannot ask whether standard
+     * error is a terminal, so there it is true only when `FORCE_COLOR` or `CLICOLOR_FORCE` asks for colour.
      */
     public val errAnsi: Boolean get() = false
+
+    /**
+     * Whether standard output is a terminal, from the probe that decides [ansi]. Use it for layout, as in
+     * `if (terminal.outIsTerminal) terminal.columns else 0`: [columns] falls back to standard error's width when
+     * standard output is piped, so it is no evidence that standard output is a terminal. On the JVM and Android the
+     * only probe answers for standard input and output together, so a piped standard input makes it false.
+     */
+    public val outIsTerminal: Boolean get() = false
+
+    /**
+     * Whether standard error is a terminal, from the probe that decides [errAnsi]. The JVM and Android cannot ask, so
+     * there it is always false.
+     */
+    public val errIsTerminal: Boolean get() = false
 
     /**
      * Whether every write so far reached its destination, or why one did not: standard output's failure before
      * standard error's. A stream writes nothing after its first failure. Ask after writing instead of reporting a
      * false success. A [WriteError.BrokenPipe] is the reader's choice and is usually reported through
      * [BROKEN_PIPE_EXIT] alone; a [WriteError.Refused] lost output the user expected. Linux, macOS and WASI tell
-     * the two apart, and the JVM answers [WriteError.Unknown] for both. Under Node a closed pipe is reported as
-     * [WriteError.BrokenPipe] once Node signals it, just after the write returns, and the process keeps running;
-     * any other failure is [WriteError.Unknown]. The default success is right for any terminal whose writes cannot
-     * fail quietly.
+     * the two apart, and the JVM answers [WriteError.Unknown] for both. Node reports a failure only after the write
+     * returns, so there ask [afterWrites] or [awaitWriteResult] instead. The default success is right for any
+     * terminal whose writes cannot fail quietly; a terminal that can fail overrides this one, and the per-stream
+     * [writeResult] reads it.
      */
     public fun writeResult(): EmptyResult<WriteError> = Ok(Unit)
 
@@ -65,6 +81,35 @@ public interface Terminal {
         val failure = writeResult().errorOrNull()
         return if (failure != null && failure.stream == stream) Err(failure) else Ok(Unit)
     }
+
+    /**
+     * [writeResult], once every write so far has landed or failed. Under Node a failed write is reported after it
+     * returns, so [writeResult] right after writing answers success, and this waits for Node's answer instead: a
+     * closed pipe is [WriteError.BrokenPipe] and any other failure [WriteError.Unknown]. Everywhere else a write has
+     * landed or failed when it returns, so this answers at once. Code that does not suspend calls [afterWrites].
+     */
+    public suspend fun awaitWriteResult(): EmptyResult<WriteError> = writeResult()
+
+    /**
+     * Calls [block] once with [writeResult], once every write so far has landed or failed: the form of
+     * [awaitWriteResult] for code that does not suspend, such as a Kotlin/Native `main`.
+     *
+     * ```kotlin
+     * terminal.afterWrites { written -> exitProcess(if (written is Result.Success) 0 else 1) }
+     * ```
+     *
+     * Make it your last call. On the JVM, Android, Kotlin/Native and WASI [block] runs before this returns, so code
+     * after the call runs after [block]. Under Node [block] runs later, from Node's event loop, once Node has answered
+     * every write made before this call, so code after the call runs first. Those writes keep the process alive until
+     * then, and nothing is left to write when [block] ends the process.
+     *
+     * A call from inside a block never runs inside it: its block runs once the running block returns. A loop that
+     * writes a chunk and calls this again from its block therefore keeps a flat stack however many chunks it writes.
+     * What a block throws reaches the outermost call, or is uncaught under Node, and the blocks still waiting on that
+     * thread are dropped.
+     */
+    public fun afterWrites(block: (EmptyResult<WriteError>) -> Unit): Unit =
+        afterWritesQueue().runOrQueue { block(writeResult()) }
 
     /** Whether a write has already failed. */
     @Deprecated(
@@ -95,8 +140,30 @@ public sealed interface WriteError : ResultError {
     public data class Refused(override val stream: Stream, val detail: String?) : WriteError
 
     /**
-     * A write failed for a reason the platform does not report, as on the JVM, where a closed pipe and a full
-     * disk raise the same exception. [detail] is the platform's message, for showing, not for deciding.
+     * A write failed for a reason the platform does not report. The JVM and Android raise the same exception for a
+     * closed pipe and a full disk, so there `app | head -1` ends up here too. [detail] is the platform's message, for
+     * showing, not for deciding, and in the system's language. [cause] is the exception the JDK threw, for you to
+     * inspect or log; it is null elsewhere.
      */
-    public data class Unknown(override val stream: Stream, val detail: String?) : WriteError
+    public data class Unknown(
+        override val stream: Stream,
+        val detail: String?,
+        val cause: Throwable? = null,
+    ) : WriteError
 }
+
+/**
+ * This terminal with its colour decision replaced: [Terminal.ansi] is [out] and [Terminal.errAnsi] is [err], and
+ * everything else is answered by this terminal. For an override such as a `--color=always|never` option:
+ *
+ * ```kotlin
+ * val terminal = defaultTerminal().withAnsi(out = true, err = true)
+ * ```
+ */
+public fun Terminal.withAnsi(out: Boolean, err: Boolean): Terminal = AnsiOverride(this, out, err)
+
+private class AnsiOverride(
+    terminal: Terminal,
+    override val ansi: Boolean,
+    override val errAnsi: Boolean,
+) : Terminal by terminal

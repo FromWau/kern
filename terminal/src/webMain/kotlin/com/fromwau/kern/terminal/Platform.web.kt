@@ -24,6 +24,7 @@ private fun nodePlatformIo(): PlatformIo {
         ansiCapable = true,
         env = ::nodeEnv,
         failureOf = { if (it == Stream.Out) out.failure else err.failure },
+        afterPendingWrites = { landed -> afterNodeWrites(stdout = true) { afterNodeWrites(stdout = false, landed) } },
     )
 }
 
@@ -92,6 +93,18 @@ private fun nodeErrorMessage(stdout: Boolean): String? = js(
         "return e == null ? null : String(e.message || e); })()",
 )
 
+// Node runs write callbacks in order, so an empty write's callback comes after every earlier write's, and it gets
+// their failure before the stream's error event does.
+private fun afterNodeWrites(stdout: Boolean, callback: () -> Unit): Unit = js(
+    "{ const s = stdout ? process.stdout : process.stderr; const key = Symbol.for('kern.terminal.writeError'); " +
+        "try { s.write('', e => { if (e != null && s[key] == null) s[key] = e; callback(); }); } " +
+        "catch (e) { if (s[key] == null) s[key] = e; callback(); } }",
+)
+
 private fun consoleLog(text: String): Unit = js("console.log(text)")
 
 private fun consoleError(text: String): Unit = js("console.error(text)")
+
+private val queue = AfterWritesQueue()
+
+internal actual fun afterWritesQueue(): AfterWritesQueue = queue
