@@ -31,6 +31,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 // The README's snippets, kept here so they compile against the real API and do what the README says.
@@ -63,10 +65,10 @@ class ReadmeSnippetsJvmTest {
             .onError { error -> Log.tag("App").w(error) { "not logging to Sentry" } }
     }
 
-    private fun revokeConsent() {
+    private fun revokeConsent(flushTimeout: Duration = 5.seconds) {
         Log.configure { c -> c.copy(sinks = c.sinks.filterNot { it.sink is SentrySink }) }
             .onError { error -> Log.tag("App").w(error) { "still logging to Sentry" } }
-        val flushed = Log.flush(5.seconds)
+        val flushed = Log.flush(flushTimeout)
         if (flushed != Ok(Flushed.FullyWritten)) Log.tag("App").w { "revoke left $flushed" }
         SentrySink.clearBreadcrumbs()
         io.sentry.Sentry.configureScope(ScopeType.GLOBAL) { it.user = null }
@@ -130,7 +132,8 @@ class ReadmeSnippetsJvmTest {
 
         // Enough that a Sentry.close() not waiting for the sink lands while it still writes.
         repeat(2000) { Log.tag("App").e { "entry $it" } }
-        revokeConsent()
+        // A timeout that fits 2000 entries, as the README asks, on a machine slowed by a parallel build.
+        revokeConsent(flushTimeout = 1.minutes)
         val lostAfter = sentryLost(Log.close())
 
         assertEquals(lostBefore, lostAfter)

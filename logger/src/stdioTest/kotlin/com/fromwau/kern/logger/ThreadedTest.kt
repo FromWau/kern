@@ -943,6 +943,8 @@ class ThreadedTest {
 
         val flushed = withContext(Dispatchers.Default) { logger.flush(300.milliseconds) }
         val closed = withContext(Dispatchers.Default) { logger.close(300.milliseconds) }
+        // While still draining, the old sink repeats its last close's failure; once closed it reports only its losses.
+        eventually { oldInstalled.state.value == SinkState.Closed }
         val closedAgain = withContext(Dispatchers.Default) { logger.close(300.milliseconds) }
         release.open()
         logger.removeAll()
