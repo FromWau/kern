@@ -1,0 +1,181 @@
+package = com.fromwau.kern.process.signals
+---
+// glibc declares pipe2 only with _GNU_SOURCE.
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static const int kern_process_signals[] = { SIGINT, SIGTERM, SIGHUP };
+#define KERN_PROCESS_SIGNAL_COUNT 3
+
+static volatile int kern_process_requested = 0;
+static int kern_process_pipe_write = -1;
+static void (*kern_process_on_request)(int) = 0;
+static pthread_t kern_process_reader;
+static pthread_mutex_t kern_process_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t kern_process_handler_ended = PTHREAD_COND_INITIALIZER;
+static int kern_process_handler_done = 0;
+static int kern_process_exit_code = 0;
+static int kern_process_exit_waiting = 0;
+static int kern_process_at_exit_registered = 0;
+static volatile int kern_process_stopping = 0;
+static volatile int kern_process_installed = 0;
+static int kern_process_stop_exit_code = -1;
+
+// Runs inside the signal handler, so only async-signal-safe calls: the first request wakes the reader thread, or
+// for a stop only records itself, and a later one ends the process without running anything else.
+static void kern_process_on_signal(int signal) {
+    if (__sync_val_compare_and_swap(&kern_process_requested, 0, signal) != 0) _exit(128 + signal);
+    if (kern_process_stopping) return;
+    int saved_errno = errno;
+    unsigned char byte = (unsigned char) signal;
+    while (write(kern_process_pipe_write, &byte, 1) < 0 && errno == EINTR) {}
+    errno = saved_errno;
+}
+
+// Reads from its own pipe only: a failed install's reader must not touch the pipe of a later install.
+static void *kern_process_read_requests(void *read_end) {
+    int pipe_read = (int) (intptr_t) read_end;
+    unsigned char signal;
+    for (;;) {
+        ssize_t read_count = read(pipe_read, &signal, 1);
+        if (read_count == 1) {
+            kern_process_on_request(signal);
+            return 0;
+        }
+        // End of file: installing failed and closed the write end.
+        if (read_count == 0 || errno != EINTR) {
+            close(pipe_read);
+            return 0;
+        }
+    }
+}
+
+// An exit from any thread but the reader, such as main returning, waits for a running handler and then ends the
+// process with the handler's exit code. The reader's own exit, including exitProcess in the handler, goes ahead.
+// After a stop's request, any exit ends the process with the stop's code.
+static void kern_process_at_exit(void) {
+    int signal = kern_process_requested;
+    // A signal during a failed install's rollback leaves no handler to wait for.
+    if (signal == 0 || !kern_process_installed) return;
+    if (kern_process_stopping) _exit(kern_process_stop_exit_code >= 0 ? kern_process_stop_exit_code : 128 + signal);
+    if (pthread_equal(pthread_self(), kern_process_reader)) return;
+    pthread_mutex_lock(&kern_process_lock);
+    kern_process_exit_waiting = 1;
+    while (!kern_process_handler_done) pthread_cond_wait(&kern_process_handler_ended, &kern_process_lock);
+    int exit_code = kern_process_exit_code;
+    pthread_mutex_unlock(&kern_process_lock);
+    _exit(exit_code);
+}
+
+// Called by the reader once the handler is done, with the code the process exits with. Returns 1 when an exit is
+// already waiting to end the process, in which case the reader must not start a second exit.
+static int kern_process_handler_returned(int exit_code) {
+    pthread_mutex_lock(&kern_process_lock);
+    kern_process_exit_code = exit_code;
+    kern_process_handler_done = 1;
+    int exit_waiting = kern_process_exit_waiting;
+    pthread_cond_broadcast(&kern_process_handler_ended);
+    pthread_mutex_unlock(&kern_process_lock);
+    return exit_waiting;
+}
+
+// The first request's signal number, or 0 before one.
+static int kern_process_request_signal(void) {
+    return kern_process_requested;
+}
+
+// Handles SIGINT, SIGTERM and SIGHUP with kern_process_on_signal, leaving any that is ignored ignored. Returns 0, or
+// the errno of the step that failed, in which case every handler it replaced is restored.
+static int kern_process_install_signals(void) {
+    struct sigaction action;
+    action.sa_handler = kern_process_on_signal;
+    action.sa_flags = SA_RESTART;
+    sigemptyset(&action.sa_mask);
+    for (int i = 0; i < KERN_PROCESS_SIGNAL_COUNT; i++) sigaddset(&action.sa_mask, kern_process_signals[i]);
+
+    struct sigaction previous[KERN_PROCESS_SIGNAL_COUNT];
+    int replaced[KERN_PROCESS_SIGNAL_COUNT] = { 0 };
+    for (int i = 0; i < KERN_PROCESS_SIGNAL_COUNT; i++) {
+        int signal = kern_process_signals[i];
+        if (sigaction(signal, 0, &previous[i]) == 0) {
+            if (previous[i].sa_handler == SIG_IGN) continue;
+            if (sigaction(signal, &action, 0) == 0) {
+                replaced[i] = 1;
+                continue;
+            }
+        }
+        int failure = errno;
+        for (int j = 0; j < i; j++) {
+            if (replaced[j]) sigaction(kern_process_signals[j], &previous[j], 0);
+        }
+        return failure;
+    }
+    return 0;
+}
+
+static int kern_process_register_at_exit(void) {
+    if (kern_process_at_exit_registered) return 0;
+    if (atexit(kern_process_at_exit) != 0) return ENOMEM;
+    kern_process_at_exit_registered = 1;
+    return 0;
+}
+
+// Starts the thread that calls on_request with the first request's signal number, then installs the signal
+// handlers. Returns 0, or the errno of the step that failed, in which case nothing stays installed.
+static int kern_process_install(void (*on_request)(int)) {
+    int failure = kern_process_register_at_exit();
+    if (failure != 0) return failure;
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) != 0) return errno;
+    kern_process_pipe_write = fds[1];
+    kern_process_on_request = on_request;
+
+    pthread_attr_t attributes;
+    failure = pthread_attr_init(&attributes);
+    if (failure == 0) {
+        pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+        void *read_end = (void *) (intptr_t) fds[0];
+        failure = pthread_create(&kern_process_reader, &attributes, kern_process_read_requests, read_end);
+        pthread_attr_destroy(&attributes);
+    }
+    if (failure != 0) {
+        close(fds[0]);
+        close(fds[1]);
+        kern_process_pipe_write = -1;
+        return failure;
+    }
+
+    failure = kern_process_install_signals();
+    if (failure != 0) {
+        // Closing the write end makes the reader see end of file and end.
+        close(fds[1]);
+        kern_process_pipe_write = -1;
+        return failure;
+    }
+    kern_process_installed = 1;
+    return 0;
+}
+
+// Installs the same signal handlers for a stop: the first request is only recorded, and any exit after it ends the
+// process with exit_code, or the request's 128+N when exit_code is negative. Returns 0 or the failing step's errno.
+static int kern_process_install_stop(int exit_code) {
+    int failure = kern_process_register_at_exit();
+    if (failure != 0) return failure;
+    kern_process_stop_exit_code = exit_code;
+    kern_process_stopping = 1;
+    failure = kern_process_install_signals();
+    if (failure != 0) {
+        kern_process_stopping = 0;
+        // A request recorded during the rollback would make a later install's first request look like a second.
+        kern_process_requested = 0;
+        return failure;
+    }
+    kern_process_installed = 1;
+    return 0;
+}

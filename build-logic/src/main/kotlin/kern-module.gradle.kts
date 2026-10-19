@@ -22,6 +22,9 @@ val moduleName = project.name
 val namespaceName = moduleName.replace('-', '.')
 val frameworkName = moduleName.split('-').joinToString("") { part -> part.replaceFirstChar { it.uppercase() } }
 
+// A module whose C code needs a Mac to compile sets `kern.appleTargets=false` in its own gradle.properties.
+val appleTargets = findProperty("kern.appleTargets")?.toString()?.toBooleanStrict() ?: true
+
 kotlin {
     explicitApi()
 
@@ -55,14 +58,16 @@ kotlin {
     linuxX64()
     mingwX64()
 
-    listOf(
-        macosArm64(),
-        iosArm64(),
-        iosSimulatorArm64(),
-    ).forEach { appleTarget ->
-        appleTarget.binaries.framework {
-            baseName = "Kern$frameworkName"
-            isStatic = true
+    if (appleTargets) {
+        listOf(
+            macosArm64(),
+            iosArm64(),
+            iosSimulatorArm64(),
+        ).forEach { appleTarget ->
+            appleTarget.binaries.framework {
+                baseName = "Kern$frameworkName"
+                isStatic = true
+            }
         }
     }
 
