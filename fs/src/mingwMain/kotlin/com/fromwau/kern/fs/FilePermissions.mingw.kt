@@ -17,3 +17,6 @@ internal actual fun copyGroup(
     from: Path,
     to: Path,
 ): Boolean = true
+
+// A Windows folder takes its access rules from the folder it is made in.
+internal actual fun restrictToOwner(path: Path) = Unit

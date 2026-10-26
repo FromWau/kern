@@ -11,6 +11,6 @@ public enum class SinkState {
     /** Removed, done writing and closed for good; adding the sink back gives it a new handle. */
     Closed,
 
-    /** Removed, and one write ran 5 seconds without returning, so the logger let go of it; what it held is lost. */
+    /** Removed, and one write ran five seconds without returning, so the logger let go of it; what it held is lost. */
     Abandoned,
 }

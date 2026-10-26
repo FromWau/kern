@@ -50,15 +50,16 @@ public fun editDistance(
  *    `setting_number_4999`, `-dry-run` finds `--dry-run` and `-inf` finds `inf`;
  * 3. the only name that starts with [written], however long that name is, so `--o` finds `--output`. Dashes count
  *    like any other character here;
- * 4. the longest name that [written] starts with, of at least four characters, or three for a preferred name, so
- *    `warning` finds `warn` and `statuses` finds `status` over `stat`;
- * 5. the name fewest edits away by [editDistance]: one edit for a name of up to five characters, otherwise two
+ * 4. the name fewest edits away by [editDistance]: one edit for a name of up to five characters, otherwise two
  *    edits or a third of its length, whichever is more, and always fewer edits than the longer of the two has
  *    characters. When [written] has three characters or fewer, a replaced character does not count as close, so
- *    `can` does not find `nan`.
+ *    `can` does not find `nan`. This comes before rule 5, so `hostame` finds `hostname` over `host`;
+ * 5. the longest name that [written] starts with, of at least four characters besides leading dashes, or three for
+ *    a preferred name, so `warning` finds `warn`, `information` finds `inform` over `info` and `--logout` does not
+ *    find `--log`.
  *
  * A name equal to [written] is never suggested, so check whether [written] is already known before asking, and
- * handle an end of options marker too, since `--` finds a single long option by rule 3 or a lone `-` by rule 5.
+ * handle an end of options marker too, since `--` finds a single long option by rule 3 or a lone `-` by rule 4.
  * An empty [written] gets nothing, and it is not trimmed. Names that differ only in case or separators count as
  * one for rule 3. When names close enough by these rules tie, the one listed first in iteration order wins.
  *
@@ -73,7 +74,7 @@ public fun editDistance(
  *
  * @param preferred the names the context expects, such as `true` and `false` where a boolean belongs. All the
  *   rules are tried on them first, and on [candidates] only when none finds a preferred name, so a preferred name
- *   found by rule 5 beats another that differs only in case. They count as candidates themselves, and a name in
+ *   found by rule 4 beats another that differs only in case. They count as candidates themselves, and a name in
  *   both counts once. To accept only preferred names, pass just those as [candidates].
  * @return the name as given, or null when none is close.
  */
@@ -110,10 +111,17 @@ private fun closest(
         .distinctBy { it.folded.withoutSeparators() }
         .singleOrNull()
         ?.let { return it.text }
-    names
-        .filter { it.folded.length >= shortestStart && needle.startsWith(it.folded) }
+    fewestEdits(needle, names)?.let { return it }
+    return names
+        .filter { it.folded.trimStart('-').length >= shortestStart && needle.startsWith(it.folded) }
         .maxByOrNull { it.folded.length }
-        ?.let { return it.text }
+        ?.text
+}
+
+private fun fewestEdits(
+    needle: String,
+    names: List<Name>,
+): String? {
     var best: String? = null
     var bestDistance = Int.MAX_VALUE
     for (name in names) {

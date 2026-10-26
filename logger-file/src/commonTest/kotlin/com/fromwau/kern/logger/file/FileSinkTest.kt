@@ -4,7 +4,11 @@ import com.fromwau.kern.fs.AppendFile
 import com.fromwau.kern.fs.AppendState
 import com.fromwau.kern.fs.FileError
 import com.fromwau.kern.fs.FileType
+import com.fromwau.kern.fs.IoCause
+import com.fromwau.kern.fs.createSymlink
+import com.fromwau.kern.fs.fileType
 import com.fromwau.kern.fs.openAppend
+import com.fromwau.kern.fs.writer
 import com.fromwau.kern.logger.CloseError
 import com.fromwau.kern.logger.FlushError
 import com.fromwau.kern.logger.Flushed
@@ -17,10 +21,12 @@ import com.fromwau.kern.logger.Timestamp
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.assertSuccess
 import com.fromwau.kern.result.map
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.IOException
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -67,7 +73,7 @@ class FileSinkTest {
             println("skipped on this platform: an open log file cannot be deleted")
             return null
         }
-        return opened.state().also { opened.close() }
+        return opened.state().assertSuccess().also { opened.close() }
     }
 
     /**
@@ -84,7 +90,7 @@ class FileSinkTest {
             println("skipped on this platform: an open log file cannot be moved")
             return null
         }
-        return opened.state().also { opened.close() }
+        return opened.state().assertSuccess().also { opened.close() }
     }
 
     @Test
@@ -97,6 +103,23 @@ class FileSinkTest {
         assertEquals(Ok(Flushed.FullyWritten), logger.flush())
 
         assertEquals(listOf("first count=412", "second"), file.messages())
+    }
+
+    @Test
+    fun `a sink through a writer replaces a link planted at the log name instead of writing through it`() {
+        val state = tempPath("state")
+        val theirs = tempPath("theirs.log")
+        SystemFileSystem.sink(theirs).buffered().use { it.writeString("theirs\n") }
+        SystemFileSystem.createDirectories(state)
+        Path(state, "app.log").createSymlink(theirs).assertSuccess()
+        val _ = logger.addOrFail(FileSink(state.writer().assertSuccess(), "app.log"))
+
+        logger.tag("app").i { "mine" }
+        assertEquals(Ok(Flushed.FullyWritten), logger.flush())
+
+        assertEquals("theirs\n", theirs.readRaw())
+        assertEquals(Ok(FileType.Regular), Path(state, "app.log").fileType(followLinks = false))
+        assertEquals(listOf("mine"), Path(state, "app.log").messages())
     }
 
     @Test
@@ -313,8 +336,9 @@ class FileSinkTest {
         val file = tempPath("closed-unwritable.log")
         val time = TestTimeSource()
         var opens = 0
+        val refusal = FileError.WriteFailed(file, IoCause.Denied, IOException("refused"))
         val sink = testFileSink(file, timeSource = time) { path ->
-            if (opens++ == 0) path.openAppend() else Err(FileError.WriteFailed(path, "refused"))
+            if (opens++ == 0) path.openAppend() else Err(refusal)
         }
         val installed = logger.addOrFail(sink)
         logger.tag("app").i { "kept 1" }
@@ -324,7 +348,7 @@ class FileSinkTest {
         SystemFileSystem.delete(file)
         val closed = installed.close()
 
-        val refused = SinkError.Dropped(FileError.WriteFailed(file, "refused"))
+        val refused = SinkError.Dropped(refusal)
         assertEquals(Err(CloseError(mapOf(installed.name to listOf(refused, SinkError.Lost(2))))), closed)
         assertEquals(2, installed.health.value.dropped)
         assertEquals(refused, installed.health.value.lastError)
@@ -337,8 +361,9 @@ class FileSinkTest {
         val file = tempPath("logger-closed-unwritable.log")
         val time = TestTimeSource()
         var opens = 0
+        val refusal = FileError.WriteFailed(file, IoCause.Denied, IOException("refused"))
         val sink = testFileSink(file, timeSource = time) { path ->
-            if (opens++ == 0) path.openAppend() else Err(FileError.WriteFailed(path, "refused"))
+            if (opens++ == 0) path.openAppend() else Err(refusal)
         }
         val installed = logger.addOrFail(sink)
         logger.tag("app").i { "kept" }
@@ -347,7 +372,7 @@ class FileSinkTest {
         SystemFileSystem.delete(file)
         val closed = logger.close()
 
-        val refused = SinkError.Dropped(FileError.WriteFailed(file, "refused"))
+        val refused = SinkError.Dropped(refusal)
         assertEquals(Err(CloseError(mapOf(installed.name to listOf(refused, SinkError.Lost(1))))), closed)
         assertEquals(1, installed.health.value.dropped)
     }
@@ -444,7 +469,7 @@ class FileSinkTest {
         val sink = testFileSink(file, timeSource = time) { path ->
             path.openAppend().map { opened ->
                 object : AppendFile by opened {
-                    override fun state(): AppendState {
+                    override fun state(): Result<AppendState, FileError> {
                         checks++
                         return opened.state()
                     }
@@ -550,7 +575,8 @@ class FileSinkTest {
 
 /** Reports a file that is no longer at its path as [AppendState.Unknown], as the JVM on macOS does. */
 private class CannotTellDeletes(private val opened: AppendFile) : AppendFile by opened {
-    override fun state(): AppendState = opened.state().takeIf { it == AppendState.Same } ?: AppendState.Unknown
+    override fun state(): Result<AppendState, FileError> =
+        opened.state().map { if (it == AppendState.Same) it else AppendState.Unknown }
 }
 
 /** Fails its first append as a full disk would, writing nothing, and appends as usual after that. */
@@ -560,6 +586,6 @@ private class FailingOnce(private val opened: AppendFile) : AppendFile by opened
     override fun append(bytes: ByteArray): EmptyResult<FileError> {
         if (failed) return opened.append(bytes)
         failed = true
-        return Err(FileError.WriteFailed(path, "No space left on device"))
+        return Err(FileError.WriteFailed(path, IoCause.NoSpace, IOException("No space left on device")))
     }
 }

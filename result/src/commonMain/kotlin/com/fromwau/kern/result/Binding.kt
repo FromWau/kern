@@ -74,7 +74,8 @@ public class ResultScope<E : ResultError> @PublishedApi internal constructor() {
  *
  * `bind` leaves the block by throwing a signal that is not an [Exception], so `catch (e: Exception)` lets it
  * through. Swallowing it with `catch (t: Throwable)` or `runCatching` cannot make the result a success, but the
- * code after it runs until the next `bind`. Call `bind` only in the block and in its own coroutine; once the
+ * code after it runs until the next `bind`. A failing `bind` in another coroutine that runs while the block does,
+ * such as one in a nested `runBlocking` or a `launch` the block joins, still ends the block with its error. Once the
  * block has returned, `bind` throws an [IllegalStateException]. Other exceptions, cancellation included, pass
  * through.
  */

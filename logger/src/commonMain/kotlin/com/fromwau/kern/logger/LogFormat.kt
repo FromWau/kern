@@ -16,8 +16,8 @@ public enum class LogFormat {
 public enum class ColorMode {
     /**
      * Colour only when the stream is a terminal. A non-empty `NO_COLOR` turns it off. Otherwise a `FORCE_COLOR` or
-     * `CLICOLOR_FORCE` set to anything but empty, `0` or `false` turns it on, even into a pipe or under `TERM=dumb`. Without
-     * those, `CLICOLOR=0` or `TERM=dumb` turns it off.
+     * `CLICOLOR_FORCE` set to anything but empty, `0` or `false` turns it on, even into a pipe or under `TERM=dumb`.
+     * Without those, `CLICOLOR=0` or `TERM=dumb` turns it off.
      */
     AUTO,
 

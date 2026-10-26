@@ -121,3 +121,25 @@ public fun Terminal.out(text: Styled): Unit = out(text.render(ansi))
 
 /** Writes [text] to standard error, coloured when [Terminal.errAnsi] is true. */
 public fun Terminal.err(text: Styled): Unit = err(text.render(errAnsi))
+
+/**
+ * Joins the pieces like `joinToString`, keeping each piece's style and the styles of [separator], [prefix] and
+ * [postfix]. `joinToString` gives the plain text instead, the `toString` of each piece.
+ *
+ * ```kotlin
+ * terminal.out(listOf(red("a"), bold("b"), "c").joinToStyled(separator = dim(" | ")) + "\n")
+ * ```
+ */
+public fun Iterable<CharSequence>.joinToStyled(
+    separator: CharSequence = ", ",
+    prefix: CharSequence = "",
+    postfix: CharSequence = "",
+): Styled {
+    val pieces = mutableListOf(prefix)
+    forEachIndexed { index, piece ->
+        if (index > 0) pieces += separator
+        pieces += piece
+    }
+    pieces += postfix
+    return Styled.of(plain, pieces)
+}

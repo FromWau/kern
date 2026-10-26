@@ -1,12 +1,14 @@
 package com.fromwau.kern.logger.sentry
 
 import com.fromwau.kern.logger.ConfiguredSink
+import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.LogEntry
 import com.fromwau.kern.logger.LogLevel
 import com.fromwau.kern.logger.LogSink
 import com.fromwau.kern.logger.Logger
 import com.fromwau.kern.logger.LoggerConfig
 import com.fromwau.kern.logger.SinkConfig
+import com.fromwau.kern.logger.reportFailuresTo
 import com.fromwau.kern.result.ResultError
 import com.fromwau.kern.result.assertSuccess
 import io.sentry.Breadcrumb
@@ -91,7 +93,10 @@ internal fun SentrySink.writeAll(vararg entries: LogEntry) = entries.forEach { e
     write(entry, SinkConfig(level = LogLevel.VERBOSE)).assertSuccess()
 }
 
+/** A logger writing to [sink] alone, whose reports of its own failures are dropped rather than printed. */
+@OptIn(InternalKernApi::class)
 internal fun sentryLogger(sink: LogSink): Logger = Logger().also { logger ->
+    logger.reportFailuresTo {}
     logger.configure { LoggerConfig(listOf(ConfiguredSink(sink))) }.assertSuccess()
 }
 

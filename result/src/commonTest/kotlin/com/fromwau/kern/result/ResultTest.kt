@@ -57,6 +57,12 @@ class ResultTest {
 
     private suspend fun deleteUserById(id: Long): EmptyResult<CrudError> = findUserById(id).map { }
 
+    // a wrapper that can fail on its own and hands back whatever its block returned, so a fallible block nests
+    private suspend fun <T> withConnection(
+        open: Boolean,
+        block: suspend () -> T,
+    ): Result<T, CrudError> = if (open) Ok(block()) else Err(CrudError.Invalid("no connection"))
+
     // a second fallible step, which is the shape flatMap exists to chain onto the first
     private fun renameTo(user: User, name: String): Result<User, CrudError> =
         if (name.isBlank()) Err(CrudError.Invalid("name must not be blank")) else Ok(user.copy(name = name))
@@ -118,6 +124,52 @@ class ResultTest {
 
         assertEquals(Err(CrudError.NotFound(4)), result)
         assertFalse(ran, "the transform must not run once the chain has already failed")
+    }
+
+    @Test
+    fun `flatten unwraps a result nested in a result`() = runTest {
+        assertEquals(Ok(User(1, "John")), withConnection(open = true) { findUserById(1) }.flatten())
+        assertEquals(Err(CrudError.NotFound(4)), withConnection(open = true) { findUserById(4) }.flatten())
+        assertEquals(
+            Err(CrudError.Invalid("no connection")),
+            withConnection(open = false) { findUserById(1) }.flatten(),
+        )
+    }
+
+    @Test
+    fun `flatten with a mapper hands back an inner success`() {
+        val nested: Result<Result<Int, ApiError>, CrudError> = Ok(Ok(1))
+
+        assertEquals(Ok(1), nested.flatten { ApiError.Unavailable })
+    }
+
+    @Test
+    fun `flatten with a mapper keeps an inner error as it is`() {
+        val nested: Result<Result<Int, ApiError>, CrudError> = Ok(Err(ApiError.Missing("inner")))
+
+        assertEquals(Err(ApiError.Missing("inner")), nested.flatten { ApiError.Unavailable })
+    }
+
+    @Test
+    fun `flatten with a mapper maps an outer error into the inner error type`() {
+        val nested: Result<Result<Int, ApiError>, CrudError> = Err(CrudError.NotFound(4))
+
+        val flat = nested.flatten { crud -> ApiError.Missing("outer $crud") }
+
+        assertEquals(Err(ApiError.Missing("outer ${CrudError.NotFound(4)}")), flat)
+    }
+
+    @Test
+    fun `flatten with a mapper does not call it on a success`() {
+        val nested: Result<Result<Int, ApiError>, CrudError> = Ok(Err(ApiError.Unavailable))
+        var calls = 0
+
+        val _ = nested.flatten {
+            calls++
+            ApiError.Unavailable
+        }
+
+        assertEquals(0, calls)
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.fromwau.kern.fs.FileError
 import com.fromwau.kern.fs.openAppend
 import com.fromwau.kern.logger.ConfiguredSink
 import com.fromwau.kern.logger.InstalledSink
+import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.LogEntry
 import com.fromwau.kern.logger.LogLevel
 import com.fromwau.kern.logger.LogSink
@@ -12,6 +13,7 @@ import com.fromwau.kern.logger.Logger
 import com.fromwau.kern.logger.LoggerConfig
 import com.fromwau.kern.logger.SinkConfig
 import com.fromwau.kern.logger.SinkFailure
+import com.fromwau.kern.logger.reportFailuresTo
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.assertSuccess
 import kotlinx.coroutines.Dispatchers
@@ -58,8 +60,13 @@ internal fun Path.lines(): List<String> = readRaw().lines().filter { it.isNotEmp
 /** Each line's message, the part after the tag. */
 internal fun Path.messages(): List<String> = lines().map { it.substringAfter(" - ") }
 
-/** A logger with no sink. Close it, rather than removing its sinks, so nothing writes once a test has cleaned up. */
+/**
+ * A logger with no sink, whose reports of its own failures are dropped rather than printed. Close it, rather than
+ * removing its sinks, so nothing writes once a test has cleaned up.
+ */
+@OptIn(InternalKernApi::class)
 internal fun testLogger(): Logger = Logger().also { logger ->
+    logger.reportFailuresTo {}
     logger.configure { LoggerConfig(emptyList()) }.assertSuccess()
 }
 

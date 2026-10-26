@@ -1,12 +1,14 @@
 package com.fromwau.kern.logger.sentry
 
 import com.fromwau.kern.logger.DropPolicy
+import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.LogEntry
 import com.fromwau.kern.logger.LogLevel
 import com.fromwau.kern.logger.LogSink
 import com.fromwau.kern.logger.SinkConfig
 import com.fromwau.kern.logger.SinkError
 import com.fromwau.kern.logger.SinkFailure
+import com.fromwau.kern.logger.reaches
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
@@ -72,10 +74,11 @@ public class SentrySink(
     override val capacity: Int = 10_000,
     override val drop: DropPolicy = DropPolicy.OLDEST,
 ) : LogSink {
+    @OptIn(InternalKernApi::class)
     override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> {
-        val toEvent = entry.level >= events
-        val toBreadcrumb = entry.level >= breadcrumbs
-        val toLog = entry.level >= logs
+        val toEvent = entry.level.reaches(events)
+        val toBreadcrumb = entry.level.reaches(breadcrumbs)
+        val toLog = entry.level.reaches(logs)
         if (!toEvent && !toBreadcrumb && !toLog) return Ok(Unit)
         if (!Sentry.isEnabled()) return Err(SinkError.Dropped(SentryError.NotEnabled))
 

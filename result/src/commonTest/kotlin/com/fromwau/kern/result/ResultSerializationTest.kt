@@ -98,7 +98,8 @@ class ResultSerializationTest {
         val stopped: Result<List<Account>, Partial<Account, TransferError>> =
             Err(Partial(listOf(Account(1, "ada")), TransferError.Declined))
 
-        val back = Json.decodeFromString<Result<List<Account>, Partial<Account, TransferError>>>(Json.encodeToString(stopped))
+        val encoded = Json.encodeToString(stopped)
+        val back = Json.decodeFromString<Result<List<Account>, Partial<Account, TransferError>>>(encoded)
 
         assertEquals(stopped, back)
     }

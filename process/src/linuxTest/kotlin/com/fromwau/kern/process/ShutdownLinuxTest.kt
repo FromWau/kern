@@ -340,7 +340,7 @@ private class NativeChild(
 
     init {
         while (seen.isEmpty() && !ended) readMore()
-        pid = seen.removeFirstOrNull()?.toIntOrNull() ?: fail("the shell printed no pid\n${readStderr()}")
+        pid = seen.removeFirstOrNull()?.toIntOrNull() ?: failWithStderr("the shell printed no pid")
     }
 
     fun awaitLine(expected: String) {
@@ -349,7 +349,7 @@ private class NativeChild(
             while (checked < seen.size) {
                 if (seen[checked++] == expected) return
             }
-            if (ended) fail("the child ended before printing \"$expected\": $seen\n${readStderr()}")
+            if (ended) failWithStderr("the child ended before printing \"$expected\": $seen")
             readMore()
         }
     }
@@ -376,7 +376,7 @@ private class NativeChild(
             watched.events = POLLIN.convert()
             if (poll(watched.ptr, 1u, WAIT_MILLIS) == 0) {
                 kill(pid, SIGKILL)
-                fail("the child went quiet: $seen\n${readStderr()}")
+                failWithStderr("the child went quiet: $seen")
             }
             val buffer = allocArray<ByteVar>(4096)
             val count = read(stdout, buffer, 4096u).toInt()
@@ -390,6 +390,13 @@ private class NativeChild(
     }
 
     private fun readStderr(): String = readFile(stderrPath)
+
+    /** Fails the test with [message] and what the child wrote to stderr, removing the file that held it. */
+    private fun failWithStderr(message: String): Nothing {
+        val stderr = readStderr()
+        unlink(stderrPath)
+        fail("$message\n$stderr")
+    }
 
     data class Exit(val code: Int, val lines: List<String>, val stderr: String)
 

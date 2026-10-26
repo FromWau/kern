@@ -160,8 +160,8 @@ public class InstalledSink internal constructor(
 
     /**
      * Whether the sink is in its logger's config, removed and still writing what it had queued, closed for good, or
-     * abandoned because, once removed, one write ran 5 seconds without returning. To wait until a sink you removed is
-     * done:
+     * abandoned because, once removed, one write ran five seconds without returning. To wait until a sink you removed
+     * is done:
      *
      * ```kotlin
      * old.state.first { it == SinkState.Closed || it == SinkState.Abandoned }

@@ -8,17 +8,12 @@ import kotlinx.cinterop.ptr
 import kotlinx.io.files.Path
 import platform.windows.BY_HANDLE_FILE_INFORMATION
 import platform.windows.CloseHandle
-import platform.windows.CreateFileW
-import platform.windows.FILE_ATTRIBUTE_NORMAL
-import platform.windows.FILE_SHARE_DELETE
-import platform.windows.FILE_SHARE_READ
-import platform.windows.FILE_SHARE_WRITE
+import platform.windows.FILE_FLAG_BACKUP_SEMANTICS
 import platform.windows.FlushFileBuffers
 import platform.windows.GENERIC_WRITE
 import platform.windows.GetFileInformationByHandle
 import platform.windows.GetLastError
 import platform.windows.HANDLE
-import platform.windows.INVALID_HANDLE_VALUE
 import platform.windows.OPEN_EXISTING
 
 // Owner checks need the security APIs, which this does not call, so ownership is assumed: an Atomic write here can
@@ -35,33 +30,34 @@ internal actual fun fileIdentity(path: Path): FileIdentity? {
     return links?.let { FileIdentity(linkCount = it, ownedByCurrentUser = true) }
 }
 
+internal actual fun isSameFile(
+    first: Path,
+    second: Path,
+): Boolean {
+    val key = fileKeyOrNull(first) ?: return false
+    return key == fileKeyOrNull(second)
+}
+
 @OptIn(ExperimentalForeignApi::class)
-internal actual fun syncFile(path: Path): String? {
-    val handle = openExisting(path, access = GENERIC_WRITE.convert()) ?: return windowsError(GetLastError())
-    val reason = if (FlushFileBuffers(handle) != 0) null else windowsError(GetLastError())
+internal fun syncFile(path: Path): Exception? {
+    val handle = openExisting(path, access = GENERIC_WRITE.convert()) ?: return windowsFailure(GetLastError(), path)
+    val failure = if (FlushFileBuffers(handle) != 0) null else windowsFailure(GetLastError(), path)
     CloseHandle(handle)
-    return reason
+    return failure
 }
 
 // Windows has no call that syncs a directory's entries.
-internal actual fun syncDirectory(directory: Path): String? = null
+internal actual fun syncDirectory(directory: Path): Exception? = null
 
 // Whether kotlinx-io's mingw rename replaces an existing file is unverified, so no write relies on it.
 internal actual val renameReplacesAtomically: Boolean = false
 
+/**
+ * Opens the file or folder at [path], following links, with [access]; null when it cannot be opened, with the reason
+ * in `GetLastError`. Without backup semantics Windows opens no folder.
+ */
 @OptIn(ExperimentalForeignApi::class)
-private fun openExisting(
+internal fun openExisting(
     path: Path,
     access: UInt,
-): HANDLE? {
-    val handle = CreateFileW(
-        path.toString(),
-        access,
-        FILE_SHARE_READ.convert<UInt>() or FILE_SHARE_WRITE.convert<UInt>() or FILE_SHARE_DELETE.convert<UInt>(),
-        null,
-        OPEN_EXISTING.convert<UInt>(),
-        FILE_ATTRIBUTE_NORMAL.convert<UInt>(),
-        null,
-    )
-    return handle.takeUnless { it == null || it == INVALID_HANDLE_VALUE }
-}
+): HANDLE? = openHandle(path, access, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS.convert())

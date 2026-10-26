@@ -16,6 +16,9 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     kernTerminalTargets()
+    kernThreadedTest().dependencies {
+        implementation(libs.kotlinx.coroutines.core)
+    }
 
     // The signal handler is C, from src/nativeInterop/cinterop/signals.def: Kotlin may not run inside one.
     targets.withType<KotlinNativeTarget>()
@@ -49,16 +52,6 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":result-test"))
         }
-
-        // Tests that race calls on several threads, which only the JVM and native targets have.
-        val threadsTest = create("threadsTest") {
-            dependsOn(commonTest.get())
-            dependencies {
-                implementation(libs.kotlinx.coroutines.core)
-            }
-        }
-        jvmTest.get().dependsOn(threadsTest)
-        nativeTest.get().dependsOn(threadsTest)
 
         // Linux and androidNative share the sigaction handler; mingw has console control events instead.
         val posixMain = create("posixMain") {

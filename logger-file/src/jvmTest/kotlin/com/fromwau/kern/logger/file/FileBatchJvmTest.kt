@@ -2,6 +2,7 @@ package com.fromwau.kern.logger.file
 
 import com.fromwau.kern.fs.AppendFile
 import com.fromwau.kern.fs.FileError
+import com.fromwau.kern.fs.IoCause
 import com.fromwau.kern.fs.openAppend
 import com.fromwau.kern.logger.FlushError
 import com.fromwau.kern.logger.Flushed
@@ -13,6 +14,7 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.map
 import kotlinx.io.files.Path
+import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -32,6 +34,7 @@ class FileBatchJvmTest {
     private val dir = newTempDir()
     private val file = Path(dir, "app.log")
     private val appends: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    private val noSpace = FileError.WriteFailed(file, IoCause.NoSpace, IOException("No space left on device"))
 
     @AfterTest
     fun cleanup() {
@@ -64,7 +67,7 @@ class FileBatchJvmTest {
         override fun append(bytes: ByteArray): EmptyResult<FileError> {
             val current = index.getAndIncrement()
             beforeAppend(current)
-            if (failAppend(current)) return Err(FileError.WriteFailed(path, "No space left on device"))
+            if (failAppend(current)) return Err(noSpace)
             appends += bytes.decodeToString()
             return opened.append(bytes)
         }
@@ -111,7 +114,7 @@ class FileBatchJvmTest {
         }
 
         val installed = logger.sinks.value.single()
-        val refused = SinkError.Dropped(FileError.WriteFailed(file, "No space left on device"))
+        val refused = SinkError.Dropped(noSpace)
         assertEquals(Ok(Flushed.StillQueued(mapOf(installed.name to Pending.GaveUp(5, refused)))), logger.flush())
         diskFull.set(false)
         assertEquals(Ok(Flushed.FullyWritten), logger.flush())

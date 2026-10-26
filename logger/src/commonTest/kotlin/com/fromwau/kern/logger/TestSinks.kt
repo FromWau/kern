@@ -107,13 +107,14 @@ internal class BatchRecorder(
  * A logger with no sink, reporting its own failures into [reports] rather than standard error. A removed sink that
  * keeps failing gives up after [retireTimeout], so one left retrying cannot keep a Node.js test run alive for long.
  */
+@OptIn(InternalKernApi::class)
 internal fun testLogger(
     reports: MutableList<String> = mutableListOf(),
     retireTimeout: Duration = 500.milliseconds,
 ): Logger = Logger().also { logger ->
     // Sinks fail on their own workers, so two reports can arrive at once.
     val lock = reentrantLock()
-    logger.report = { lock.withLock { reports += it } }
+    logger.reportFailuresTo { lock.withLock { reports += it } }
     logger.retireTimeout = retireTimeout
     logger.removeAll()
 }

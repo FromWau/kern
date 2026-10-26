@@ -13,12 +13,10 @@ import kotlin.test.assertTrue
 
 private val ESC = Char(27)
 
-private fun writing(): Terminal {
-    val terminal = defaultTerminal()
-
+// Handed a terminal rather than calling defaultTerminal(), so a test run prints nothing to the real console.
+private fun writing(terminal: Terminal) {
     terminal.out("hello\n")
     terminal.err("something went wrong\n")
-    return terminal
 }
 
 private fun colour(terminal: Terminal, path: String) {
@@ -85,10 +83,11 @@ class Recorder : Terminal {
 class ReadmeSnippetsTest {
 
     @Test
-    fun `writing to both streams succeeds`() {
-        val terminal = writing()
-        assertEquals(Ok(Unit), terminal.writeResult(Stream.Out))
-        assertEquals(Ok(Unit), terminal.writeResult(Stream.Err))
+    fun `writing sends each line to its own stream`() {
+        val terminal = RecordingTerminal()
+        writing(terminal)
+        assertEquals("hello\n", terminal.out)
+        assertEquals("something went wrong\n", terminal.err)
     }
 
     @Test
@@ -103,6 +102,9 @@ class ReadmeSnippetsTest {
         val joined: Styled = red("a") + " b"
         assertEquals("a b", joined.toString())
         assertEquals(red("a") + " b", plain(red("a"), " b"))
+        val list: Styled = listOf(red("a"), "b").joinToStyled(dim(" | "))
+        assertEquals("$ESC[31ma$ESC[0m$ESC[2m | $ESC[0mb", list.render(ansi = true))
+        assertEquals("a | b", listOf(red("a"), "b").joinToString(" | "))
         assertEquals("a $ESC[31mb$ESC[0m", plain("a ", red("b")).render(ansi = true))
         assertEquals(12, red("name").padEnd(12).length)
         assertEquals("$ESC[1;31mfailed$ESC[0m", (bold + red)("failed").render(ansi = true))

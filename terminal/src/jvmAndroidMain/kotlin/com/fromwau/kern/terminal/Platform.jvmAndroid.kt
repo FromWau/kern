@@ -2,6 +2,7 @@ package com.fromwau.kern.terminal
 
 import java.io.IOException
 import java.io.OutputStream
+import kotlin.concurrent.getOrSet
 
 /**
  * Shared JVM/Android stdio; the platform actual supplies the sinks and the [isTty] probe, which is all
@@ -47,6 +48,6 @@ internal class StreamSink(
     }
 }
 
-private val queues = ThreadLocal.withInitial { AfterWritesQueue() }
+private val queues = ThreadLocal<AfterWritesQueue>()
 
-internal actual fun afterWritesQueue(): AfterWritesQueue = queues.get()
+internal actual fun afterWritesQueue(): AfterWritesQueue = queues.getOrSet(::AfterWritesQueue)

@@ -198,7 +198,7 @@ class RecordingSinkTest {
         assertEquals("late", recording.awaitCall(5.seconds).entry.message)
     }
 
-    /** A batching sink that counts its single writes and the size of each batch, refusing every call when [refusing]. */
+    /** A batching sink counting its single writes and each batch's size, refusing every call when [refusing]. */
     @OptIn(InternalKernApi::class)
     private class Batches(private val refusing: SinkError? = null) : BatchSink {
         override val name = "batches"

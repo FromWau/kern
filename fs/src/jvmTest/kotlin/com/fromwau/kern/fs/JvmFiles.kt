@@ -30,9 +30,21 @@ internal fun canLookUp(path: Path): Boolean = runCatching {
 internal fun canList(path: Path): Boolean = File(path.toString()).list() != null
 
 /** Makes this path a second name for [target]'s file. */
-internal fun Path.hardLinkTo(target: Path): Path = also {
+internal fun Path.rawHardLinkTo(target: Path): Path = also {
     Files.createLink(Paths.get(toString()), Paths.get(target.toString()))
 }
+
+/** The first block device in `/dev`, or null when this machine shows none or has no unix attributes to tell one by. */
+internal fun firstBlockDevice(): Path? = File("/dev")
+    .listFiles()
+    ?.firstOrNull { device ->
+        try {
+            (Files.getAttribute(device.toPath(), "unix:mode") as Int) and 0xF000 == 0x6000
+        } catch (_: Exception) {
+            false
+        }
+    }
+    ?.let { Path(it.path) }
 
 /** Which file this name stands for, so a test can tell a file replaced by rename from one written in place. */
 internal fun Path.inode(): Any = Files.getAttribute(Paths.get(toString()), "unix:ino")

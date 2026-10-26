@@ -17,9 +17,11 @@ public class StdoutSink(
     override val capacity: Int = 10_000,
     override val drop: DropPolicy = DropPolicy.OLDEST,
 ) : LogSink {
-    private val writer = streamWriter(Stream.Out, format, color)
+    private val writer = ConsoleWriter(Stream.Out, format, color)
 
-    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer(entry, config)
+    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer.write(entry, config)
+
+    override fun close(): EmptyResult<SinkError> = writer.close()
 }
 
 /**
@@ -36,7 +38,9 @@ public class StderrSink(
     override val capacity: Int = 10_000,
     override val drop: DropPolicy = DropPolicy.OLDEST,
 ) : LogSink {
-    private val writer = streamWriter(Stream.Err, format, color)
+    private val writer = ConsoleWriter(Stream.Err, format, color)
 
-    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer(entry, config)
+    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer.write(entry, config)
+
+    override fun close(): EmptyResult<SinkError> = writer.close()
 }

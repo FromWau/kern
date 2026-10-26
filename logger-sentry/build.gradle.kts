@@ -6,11 +6,11 @@ description = "A Sentry sink for kern:logger: SentrySink sends each entry as a S
     "each from its own level, through the Sentry Kotlin Multiplatform SDK the app initialises."
 
 kotlin {
-    // The same targets as logger, so any code that logs can add this sink.
-    kernLoggerTargets()
-
     // Declaring a source set by hand switches the default hierarchy off; re-applying it keeps nativeMain and webMain.
     applyDefaultHierarchyTemplate()
+
+    // The same targets as logger, so any code that logs can add this sink.
+    kernLoggerTargets()
 
     sourceSets {
         // The JVM and Android, where Sentry's multiplatform SDK runs on sentry-java and the sink calls that directly.

@@ -1,6 +1,7 @@
 package com.fromwau.kern.logger
 
 import com.fromwau.kern.result.EmptyResult
+import com.fromwau.kern.result.Ok
 
 /**
  * The platform's own log: logcat on Android, the unified log (`os_log`) on iOS and in a macOS app, the console
@@ -16,8 +17,17 @@ public class PlatformSink(
 ) : LogSink {
     private val writer = platformWriter()
 
-    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer(entry, config)
+    override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = writer.write(entry, config)
+
+    override fun close(): EmptyResult<SinkError> = writer.close()
 }
 
 /** Writes to the platform's own log. */
-internal expect fun platformWriter(): (LogEntry, SinkConfig) -> EmptyResult<SinkError>
+internal expect fun platformWriter(): EntryWriter
+
+/** How a built-in sink writes each entry, and lets go of what it holds when the sink is closed. */
+internal fun interface EntryWriter {
+    fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError>
+
+    fun close(): EmptyResult<SinkError> = Ok(Unit)
+}

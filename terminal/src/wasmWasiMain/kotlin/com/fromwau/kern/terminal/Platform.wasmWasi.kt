@@ -37,12 +37,16 @@ internal class WasiStream(private val fd: Int, private val stream: Stream) {
         failure = when (errno) {
             SUCCESS -> null
             ERRNO_PIPE -> WriteError.BrokenPipe(stream)
+            WROTE_NONE -> WriteError.Refused(stream, "WASI wrote none of the bytes left")
             else -> WriteError.Refused(stream, "WASI errno $errno")
         }
     }
 }
 
-/** Writes every byte of [bytes], however many calls the host takes. Returns the WASI errno, 0 on success. */
+/**
+ * Writes every byte of [bytes], however many calls the host takes. Returns the WASI errno, 0 on success, or
+ * [WROTE_NONE] when a call took none of them.
+ */
 private fun writeAll(fd: Int, bytes: ByteArray): Int = withScopedMemoryAllocator { allocator ->
     val buffer = allocator.copyOf(bytes)
     val iovec = allocator.allocate(8)
@@ -53,6 +57,8 @@ private fun writeAll(fd: Int, bytes: ByteArray): Int = withScopedMemoryAllocator
         (iovec + 4).storeInt(bytes.size - offset)
         val errno = fdWrite(fd, iovec.address.toInt(), 1, written.address.toInt())
         if (errno != SUCCESS) return@withScopedMemoryAllocator errno
+        // Asked again, it would take nothing again, forever.
+        if (written.loadInt() == 0) return@withScopedMemoryAllocator WROTE_NONE
         offset += written.loadInt()
     }
     SUCCESS
@@ -110,6 +116,9 @@ private const val STDOUT = 1
 private const val STDERR = 2
 private const val SUCCESS = 0
 private const val ERRNO_PIPE = 64
+
+// No WASI errno is negative.
+private const val WROTE_NONE = -1
 private const val FDSTAT_SIZE = 24
 private const val FILETYPE_CHARACTER_DEVICE: Byte = 2
 private const val RIGHT_FD_SEEK = 1L shl 2

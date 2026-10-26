@@ -4,7 +4,7 @@ import android.system.ErrnoException
 import android.system.Os
 import kotlinx.io.files.Path
 
-// The system calls themselves, as copyPermissions does here: Android's java.nio is not something this project
+// The system calls themselves, as the permission calls do here: Android's java.nio is not something this project
 // can run a test for.
 internal actual fun fileIdentity(path: Path): FileIdentity? = try {
     val status = Os.stat(path.toString())

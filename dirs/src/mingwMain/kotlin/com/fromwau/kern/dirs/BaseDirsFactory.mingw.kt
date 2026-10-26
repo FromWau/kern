@@ -1,27 +1,16 @@
 package com.fromwau.kern.dirs
 
-import com.fromwau.kern.result.Err
-import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
-import kotlinx.io.files.Path
 
-public actual class BaseDirsFactory {
+/**
+ * @param strict whether a blank variable is [DirsError.Blank], and one set to something other than an absolute path
+ *   [DirsError.NotAbsolute], rather than listed in [BaseDirs.ignored]. A blank `USERPROFILE` is that error even when
+ *   `HOME` would give a home.
+ */
+public actual class BaseDirsFactory(private val strict: Boolean = false) {
     public actual fun create(): Result<BaseDirs, DirsError> {
-        val home = env("USERPROFILE") ?: env("HOME") ?: return Err(DirsError.UnableToResolve(DirKind.Home))
-        val appData = env("APPDATA") ?: return Err(DirsError.UnableToResolve(DirKind.Config))
-        val localAppData = env("LOCALAPPDATA") ?: return Err(DirsError.UnableToResolve(DirKind.Cache))
-        val temp = env("TEMP") ?: return Err(DirsError.UnableToResolve(DirKind.Temp))
-
-        return Ok(
-            BaseDirs(
-                home = Path(home),
-                configHome = Path(appData),
-                dataHome = Path(appData),
-                stateHome = Path(localAppData),
-                cacheHome = Path(localAppData),
-                tempHome = Path(temp),
-                naming = AppNaming.Windows,
-            ),
-        )
+        val variable = CheckedVariables(::env)
+        val home = variable("USERPROFILE") ?: variable("HOME")
+        return windowsBaseDir(variable, userHome = home).withIgnored(variable, strict)
     }
 }

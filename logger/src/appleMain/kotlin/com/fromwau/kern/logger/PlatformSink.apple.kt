@@ -2,7 +2,6 @@
 
 package com.fromwau.kern.logger
 
-import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Ok
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
@@ -28,9 +27,9 @@ import platform.darwin.os_log_type_t
  * stack trace rather than a rendered line, under the app's bundle identifier with the tag as the category. The
  * text is marked public, so a release build does not redact it as `<private>`.
  */
-internal actual fun platformWriter(): (LogEntry, SinkConfig) -> EmptyResult<SinkError> {
+internal actual fun platformWriter(): EntryWriter {
     val subsystem = bundleIdentifier ?: return terminalWriter()
-    return { entry, _ ->
+    return EntryWriter { entry, _ ->
         _os_log_internal(
             __dso_handle.ptr,
             logFor(subsystem, entry.tag),

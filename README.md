@@ -1,11 +1,13 @@
 # kern
 
-Small, independently consumable Kotlin Multiplatform modules for the things every project ends up needing. Each
-module publishes on its own, so you take the one you want without dragging the rest onto your classpath.
+kern is a set of small Kotlin Multiplatform modules for the things every project ends up needing. Each module
+publishes on its own. You take the one you want, and the rest stays off your classpath.
 
 Something enters kern once two real projects already need it, never because one might.
 
 ## Modules
+
+Pick a module from the table. The last column says what it brings along.
 
 | module                       | what it is                                                                         | pulls in                              |
 |------------------------------|------------------------------------------------------------------------------------|---------------------------------------|
@@ -21,32 +23,43 @@ Something enters kern once two real projects already need it, never because one 
 | [`logger-test`](logger-test/README.md) | test sinks: `TestSink` waits for what your code logs, `RecordingSink` records each write of a sink of your own | `logger`, coroutines, kotlin-test; at runtime atomicfu |
 | [`dirs`](dirs/README.md) | where an app's config, data, state, cache and temp belong, as `Path`s | kotlinx-io, `result` |
 | [`fs`](fs/README.md) | `Path` helpers that return typed errors: `dir / "name"`, read, write by rename or in place, append, list, walk, move, delete and lock | `dirs` |
-| [`fs-coroutines`](fs-coroutines/README.md) | `awaitLock`: the `fs` file lock, waiting by suspending instead of blocking the thread | `fs`, coroutines |
+| [`fs-test`](fs-test/README.md) | test helpers for `fs`: `scratchDir()`, and `symlinkTo`, `hardLinkTo`, `chmod` and `mkfifo` failing with `fs`'s `FileError` | `fs`, `result-test` |
+| [`fs-coroutines`](fs-coroutines/README.md) | `awaitLock`: the `fs` file lock, waiting by suspending instead of blocking the thread; `changes()`: a flow of a file's `info()` each time it changes | `fs`, coroutines |
 | [`process`](process/README.md) | `onShutdownRequest` or `stopOnShutdownRequest`: a handler, or a flag your loop polls, for Ctrl-C, `SIGTERM` and `SIGHUP`, then the shell's 128+N exit code | `result` |
 | [`process-test`](process-test/README.md) | `FakeShutdownSource`: sends a shutdown request to your handler or stop in a test and records the exit code, without exiting | `process` |
 | [`fuzzy`](fuzzy/README.md) | `didYouMean`: the name someone most likely meant by a word that is not one, and `editDistance` | nothing |
+
+`fs-test`'s `scratchDir()` makes a fresh folder under `TMPDIR` when that is an absolute path. Otherwise it uses the
+platform's temp folder.
+
+Add a module by its name:
 
 ```kotlin
 implementation("com.fromwau.kern:result:$kernVersion")
 ```
 
-Published versions are listed at
-[maven.frommhund.xyz](https://maven.frommhund.xyz/#/releases/com/fromwau/kern), which reads without
-credentials.
+Published versions are listed at [maven.frommhund.xyz](https://maven.frommhund.xyz/#/releases/com/fromwau/kern). You
+can read it without credentials.
+
+With `result`, your own function returns its failure as a value:
 
 ```kotlin
 fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
 ```
 
-Every kern function that returns a value marks it as one to use, so with Kotlin's return value checker on, a
-dropped `Result` warns; `onSuccess`, `onError`, `bind`, `collect` and the `result-test` assertions are exempt (see
-[must-use results](result/README.md#must-use-results)).
+Every kern function that returns a value marks it as one to use. With Kotlin's return value checker on, a dropped
+`Result` warns. `onSuccess`, `onError`, `bind`, `collect` and the `result-test` assertions are exempt. See
+[must-use results](result/README.md#must-use-results).
 
-**Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64. `logger`, `logger-sentry`
-and `logger-test` add js and wasmJs. `terminal`, `terminal-test` and `terminal-coroutines` add linuxArm64, the four
-androidNative targets, js, wasmJs and wasmWasi. `result` and `result-test` add those and tvOS and watchOS too.
-`process` and `process-test` have `terminal`'s targets without macOS and iOS, which are not built yet. Each
-module's README lists its own.
+**Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64. Some modules add more:
+
+- `logger`, `logger-sentry` and `logger-test` add js and wasmJs.
+- `terminal`, `terminal-test` and `terminal-coroutines` add linuxArm64, the four androidNative targets, js, wasmJs
+  and wasmWasi.
+- `result` and `result-test` add those and tvOS and watchOS too.
+- `process` and `process-test` have `terminal`'s targets without macOS and iOS. Those are not built yet.
+
+Each module's README lists its own.
 
 ## Requirements
 

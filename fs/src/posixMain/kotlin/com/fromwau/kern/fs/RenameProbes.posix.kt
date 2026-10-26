@@ -7,6 +7,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.io.files.Path
+import platform.posix.O_CLOEXEC
 import platform.posix.O_RDONLY
 import platform.posix.close
 import platform.posix.fsync
@@ -24,17 +25,22 @@ internal actual fun fileIdentity(path: Path): FileIdentity? = memScoped {
     )
 }
 
-// Linux and Apple both fsync a read-only descriptor, which also reaches a file this process may no longer write.
-internal actual fun syncFile(path: Path): String? = sync(path)
+internal actual fun isSameFile(
+    first: Path,
+    second: Path,
+): Boolean {
+    val key = fileKeyOrNull(first) ?: return false
+    return key == fileKeyOrNull(second)
+}
 
-internal actual fun syncDirectory(directory: Path): String? = sync(directory)
+internal actual fun syncDirectory(directory: Path): Exception? = sync(directory)
 
-private fun sync(path: Path): String? {
-    val descriptor = open(path.toString(), O_RDONLY)
-    if (descriptor < 0) return errnoReason()
-    val reason = if (fsync(descriptor) == 0) null else errnoReason()
+private fun sync(path: Path): Exception? {
+    val descriptor = open(path.toString(), O_RDONLY or O_CLOEXEC)
+    if (descriptor < 0) return errnoFailure(about = path)
+    val failure = if (fsync(descriptor) == 0) null else errnoFailure(about = path)
     close(descriptor)
-    return reason
+    return failure
 }
 
 internal actual val renameReplacesAtomically: Boolean = true

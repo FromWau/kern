@@ -30,3 +30,13 @@ public fun lineRenderer(format: LogFormat): (entry: LogEntry, timestamp: Timesta
     val localClock by lazy(LazyThreadSafetyMode.PUBLICATION) { systemLocalClock() }
     return { entry, timestamp -> entry.render(format, localClock, timestamp) }
 }
+
+/** Whether an entry at this level reaches a sink set to [threshold], ranked by severity as the logger ranks it. */
+@InternalKernApi
+public fun LogLevel.reaches(threshold: LogLevel): Boolean = severity >= threshold.severity
+
+/** For kern's own tests: sends this logger's one-line reports of its own failures to [report], not standard error. */
+@InternalKernApi
+public fun Logger.reportFailuresTo(report: (String) -> Unit) {
+    this.report = report
+}

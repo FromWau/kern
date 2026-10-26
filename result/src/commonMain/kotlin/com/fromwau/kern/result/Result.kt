@@ -96,6 +96,34 @@ public inline fun <S, E : ResultError, T> Result<S, E>.flatMap(
     is Result.Error -> this
 }
 
+/**
+ * Unwraps a result nested in a result: the inner result on a success, the outer error on a failure. One arrives
+ * nested from a call that can fail on its own and hands back what its block returned:
+ *
+ * ```kotlin
+ * val user: Result<User, DbError> = db.inTransaction { findUser(id) }.flatten()
+ * ```
+ */
+public fun <S, E : ResultError> Result<Result<S, E>, E>.flatten(): Result<S, E> = when (this) {
+    is Result.Success -> value
+    is Result.Error -> this
+}
+
+/**
+ * Unwraps a result nested in a result whose two errors differ: the inner result on a success, and the outer error
+ * turned into the inner error type by [outer] on a failure. [outer] runs only for an outer error.
+ *
+ * ```kotlin
+ * // Result<Result<Config, AppError>, FileError>, from a lock around work that has errors of its own
+ * val config: Result<Config, AppError> = lockFile.withLock { loadConfig() }.flatten(AppError::File)
+ * ```
+ */
+public inline fun <S, E : ResultError, F : ResultError> Result<Result<S, F>, E>.flatten(outer: (E) -> F): Result<S, F> =
+    when (this) {
+        is Result.Success -> value
+        is Result.Error -> Result.Error(outer(error))
+    }
+
 /** Applies [transform] to an error, passing a success value through untouched. */
 public inline fun <S, E : ResultError, F : ResultError> Result<S, E>.mapError(transform: (E) -> F): Result<S, F> =
     when (this) {

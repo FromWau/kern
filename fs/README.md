@@ -1,7 +1,14 @@
 # fs
 
-`Path` helpers for Kotlin Multiplatform that return typed errors instead of throwing: read, write by rename or in
-place, append, list, walk, move, delete and lock files, and claim a run's temp folder.
+Files fail in ordinary ways. A file is missing, a name is too long, a write is cut short when the app is killed.
+`fs` gives you `Path` helpers for Kotlin Multiplatform that hand those failures back as typed errors. Nothing throws,
+so you deal with a failure where it happens.
+
+Three habits cover most code:
+
+- Write your app's own folders through a [Writer](docs/writer.md).
+- Use the plain `Path` calls for a path the user picked.
+- Read with `trusted = true` when a file must be yours alone.
 
 **Targets:** JVM, Android, linuxX64, mingwX64, macosArm64, iosArm64, iosSimulatorArm64.
 
@@ -18,183 +25,453 @@ dependencies {
 }
 ```
 
-KMP consumers put it in `commonMain`. [`dirs`](../dirs/README.md), kern's `result` and kotlinx-io come along as
-`api`, since `AppDirs`, `Result`, `ResultError` and `Path` appear in this module's signatures. Needs what
-[every kern module needs](../README.md#requirements).
+- KMP consumers put it in `commonMain`.
+- [`dirs`](../dirs/README.md), kern's `result` and kotlinx-io come along as `api`.
+- `Path` is `kotlinx.io.files.Path`. A file that names it imports it from there.
+- Needs what [every kern module needs](../README.md#requirements).
+- For tests, [`fs-test`](../fs-test/README.md) makes a scratch folder and the links, modes and FIFOs a test sets up.
 
-## Path names
+## Which do I use?
 
-None of these touch the filesystem.
+Start from what you want to do. Each row names the calls to reach for and the page that explains them.
 
-`dir / "name"` appends what it is given as written: a separator in it adds more than one segment, `""` adds none,
-and `".."` stays a segment, so its `parent` is `dir` rather than the folder above. `extension` is everything after
-the last dot of the file name, so `archive.tar.gz` gives `gz`; a leading dot marks a hidden file, so `.bashrc` has
-none. `nameWithoutExtension` is the rest. `expandTilde(home)` expands `~` and `~/...` and leaves `~bob/...` alone,
-so the result can still be relative.
+| you want to | use | page |
+|---|---|---|
+| build a whole app: a command-line tool, a daemon, a site builder | `BaseDirs`, `singleInstance`, `withRunTemp`, `mirrorTo` | [Whole apps](docs/apps.md) |
+| write, read, move or lock files in your app's own folders | `dirs.data.writer()`, `privateWriter()` for secrets | [Writer](docs/writer.md) |
+| write a file at a path the user picked | `path.writeText(text)`, `copyTo` | [Writing](docs/writing.md) |
+| read a file | `path.readText(maxBytes)`, `trusted = true` | [Reading](docs/reading.md) |
+| visit or copy a tree | `walkTopDown`, `mirrorTo` | [Walking](docs/walking.md) |
+| clean up after a crash | `leftovers`, `restore`, `discard` | [Leftovers](docs/leftovers.md) |
+| keep two runs apart | `withLock`, `singleInstance` | [Locking](docs/locking.md) |
 
-## Path helpers
+- The second and third rows split on who owns the folder. Your app's own folders go through a `Writer`, so no name
+  and no symlink reaches outside. A path the user picked goes through the plain `Path` calls.
+- Add `trusted = true` to a read for a config only you may change.
 
-Nothing here throws. A failure is a `FileError` in the `Result`, and every case names the path it is about. An
-empty path names nothing, and every call answers it as `NotFound`.
+## Getting started
 
-```kotlin
-val file = dirs.config / "app.toml"
-
-file.readText(maxBytes = 1_048_576)   // Result<String, FileError>
-file.writeText("theme = \"dark\"")     // EmptyResult<FileError>
-dirs.state.createDirectories()        // EmptyResult<FileError>
-```
-
-- **Reading.** `exists()` follows symlinks, and answers `false` for a path that cannot be looked up as well as
-  for one that is not there. A read that returns a `Result` keeps those apart: `Inaccessible` for a path it may
-  not look at, `NotFound` for one that is not there. `fileType()` says what is at a path, and `fileSize()` how
-  many bytes a regular file holds; anything else is `NotRegularFile`. `modifiedAt()` is when the entry was last
-  written, as a `kotlin.time.Instant`, to the precision the file system keeps.
-  `readText(maxBytes)` refuses a directory, FIFO, device or socket before opening it, since opening a FIFO
-  blocks until something writes to it. A file longer than `maxBytes` is `TooLarge`, and bytes that are not
-  valid UTF-8 read as U+FFFD. `readBytes(maxBytes)` reads the same way and hands back the bytes, for a caller
-  that decodes them another way or refuses a file that is not UTF-8.
-- **Writing.** `writeText` and `writeBytes` replace a file in one of two ways, chosen by `mode`:
-  - **By rename.** The content goes into a temp file `.<name>.<id>.tmp` beside the file, which is forced to disk
-    and renamed over it, so readers see the old content or the new and never part of it, and a failure leaves
-    the file as it was. The new file takes the old one's permissions and group, but it is a new file: other hard
-    links keep the old content, it belongs to you, and timestamps, ACLs and extended attributes start fresh.
-  - **In place.** The old content is copied to a backup beside the file, then the file itself is written, so its
-    inode, owner and links stay. A failed write moves the backup back; a successful one tries to delete it, and
-    one that cannot be deleted stays. If undoing a failed write fails too, the result is `RestoreFailed`.
-
-  `WriteMode.Auto`, the default, renames only a file with no other hard links that belongs to you and whose
-  group the new file can be given; otherwise, or when its links, owner or group cannot be read or kept, it writes
-  in place. `WriteMode.Atomic` always renames: it refuses with `WriteFailed` a file it knows a rename would change,
-  one with other hard links, another owner or a group the new file cannot be given, and renames one whose links or
-  owner it cannot read. `WriteMode.InPlace` always writes in place. A new file is written by rename in every mode but
-  `InPlace`. The JVM on Windows reads no link count or uid, so there `Auto` writes an existing file in place and
-  `Atomic` renames it. A file that cannot be read or written is refused either way, and anything at the path that is not
-  a regular file is `NotRegularFile`, the same answer a read gives: opening a FIFO waits on a reader that may never
-  come, and a device node would be replaced by a regular file.
-- **Appending.** `file.openAppend()` opens a file to add to, creating it and its missing folders, and hands over
-  an `AppendFile` to `close()` when you are done. Each `append(bytes)` lands at the end in one write, so lines two
-  processes append to one local file never tear each other. `state()` says whether the path still names the open
-  file: `Same`, `Moved` when the file still has a name elsewhere, `Deleted` when it has none, or `Unknown` where the
-  platform cannot tell those two apart, the JVM on macOS and Windows. `lastByte()` reads only the last byte, null for
-  an empty file, to see whether a line was left unfinished. A directory, FIFO or device at the path is
-  `NotRegularFile`, and a write the system refuses is `WriteFailed`.
-- **Leftover backups.** `leftoverBackups()` lists the backups a write left beside a file. A write disposes of
-  its own when it can, so one left behind is a reason to check the file rather than proof that it is wrong, and
-  neither copy is the one to trust by default. It is the one call here whose error names the folder instead of
-  the file, since reading the folder is what can fail.
-- **Folders.** Every write creates missing parent folders. `createDirectories()` works like `mkdir -p`, also
-  when another process creates the same folders at the same time. A file standing at the path or in place of a
-  parent is `NotADirectory` naming that file, and a path it may not look up is `Inaccessible` naming that path,
-  rather than a folder it reports as having failed to create.
-- **Removing and listing.** `delete()` removes a file, symlink or empty folder, and `deleteRecursively()` clears a
-  whole tree. Both take a symlink as a link, so what it points at stays, and a link whose target is missing goes
-  too. `deleteRecursively()` stops at the first entry it cannot remove and returns that failure, which can leave
-  part of the tree behind. `list()` gives a folder's entries as full paths in name order; anything that is not a
-  folder is `NotADirectory`.
-- **Moving.** `moveTo(target)` moves a file or folder in one step, replacing a file already at `target` on the
-  JVM, Android, Linux and Apple; whether Windows native replaces it has not been verified. Both paths must be on
-  one file system, so a move across two is `WriteFailed`: copy and delete instead.
-- **Locking.** `lockFile.withLock { work() }` runs the work holding an exclusive lock on `lockFile`, so two runs
-  never overlap, whether they are threads of one process or two processes, JVM and native alike. It is `fcntl`
-  on Linux and Apple, the primitive the JVM's `FileChannel.lock` also uses, and `LockFileEx` on Windows. Waiting
-  is bounded: a holder that keeps it past `waitMillis`, half a second unless you pass another, is `LockBusy`,
-  and zero tries once. Lock a file nothing else opens, a sibling `.lock` rather than the file you work on, since
-  closing any descriptor to a file drops the process's locks on it. The lock file and its missing folders are
-  created and stay; deleting one to tidy up lets a new holder in beside the one still holding it. The lock is
-  advisory, so it keeps out other `withLock` calls and nothing else. To hold one longer than a block, such as for
-  the whole run of an app, `lockFile.tryLock()` tries once and hands over a `FileLock`, or null when another
-  holder has it; closing the `FileLock` releases it. On native Linux and Apple, a second spelling of one lock file
-  through a dangling symlink or a hard link can pass the in-process check beside the first, and `fcntl` lets the
-  same process through, so lock a plain file nothing links to. Coroutine code that should not block its thread while it
-  waits uses `awaitLock` from [`fs-coroutines`](../fs-coroutines/README.md).
-- **Walking.** `walkTopDown()` yields every regular file under a folder, and an error for anything it could not
-  read. Each folder's own files come first, in name order, then its subfolders, also in name order. A folder
-  reached through a symlink is not entered, though a link to a file is yielded; `walkTopDown(Symlinks.Follow)`
-  enters linked folders, walking each real folder once under the first path that reaches it. A FIFO, device or
-  socket inside a folder is skipped, and so is a symlink whose target is missing, since neither is a file to
-  read; named as the folder to walk, a FIFO is `NotRegularFile`.
+This program reads its settings, falls back to defaults when the file is missing, and writes the result back.
 
 ```kotlin
-root.walkTopDown().forEach { it.fold(onSuccess = ::index, onError = ::warn) }
+import com.fromwau.kern.dirs.BaseDirs
+import com.fromwau.kern.dirs.DirsError
+import com.fromwau.kern.dirs.current
+import com.fromwau.kern.fs.*
+import com.fromwau.kern.result.*
+
+sealed interface AppError : ResultError {
+    data class Dirs(val error: DirsError) : AppError
+    data class File(val error: FileError) : AppError
+}
+
+fun saveSettings(): EmptyResult<AppError> = result {
+    val dirs = BaseDirs.current().flatMap { it.forApp("myapp") }.bind(AppError::Dirs)
+    val settings = dirs.config / "settings.toml"
+    // A missing file reads as the defaults. Checking exists() first would race a file that goes away in between.
+    val text = settings.readText(maxBytes = 1_048_576).orIfNotFound { "theme = \"light\"" }.bind(AppError::File)
+    settings.writeText(text).bind(AppError::File)
+}
+
+fun main() {
+    saveSettings().onError { println("settings not saved: $it") }
+}
 ```
 
-| `FileError` | meaning |
-|---|---|
-| `NotFound` | nothing at the path: missing, a symlink whose target is missing, or a path that runs through a file and so cannot resolve |
-| `Inaccessible(reason)` | the path could not be read or looked up |
-| `NotRegularFile(type)` | a directory, FIFO, device or socket where a file was expected |
-| `NotADirectory(type)` | a file, FIFO, device or socket where a folder was expected |
-| `TooLarge(limitBytes, atLeastBytes)` | at least `atLeastBytes` bytes, over the limit; a read that crosses the limit stops there instead of measuring the rest |
-| `WriteFailed(reason)` | writing the file or creating a folder failed |
-| `LockBusy(holderPid, waitedMs)` | another holder kept the lock past the wait; `holderPid` names it on native Linux and Apple and is null elsewhere |
-| `LockFailed(reason)` | the lock could not be attempted: the lock file would not open, or the OS refused the call |
-| `RestoreFailed(reason, backup)` | a write failed and undoing it failed too, so the file is damaged. `backup` names the copy to put back, and is null only when there is none: the file was new, or the copy is gone |
+- `BaseDirs.current()` works in the common code of an app with no Android target. An app with one keeps its own
+  factory, as the [dirs README](../dirs/README.md#make-a-factory-per-platform) shows.
+- `current` is an extension. It takes an import of its own unless you import `com.fromwau.kern.dirs.*`.
+- Every write creates the folders it needs.
 
-`reason` is the error message, which differs per platform; on `RestoreFailed` it is the undo's message rather
-than the write's, since the undo is what left the file damaged.
+## Rules
 
-## A run's temp folder
+These hold for every call in the module.
 
-`AppDirs.temp` from [`dirs`](../dirs/README.md) is this run's own scratch folder. Clear it with
-`deleteRecursively()` on shutdown. `dirs.withRunTemp { temp -> runApp(temp) }` creates the folder and claims it
-for as long as the block runs, by holding a lock on `.run.lock` inside it. `staleTempRuns()` then lists the
-folders of this app's other runs that no live run holds, which is what a crash or a `kill -9` leaves, so a
-cleanup can tell them from runs still going. That only works when every run claims its folder this way: one
-whose run never did, or is starting at that very moment, counts as stale.
+- Nothing throws. A failure is a `FileError` in the `Result`. Every case names the path it is about.
+- Every path a call takes is checked before the system sees it, a `target` included:
+  - An empty path names nothing. Every call answers `NotFound`, and `exists()` answers `false`.
+  - A NUL character is `InvalidName(path, NameProblem.Nul)`, since the system would read only up to it.
+  - A name over `LONGEST_NAME_BYTES`, 255 bytes in UTF-8, is `NameTooLong(path, LongName.Path, bytes)`. That goes
+    for the last name and for a folder's. `bytes` is the longest name's length.
+  - `exists()` answers `false` for a NUL or a name that is too long.
+- The target `createSymlink` writes into a link gets only the NUL and length checks, since a link may hold an empty
+  target.
+- Path names are computed from the string alone and never touch the filesystem. The two exceptions are `realPath()`
+  and `canonicalPath()`.
 
-## Known limits
+## Tasks
 
-- **A full disk has no case of its own.** Every refusal the filesystem makes is one `WriteFailed`, carrying
-  the platform's own message. `TooLarge` is typed because it is *this library's* ceiling, so "bigger than the
-  cap you set" and "this machine is full" do not read alike, and it is the second that has no type. The JVM
-  raises a bare `IOException` for `ENOSPC` with no subclass to match on, and its text comes from `strerror`, so
-  a typed case built on that message would be dead on a machine that does not speak English. Read `reason`
-  yourself where a full disk has to be told from anything else.
-- **What kotlinx-io's `SystemFileSystem` cannot do.**
-  - Nothing forces data to disk on its own, so an in-place write survives a crashed process but not a power cut.
-    A rename write forces the temp file and then the folder to disk with `fsync` (`FileChannel.force` on the JVM,
-    `FlushFileBuffers` on Windows). On macOS a plain `fsync` does not flush the drive's own cache, and
-    `F_FULLFSYNC` is not used, so a power cut there can still lose a write that returned `Ok`.
-  - A symlink whose target is missing cannot be resolved, so a write through one cannot create the folders its
-    target needs and fails on the link instead; a `WriteMode.Atomic` write refuses such a link outright.
-- **In-place writes are not atomic, and only one write may run on a file at a time, whether from other threads or
-  other processes.** This is `WriteMode.InPlace`, and `WriteMode.Auto` whenever it falls back to writing in
-  place. A rename write is atomic for readers, but two at once still race: the last rename wins and the other
-  write is lost.
-  - A process killed during a rename write leaves the file as it was or fully replaced, with at most an orphan
-    `.<name>.<id>.tmp` beside it. That orphan holds a write that never landed, so it can be deleted;
-    `leftoverBackups()` does not list it.
-  - A process killed during an in-place write leaves the file half-written, with the backup `.<name>.<id>.bak`
-    beside it, and `leftoverBackups()` finds it. The file itself may read perfectly, since a write cut short can
-    leave text that still parses and says less than it did, so a leftover is a reason to check both copies rather
-    than proof of which one is good: a process that died while the backup was still being copied leaves a backup
-    shorter than the file. `<id>` identifies the write that made it, so a copy kept beside the file under a
-    name of your own, such as `.app.toml.before-my-edit.bak`, is never counted as one.
-  - An in-place write that creates the file has nothing to back up, so a process killed during it leaves the new
-    file half-written with no backup, and `leftoverBackups()` has nothing to find.
-  - Readers can see the file half-written while the write runs.
-  - Two writes at once can leave a mix of both, and a failed write can undo another one that finished.
-- **The temp file and the backup sit beside the file.** They need write permission on the folder, not only on the
-  file. Their names are 42 bytes longer than the file's, so where names stop at 255 bytes a file named with more
-  than 213 can only be created by an `InPlace` write, since a new file needs no backup, and every later write to it
-  fails with `WriteFailed`. Where a platform has permissions both carry the file's own, before any content goes
-  into them, so a config only you may read is never copied into one anybody may, and a restore leaves the file
-  holding them. What a restore does not keep is the rest of the file's identity: the copy is a new file, so it has
-  its own timestamps and inode, and other hard links to the original keep the half-written content. Windows has no
-  such permissions, and what may read a file there comes from the folder it sits in: the native target copies the
-  read-only flag, which is all a mode says there, and the JVM one leaves the copy to the folder.
-- **Windows native.** Whether a rename there replaces an existing file in one step is unverified, so
-  `WriteMode.Auto` writes an existing file in place and `WriteMode.Atomic` renames regardless. Ownership is not
-  checked there, so an `Atomic` write can hand another user's file to you. kotlinx-io cannot follow symlinks
-  there, so `Auto` writes through a link in place, `Atomic` refuses it, and a restore replaces a link with a
-  regular file while the link's real target keeps the half-written content. Undoing a failed first write through
-  a link whose target is missing can remove the link and leave the half-written file at its target. Its file calls
-  use the ANSI Windows APIs, so a path with non-ASCII characters, such as a user name like `Jürgen`, likely fails.
-  The JVM on Windows is unaffected.
-- **Links on Windows.** Windows native counts every reparse point as a symlink, junctions included, while the JVM
-  there asks `Files.isSymbolicLink`, which likely answers false for a junction, so a walk that skips links may
-  enter a junction on the JVM. Neither has been verified on Windows.
+### Build a path
+
+```kotlin
+val settings = dirs.config / "settings.toml"
+(dirs.config / "drafts" / "../app.toml").canonicalPath()   // the real config folder / app.toml, existing or not
+```
+
+`/` appends what you give it, as written. `canonicalPath()` resolves the part that exists and adds the rest by name.
+[Path names](#path-names) has the edge cases.
+
+### Check a name someone typed
+
+```kotlin
+name.nameProblem()?.let { problem -> return println("$name is not a file name: $problem") }
+(dirs.data / name).writeText(text).onError { return report(it) }
+```
+
+`nameProblem()` tells you what keeps a string from being one name in a folder, or null when nothing does. It answers
+the first problem that applies, in this order:
+
+- `Nul`, `Blank`, `Dot`, `DotDot`.
+- `Separator` for a `/` or a `\`, on every platform.
+- `TooLong` past 255 bytes.
+- With `staged = true`, `TooLongToStage` for a name too long to stage, which comes before `LeftoverName`.
+- Last, `LeftoverName` for a name shaped like a copy a write leaves, such as `.notes.md.<id>.tmp`.
+
+### Check a relative path from a manifest
+
+```kotlin
+for ((entry, bytes) in manifest) {
+    entry.relativePathProblem()?.let { problem ->
+        return println("$entry is not a path in the package: $problem")
+    }
+    stage.writeBytes(entry, bytes).onError { return report(it) }
+}
+```
+
+`relativePathProblem()` answers one of two problems:
+
+- `Absolute` for a path that starts at a root: `/`, `\` or a drive such as `C:`.
+- `BadName(index, name, problem)` for the first name `nameProblem()` refuses. `index` counts from zero.
+
+It reads only the string, so write through a [Writer](docs/writer.md), which also refuses a link on the way that leads
+out.
+
+## Pages
+
+Each page covers one job in depth.
+
+| page | what it covers | main calls |
+|---|---|---|
+| [Writer](docs/writer.md) | an app folder no name and no symlink reaches outside; private folders | `writer`, `privateWriter`, `reader` |
+| [Reading](docs/reading.md) | looking a path up, reading a file, a file only you may change, a config that reloads | `readText`, `info`, `orIfNotFound` |
+| [Writing](docs/writing.md) | replacing a file by rename or in place, `WriteMode`, `ownerOnly`, secrets, copying | `writeText`, `copyTo` |
+| [Appending](docs/appending.md) | adding to the end of a file, logs another tool rotates | `openAppend`, `Reopen.WhenMoved` |
+| [Folders and moves](docs/folders-and-moves.md) | creating folders, building one whole, moving, removing, listing, symlinks | `createDirectories`, `createDirectoryAtomically`, `moveTo`, `switchSymlinkTo` |
+| [Walking](docs/walking.md) | every entry under a folder, which links to follow, mirroring a tree | `walkTopDown`, `mirrorTo` |
+| [Leftovers](docs/leftovers.md) | what a killed write or folder build left, restoring and discarding it | `leftoversIn`, `AppDirs.leftovers` |
+| [Locking](docs/locking.md) | a lock for a block or a run, a lost lock, per-key locks, one instance of an app | `withLock`, `tryLock`, `singleInstance` |
+| [A run's temp folder](docs/run-temp.md) | this run's scratch folder, clearing what crashed runs left | `withRunTemp`, `clearStaleTempRuns` |
+| [Whole apps](docs/apps.md) | a command-line tool, a daemon and a site builder, each from `main` to its exit code | `forApp`, `singleInstance`, `withRunTemp`, `mirrorTo` |
+| [Types](docs/types.md) | `FileError` and its causes, `FileType`, every other type | `FileError`, `IoCause`, `FileType` |
+
+## Reference
+
+You do not need this part on a first read. Come back when a path does something you did not expect, or before you
+rely on a write surviving a crash.
+
+### Path names
+
+- `dir / "name"` appends as written. A separator adds more than one segment, and `""` adds none.
+- An absolute right side such as `"/x"` goes below `dir` rather than replacing it.
+- `".."` stays a segment, so `(dir / "..").parent` is `dir`.
+- `dir / path` takes a `Path` by the same rule, so a walk entry's `relative` goes in as `dst / e.relative`.
+- `extension` is everything after the last dot of the name: `archive.tar.gz` gives `gz`. It is null with no dot
+  (`Makefile`), a trailing dot (`a.`) or only a leading one (`.bashrc`). `nameWithoutExtension` is the rest.
+- `expandTilde(home)` expands `~` and `~/...`. It leaves `~bob/...` alone, so the result can still be relative.
+- `path.relativeTo(base)` is the rest of `path` below `base`. `/a/b/c` relative to `/a` is `b/c`, and `base` itself
+  gives `Path("")`. It compares whole names as written and resolves no link and no `..`.
+- `relativeTo` is null when `path` is not under `base`, or when only one of the two is absolute. It is also null when
+  the rest holds `..` (`/a/../b` relative to `/a`). `a.relativeTo(Path("."))` is null, while `./a` gives `a`.
+- On Windows, spell both paths of `relativeTo` the same way, for example both from `realPath()`.
+- `realPath()` looks the path up, so a missing one is `NotFound`.
+- `canonicalPath()` resolves the longest part that exists, as `realPath()` does. It adds the missing rest by name,
+  drops `.`, and lets each `..` take back the name before it.
+- `canonicalPath()` takes a relative path from the working directory. It creates nothing. A missing rest below a
+  regular file is `NotFound`.
+- In `relativePathProblem()`, `a//b` and `bin/` hold an empty name (`Blank`). A `\` inside a name is `Separator`. The
+  empty string is `BadName(0, "", Blank)`.
+
+### Every call
+
+All of these are extensions on kotlinx-io's `Path` unless they say otherwise.
+
+```kotlin
+operator fun Path.div(child: String): Path
+operator fun Path.div(child: Path): Path
+val Path.extension: String?
+val Path.nameWithoutExtension: String
+fun Path.expandTilde(home: Path): Path
+fun Path.relativeTo(base: Path): Path?
+fun String.nameProblem(staged: Boolean = false): NameProblem?
+fun String.relativePathProblem(staged: Boolean = false): RelativePathProblem?
+
+fun Path.exists(): Boolean
+fun Path.readText(
+    maxBytes: Long? = null,
+    trusted: Boolean = false,
+    streams: Boolean = false,
+    accept: ((FileInfo) -> Boolean)? = null,
+): Result<String, FileError>
+fun Path.readBytes(
+    maxBytes: Long? = null,
+    trusted: Boolean = false,
+    streams: Boolean = false,
+    accept: ((FileInfo) -> Boolean)? = null,
+): Result<ByteArray, FileError>
+fun Path.readPrefix(maxBytes: Long): Result<ByteArray, FileError>
+fun Path.fileType(followLinks: Boolean = true): Result<FileType, FileError>
+fun Path.fileSize(): Result<Long, FileError>
+fun Path.modifiedAt(): Result<Instant, FileError>
+fun Path.permissions(): Result<Permissions?, FileError>
+fun Path.info(): Result<FileInfo, FileError>
+fun Path.isSymlink(): Result<Boolean, FileError>
+fun Path.realPath(): Result<Path, FileError>
+fun Path.canonicalPath(): Result<Path, FileError>
+fun Path.readSymlink(): Result<Path, FileError>
+fun Path.list(): Result<List<Path>, FileError>
+fun Path.walkTopDown(
+    symlinks: Symlinks = Symlinks.Inside,
+    exclude: Set<Path> = emptySet(),
+    enter: (WalkEntry.Folder) -> Boolean = { true },
+): Result<Sequence<Result<WalkEntry, WalkFailure>>, FileError>
+fun Path.mirrorTo(
+    dst: Writer,
+    symlinks: Symlinks = Symlinks.AsLinks,
+    exclude: Set<Path> = emptySet(),
+    enter: (WalkEntry.Folder) -> Boolean = { true },
+    keep: (relative: Path) -> Boolean = { false },
+    approveRemovals: (plan: RemovalPlan) -> List<Removal> = { it.defaultApproved() },
+    outputOf: (relative: Path) -> String = { /* its names joined by `/` */ },
+    isCurrent: (source: WalkEntry.File, existing: FileInfo) -> Boolean = { source, existing ->
+        existing.size == source.size && existing.modifiedAt == source.modifiedAt
+    },
+    copy: (source: WalkEntry.File, out: Writer, name: String) -> EmptyResult<FileError> = { source, out, name ->
+        out.copyFrom(source.path, name, keepAttributes = true).map { }
+    },
+): Result<MirrorReport, FileError>
+inline fun <S> Result<S, FileError>.orIfNotFound(value: () -> S): Result<S, FileError>
+fun <S> Result<S, FileError>.orNullIfNotFound(): Result<S?, FileError>
+
+fun Path.writeText(
+    text: String,
+    mode: WriteMode = WriteMode.Auto,
+    ownerOnly: Boolean = false,
+    executable: Boolean = false,
+    modifiedAt: Instant? = null,
+): Result<Written, FileError>
+fun Path.writeBytes(
+    bytes: ByteArray,
+    mode: WriteMode = WriteMode.Auto,
+    ownerOnly: Boolean = false,
+    executable: Boolean = false,
+    modifiedAt: Instant? = null,
+): Result<Written, FileError>
+fun Path.copyTo(
+    target: Path,
+    mode: WriteMode = WriteMode.Auto,
+    ownerOnly: Boolean = false,
+    executable: Boolean = false,
+    keepAttributes: Boolean = false,
+    modifiedAt: Instant? = null,
+): Result<Copied, FileError>
+fun Path.openAppend(
+    reopen: Reopen = Reopen.Never,
+    ownerOnly: Boolean = false,
+): Result<AppendFile, FileError>
+fun Path.leftovers(): Result<List<Leftover>, FileError>
+fun Path.leftoversIn(depth: Int = 0): Result<LeftoverScan, FileError>
+fun AppDirs.leftovers(): Result<LeftoverScan, FileError>
+
+fun Path.createDirectories(ownerOnly: Boolean = false): EmptyResult<FileError>
+inline fun <T> Path.createDirectoryAtomically(build: (stage: Path) -> T): Result<T, FileError>
+fun Path.delete(): EmptyResult<FileError>
+fun Path.deleteRecursively(): EmptyResult<FileError>
+fun Path.moveTo(target: Path): EmptyResult<FileError>
+fun Path.createSymlink(target: Path): EmptyResult<FileError>
+fun Path.switchSymlinkTo(target: Path): EmptyResult<FileError>
+const val MAX_STAGED_NAME_BYTES: Int
+
+val DEFAULT_LOCK_WAIT: Duration
+inline fun <T> Path.withLock(
+    wait: Duration = DEFAULT_LOCK_WAIT,
+    block: () -> T,
+): Result<T, FileError>
+fun Path.tryLock(): Result<FileLock, FileError>
+fun AppDirs.singleInstance(name: String): Result<InstanceLock, FileError>
+fun AppDirs.singleInstance(key: Path): Result<InstanceLock, FileError>
+fun currentProcessId(): Long
+
+inline fun <T> AppDirs.withRunTemp(block: (temp: Writer) -> T): Result<T, FileError>
+fun AppDirs.staleTempRuns(): Result<StaleRuns, FileError>
+fun AppDirs.clearStaleTempRuns(): Result<StaleCleanup, FileError>
+
+fun Path.writer(create: Boolean = true): Result<Writer, FileError>
+fun Path.privateWriter(create: Boolean = true): Result<Writer, FileError>
+fun Path.reader(): Result<Reader, FileError>
+fun Path.privateReader(): Result<Reader, FileError>
+interface Reader {
+    val root: Path
+    fun readText(
+        name: String,
+        maxBytes: Long? = null,
+        trusted: Boolean = false,
+        streams: Boolean = false,
+    ): Result<String, FileError>
+    fun readBytes(
+        name: String,
+        maxBytes: Long? = null,
+        trusted: Boolean = false,
+        streams: Boolean = false,
+    ): Result<ByteArray, FileError>
+    fun readPrefix(name: String, maxBytes: Long): Result<ByteArray, FileError>
+    fun info(name: String, followLinks: Boolean = true): Result<FileInfo, FileError>
+    fun readSymlink(name: String): Result<Path, FileError>
+    fun realName(name: String): Result<String?, FileError>
+    fun list(folder: String? = null): Result<List<String>, FileError>
+}
+class Writer : Reader {
+    val isPrivate: Boolean
+    val reader: Reader
+    fun writeText(
+        name: String,
+        text: String,
+        inPlace: Boolean = false,
+        executable: Boolean = false,
+        replaceLink: Boolean = false,
+        modifiedAt: Instant? = null,
+    ): Result<Written, FileError>
+    fun writeBytes(
+        name: String,
+        bytes: ByteArray,
+        inPlace: Boolean = false,
+        executable: Boolean = false,
+        replaceLink: Boolean = false,
+        modifiedAt: Instant? = null,
+    ): Result<Written, FileError>
+    fun copyFrom(
+        source: Path,
+        name: String,
+        keepAttributes: Boolean = false,
+        executable: Boolean = false,
+        replaceLink: Boolean = false,
+        modifiedAt: Instant? = null,
+    ): Result<Written, FileError>
+    fun openAppend(
+        name: String,
+        reopen: Reopen = Reopen.Never,
+        replaceLink: Boolean = false,
+    ): Result<AppendFile, FileError>
+    fun delete(name: String): EmptyResult<FileError>
+    fun deleteRecursively(name: String): EmptyResult<FileError>
+    fun move(name: String, toName: String): EmptyResult<FileError>
+    fun createDirectories(name: String): EmptyResult<FileError>
+    fun switchSymlink(name: String, target: Path): EmptyResult<FileError>
+    fun tryLock(name: String): Result<FileLock, FileError>
+    inline fun <T> withLock(name: String, wait: Duration = DEFAULT_LOCK_WAIT, block: () -> T): Result<T, FileError>
+    fun writer(name: String): Result<Writer, FileError>
+    fun privateWriter(name: String): Result<Writer, FileError>
+}
+inline fun <T> Writer.createDirectoryAtomically(name: String, build: (stage: Writer) -> T): Result<T, FileError>
+fun Writer.leftovers(depth: Int = 0): Result<LeftoverScan, FileError>
+fun Writer.discard(leftover: Leftover, throughLinks: Boolean = false): EmptyResult<FileError>
+fun Writer.restore(backup: Leftover.Backup, throughLinks: Boolean = false): EmptyResult<FileError>
+```
+
+The four `Writer.` calls after the class are extensions. Each needs its import, such as
+`com.fromwau.kern.fs.restore`, or the star import `com.fromwau.kern.fs.*`.
+
+### Known limits
+
+Some things the library cannot promise. Read these before you count on a write surviving a crash, a power cut or a
+second writer.
+
+**A full disk** is `NoSpace` only where the system's error code says so. This library never reads a message to type
+a cause.
+
+- Linux and Apple: `NoSpace` for the calls this library makes itself, such as an append, a write's temp file or an
+  in-place write.
+- Windows native: `NoSpace` for its own Win32 calls, such as writing a file, an append or a lock. This is unverified
+  there.
+- JVM and Android: `Other`, because Java raises a bare `IOException` for `ENOSPC`.
+- Windows native, for what it does through kotlinx-io, such as reading: `Other`.
+
+**Long paths.** A walk or a mirror that meets a path past the system's limit reports that entry as a failure.
+[Walk](docs/walking.md#walk) describes it.
+
+**Durability.** kotlinx-io forces nothing to disk on its own, so an in-place write survives a crashed process but not a
+power cut. A rename write forces the temp file and then the folder: `fsync`, `FileChannel.force` on the JVM,
+`FlushFileBuffers` on Windows. macOS's plain `fsync` does not flush the drive's cache, and `F_FULLFSYNC` is not used,
+so a power cut there can still lose a write that returned `Ok`.
+
+**Concurrent writes.** An in-place write is not atomic. That is `WriteMode.InPlace`, or `Auto` when it falls back.
+
+- Readers can see the file half-written while it runs.
+- Only one write may run on a file at a time. Two at once can mix, and a failed one can undo another that finished.
+- A rename write is atomic for readers. But of two at once, the last rename wins and the other is lost.
+
+**A killed write** leaves something beside the file, depending on when it stopped. `<id>` identifies the write, so a
+copy of your own such as `.app.toml.before-my-edit.bak` is never counted.
+
+- During a rename write: the file as it was or fully replaced. At most an orphan `.<name>.<id>.tmp` stays (or
+  `.<id>.tmp` for a long name). It is found as `Leftover.Temp` or `Leftover.UnnamedTemp`, and it is safe to delete.
+- During an in-place write: a half-written file and the backup `.<name>.<id>.bak`, found as `Leftover.Backup`. The
+  file may still parse and say less, so check both copies.
+- While the backup was being copied: only `.<name>.<id>.bak.part`, a `Leftover.PartialBackup`. The file is untouched.
+- During an in-place write that creates the file: a half-written new file. There is nothing to back up or find.
+
+**Temp and backup files** sit beside the file.
+
+- They need write permission on the folder, not only on the file.
+- Their names are longer than the file's, as [Writing](docs/writing.md#reference) counts. The limit is 255 bytes in
+  UTF-8 everywhere, Windows' UTF-16 count included.
+- A name with no room for `.<name>.<id>.tmp` is still written by rename, through an `UnnamedTemp` named `.<id>.tmp`.
+- Only an in-place write of a file already there needs the room, for its backup. One without it is `NameTooLong`.
+- Both are created afresh, never over a file at their name. They get the file's permissions, or `600` with
+  `ownerOnly`, before any content goes in.
+- The JVM copies only the read, write and execute bits, not setuid, setgid or sticky. Windows native copies the
+  read-only flag. The JVM on Windows leaves the copy to the folder.
+
+**A `Writer` on the JVM, Android, macOS and Windows** can follow a folder swapped for a link just as a call reaches
+it. [Writer](docs/writer.md#reference) says more.
+
+**`createDirectoryAtomically` on the JVM and Android** can replace an empty folder made at the path between the last
+check and the rename. java.nio has no rename that refuses one. A folder with entries, a file or a link there is
+`AlreadyExists`.
+
+- Linux native (`RENAME_NOREPLACE`), Apple (`RENAME_EXCL`) and Windows native (no `MOVEFILE_REPLACE_EXISTING`,
+  unverified) refuse it.
+- The exception is Linux before 3.15, or a file system without those flags.
+
+**Names Windows reserves are not refused.** Only a NUL and a name over 255 bytes are refused. Neither `nameProblem()`
+nor `relativePathProblem()` checks more, so these go to Windows as written: `CON`, `NUL`, `COM1`, a name ending in a
+dot or space, or one holding `<`, `>`, `:`, `"`, `|`, `?` or `*`. Windows then refuses it, trims it or reads a device.
+
+**Windows native:**
+
+- Whether a rename replaces an existing file in one step is unverified, so `Auto` writes an existing file in place,
+  and `Atomic` renames regardless.
+- Ownership is not checked, so an `Atomic` write can hand another user's file to you.
+- kotlinx-io cannot follow a link to an existing file, so `Auto` and `Replace` write through it in place and keep the
+  link, and `Atomic` refuses with `AtomicRefused(Symlink)`.
+- Undoing a failed first write through a link whose target is missing can remove the link. The half-written file
+  then stays at its target.
+- `copyTo` tells the source by its real path, and two hard links of one file have different real paths, so copying a
+  file onto a hard link of itself can empty it.
+- File calls use the ANSI Windows APIs. A path with non-ASCII characters, such as `Jürgen`, likely fails. The JVM on
+  Windows is unaffected.
+- Looking up or reading a named pipe opens it, which connects to its server. This is unverified.
+- A `streams` read of a serial port such as `COM3` opens it several times, for the lookups and then the read. Opening
+  one can reset a board such as an Arduino. This is unverified.
+
+**Links on Windows**, unverified there:
+
+- Native counts every reparse point as a symlink, junctions included.
+- The JVM asks `Files.isSymbolicLink`, which likely answers false for a junction, so a walk under `NoLinks` or
+  `AsLinks` may enter one.
+- `realPath()` uses `toRealPath()` on the JVM. On native it uses the final path name, without its `\\?\` prefix.
+
+**Run temps on Windows.** `withRunTemp` deletes its lock file while still holding the lock. Windows allows that only
+because the file is opened with share-delete. This is unverified on Windows.
 
 ## License
 

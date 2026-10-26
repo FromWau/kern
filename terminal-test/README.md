@@ -1,8 +1,10 @@
 # terminal-test
 
-A test `Terminal` for [`kern:terminal`](../terminal/README.md). `RecordingTerminal` keeps what each stream was sent,
-answers the width, colour and tty questions with what you built it with, and fails a stream's writes when you tell
-it to.
+A test `Terminal` for [`kern:terminal`](../terminal/README.md).
+
+Code that prints is worth testing: the right text, on the right stream, coloured or not, and the right exit code when
+a pipe closes. `RecordingTerminal` keeps what each stream was sent. It answers the width, colour and tty questions
+with what you built it with. And it fails a stream's writes when you tell it to.
 
 **Targets:** the same as [`kern:terminal`](../terminal/README.md).
 
@@ -14,12 +16,14 @@ dependencies {
 }
 ```
 
-KMP consumers put it in `commonTest`. `kern:terminal` comes along as `api`. `RecordingTerminal` is in the package
-`com.fromwau.kern.terminal.test`. Needs what [every kern module needs](../README.md#requirements).
+- KMP consumers put it in `commonTest`.
+- `kern:terminal` comes along as `api`.
+- `RecordingTerminal` is in the package `com.fromwau.kern.terminal.test`.
+- Needs what [every kern module needs](../README.md#requirements).
 
 ## Checking what your code writes
 
-Hand a `RecordingTerminal` to the code under test, then read `out` and `err`, each the text that stream was sent:
+Hand a `RecordingTerminal` to the code under test. Then read `out` and `err`, each the text that stream was sent:
 
 ```kotlin
 import com.fromwau.kern.terminal.*
@@ -37,7 +41,8 @@ fun `a missing file is reported in red`() {
 }
 ```
 
-Each parameter is what the property of the same name answers, and each defaults to what a test that captures output should claim:
+Each parameter is what the property of the same name answers. Each defaults to what a test that captures output
+should claim:
 
 | parameter       | default | what it answers                          |
 |-----------------|---------|------------------------------------------|
@@ -47,17 +52,43 @@ Each parameter is what the property of the same name answers, and each defaults 
 | `outIsTerminal` | `false` | whether standard output is a terminal    |
 | `errIsTerminal` | `false` | whether standard error is a terminal     |
 
-Writes from several threads are kept in the order they were made, so a logger writing from its own thread can
-use one too.
+Writes from several threads are kept in the order they were made. So a logger writing from its own thread can use
+one too.
+
+## Checking the order of both streams
+
+`out` and `err` lose how the two streams interleave. `writes` keeps it: every write to either stream, in the order it
+was made, as `2>&1` shows them. Each is a `Write(stream, text)`:
+
+```kotlin
+@Test
+fun `an error shows between the progress lines around it`() {
+    val terminal = RecordingTerminal()
+
+    copy(terminal, listOf("a.txt", "missing.txt", "b.txt"))
+
+    assertEquals(
+        listOf(
+            Write(Stream.Out, "copied a.txt\n"),
+            Write(Stream.Err, "error: missing.txt is missing\n"),
+            Write(Stream.Out, "copied b.txt\n"),
+        ),
+        terminal.writes,
+    )
+}
+```
+
+- `copy` here is the code under test: it prints `copied <file>` to `out` and the error to `err`.
+- `Write` is in the package `com.fromwau.kern.terminal.test`, next to `RecordingTerminal`.
+- Each read of `writes` is a copy, so a later write does not change a list you already hold.
 
 ## Failing a stream
 
-`failWith(error)` fails every later write to `error.stream`: nothing more is recorded for that stream, and
-`writeResult()`, `writeResult(stream)`, `afterWrites` and `awaitWriteResult()` report the error from then on. What
-was written before stays in `out` or `err`.
+`failWith(error)` fails every later write to `error.stream`:
 
-`afterWrites` runs its block at once on every target, Node included, since a `RecordingTerminal` has no writes to
-wait for. A call from inside a block runs once that block returns, as on the real terminal.
+- Nothing more reaches `out`, `err` or `writes` for that stream. Those writes go to `lostWrites` instead.
+- `writeResult()`, `writeResult(stream)`, `afterWrites` and `awaitWriteResult()` report the error from then on.
+- What was written before stays in `out` or `err`.
 
 ```kotlin
 import kotlinx.coroutines.test.runTest
@@ -74,11 +105,37 @@ fun `a closed pipe exits with the broken pipe code`() = runTest {
 }
 ```
 
-`finish` here is the suspending failure handling from the
-[kern:terminal README](../terminal/README.md#failed-writes), so the test runs in `runTest`, from
-`org.jetbrains.kotlinx:kotlinx-coroutines-test` at the version matching your kotlinx-coroutines. `writeResult()`
-reports standard output's failure before standard error's, as a real terminal does. A second `failWith` for the same
-stream replaces the first.
+`finish` here is the suspending failure handling from the [kern:terminal README](../terminal/README.md#failed-writes).
+So the test runs in `runTest`, from `org.jetbrains.kotlinx:kotlinx-coroutines-test` at the version matching your
+kotlinx-coroutines.
+
+`lostWrites` pins what your code tried to write to a broken stream. A CLI whose standard error fails still writes its
+message about the failure there, and the message is lost:
+
+```kotlin
+@Test
+fun `a full standard error still exits 1 and tries to say why`() = runTest {
+    val terminal = RecordingTerminal()
+    terminal.failWith(WriteError.Refused(Stream.Err, "No space left on device"))
+
+    assertEquals(1, finish(terminal))
+    assertEquals("", terminal.err)
+    assertEquals(
+        listOf(Write(Stream.Err, "error: cannot write to standard error: No space left on device\n")),
+        terminal.lostWrites,
+    )
+}
+```
+
+Each `Write` in `lostWrites` is in the order it was made, and each read is a copy, as with `writes`.
+
+### Details
+
+- `writeResult()` reports standard output's failure before standard error's, as a real terminal does.
+- A second `failWith` for the same stream replaces the first.
+- `afterWrites` runs its block at once on every target, Node included, since a `RecordingTerminal` has no writes to
+  wait for.
+- A call to `afterWrites` from inside a block runs once that block returns, as on the real terminal.
 
 ## License
 

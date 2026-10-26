@@ -7,23 +7,21 @@ import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.toKString
-import kotlinx.io.IOException
 import kotlinx.io.files.Path
-import platform.posix.errno
 import platform.posix.stat
-import platform.posix.strerror
 
-internal actual fun copyPermissions(
-    from: Path,
-    to: Path,
-): Unit = memScoped {
+internal actual fun permissionBits(path: Path): Int? = memScoped {
     val info = alloc<stat>()
-    if (stat(from.toString(), info.ptr) != 0) throw IOException("$from: ${errnoReason()}")
-    // The permission bits alone: the rest of a mode says what kind of file it is, which the copy already is.
-    if (setPermissionBits(to, info.st_mode.toInt() and PERMISSION_BITS) != 0) {
-        throw IOException("$to: ${errnoReason()}")
-    }
+    if (stat(path.toString(), info.ptr) != 0) throw errnoFailure(about = path)
+    // The permission bits alone: the rest of a mode says what kind of file it is, which a copy already is.
+    info.st_mode.toInt() and PERMISSION_BITS
+}
+
+internal actual fun setFilePermissions(
+    path: Path,
+    bits: Int,
+) {
+    if (setPermissionBits(path, bits) != 0) throw errnoFailure(about = path)
 }
 
 /**
@@ -37,6 +35,3 @@ internal expect fun setPermissionBits(
     path: Path,
     bits: Int,
 ): Int
-
-/** What the last system call went wrong with, in the words the platform has for it. */
-internal fun errnoReason(): String = strerror(errno)?.toKString() ?: "errno $errno"

@@ -10,18 +10,19 @@ internal sealed interface PathProbe {
     /** Nothing is there, and the lookup had the access it needed to prove it. */
     data object Absent : PathProbe
 
-    /** The path could not be looked up at all. [reason] is the OS message. */
-    data class Denied(val reason: String) : PathProbe
+    /** The path could not be looked up at all, for what [failure] says. */
+    data class Denied(val failure: Throwable) : PathProbe
 }
 
 /**
- * Looks [path] up without going through kotlinx-io, whose JVM, Android and Apple backends report a refused
- * lookup as a missing file.
+ * Looks [path] up in one call of its own, to tell a missing path from one that may not be looked up and to see what
+ * is there at one moment, where kotlinx-io's answer does neither.
  */
 internal expect fun probePath(path: Path): PathProbe
 
 /**
- * Why listing [path] came back empty, or null when it really holds nothing. kotlinx-io's JVM and Android backend
- * lists a directory it may not read as an empty one.
+ * Why listing [path] failed or came back empty, asked of the platform directly, or null when nothing refuses it.
+ * kotlinx-io's JVM and Android backend lists a directory it may not read as an empty one, and its native one fails
+ * with only a message.
  */
 internal expect fun listDenial(path: Path): PathProbe.Denied?

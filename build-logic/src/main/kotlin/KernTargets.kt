@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet
 
 /** JS and Wasm, for the browser and Node.js. */
 fun KotlinMultiplatformExtension.kernWebTargets() {
@@ -33,10 +34,7 @@ fun KotlinMultiplatformExtension.kernTerminalTargets() {
     androidNativeX86()
 
     kernWebTargets()
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmWasi {
-        nodejs()
-    }
+    kernWasiTarget()
 }
 
 /**
@@ -46,10 +44,7 @@ fun KotlinMultiplatformExtension.kernTerminalTargets() {
 fun KotlinMultiplatformExtension.kernAllTargets() {
     linuxArm64()
     kernWebTargets()
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmWasi {
-        nodejs()
-    }
+    kernWasiTarget()
 
     tvosArm64()
     tvosSimulatorArm64()
@@ -61,4 +56,26 @@ fun KotlinMultiplatformExtension.kernAllTargets() {
     androidNativeX64()
     androidNativeArm32()
     androidNativeX86()
+}
+
+/** WASI on Node.js, whose test run silences every Node `ExperimentalWarning`, WASI's own among them. */
+@OptIn(ExperimentalWasmDsl::class)
+private fun KotlinMultiplatformExtension.kernWasiTarget() {
+    wasmWasi {
+        nodejs {
+            testTask { nodeJsArgs += "--disable-warning=ExperimentalWarning" }
+        }
+    }
+}
+
+/**
+ * The `threadedTest` source set the JVM and native tests share, for tests that run on the JVM and native, such as one
+ * that runs work on several threads at once, which the one JS and Wasm thread cannot. Call it after the targets, once
+ * the default hierarchy is applied.
+ */
+fun KotlinMultiplatformExtension.kernThreadedTest(): KotlinSourceSet {
+    val threadedTest = sourceSets.create("threadedTest") { dependsOn(sourceSets.getByName("commonTest")) }
+    sourceSets.getByName("jvmTest").dependsOn(threadedTest)
+    sourceSets.getByName("nativeTest").dependsOn(threadedTest)
+    return threadedTest
 }

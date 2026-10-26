@@ -35,7 +35,9 @@ kotlin {
         }
 
         commonTest.dependencies {
+            implementation(project(":fs-test"))
             implementation(project(":result-test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }

@@ -2,9 +2,7 @@ package com.fromwau.kern.fs
 
 import kotlinx.io.files.FileMetadata
 import kotlinx.io.files.Path
-import java.nio.file.AccessDeniedException
 import java.nio.file.FileSystemException
-import java.nio.file.FileSystemLoopException
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
 import java.nio.file.NoSuchFileException
@@ -38,12 +36,8 @@ internal actual fun listDenial(path: Path): PathProbe.Denied? = try {
 internal fun Exception.asProbe(): PathProbe = when (this) {
     // Nothing is at a missing name, and nothing can be at one the platform refuses to parse at all.
     is NoSuchFileException, is InvalidPathException -> PathProbe.Absent
-    // The message is only the path, which the error already carries, so it says what the native targets say.
-    is AccessDeniedException -> PathProbe.Denied("Permission denied")
-    // It carries no reason, only the path, so it says what the native targets say about a loop.
-    is FileSystemLoopException -> PathProbe.Denied("Too many levels of symbolic links")
-    is FileSystemException -> if (runsThroughFile()) PathProbe.Absent else PathProbe.Denied(fault)
-    else -> PathProbe.Denied(reason)
+    is FileSystemException -> if (runsThroughFile()) PathProbe.Absent else PathProbe.Denied(this)
+    else -> PathProbe.Denied(this)
 }
 
 // A path running through a file is absent, as ENOTDIR is natively. JDK 25 raises it as NoSuchFileException, but JDK
@@ -56,8 +50,3 @@ private fun FileSystemException.runsThroughFile(): Boolean {
     }
     return false
 }
-
-// getMessage() leads with the path too, and for a loop or an over-long name that is the whole of it. `reason`
-// here is the exception's own member, not kern's extension.
-internal val FileSystemException.fault: String
-    get() = reason ?: this::class.java.simpleName

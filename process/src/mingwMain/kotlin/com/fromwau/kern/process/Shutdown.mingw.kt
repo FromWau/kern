@@ -29,6 +29,7 @@ private val handler = AtomicReference<((ShutdownRequest) -> Int)?>(null)
 private val requested = AtomicBoolean(false)
 private val stopRequest = AtomicReference<ShutdownRequest?>(null)
 private val stopExitCode = AtomicReference<Int?>(null)
+private val exitHookAdded = AtomicBoolean(false)
 
 /** Console control events: Ctrl-C is [ShutdownRequest.Interrupt] and closing the console [ShutdownRequest.Hangup]. */
 internal actual fun installShutdownHandler(onRequest: (ShutdownRequest) -> Int): EmptyResult<ShutdownError> {
@@ -58,7 +59,12 @@ private fun onControlEvent(event: DWORD): WINBOOL {
  */
 internal actual fun installShutdownStop(exitCode: Int?): Result<ShutdownStop, ShutdownError> {
     stopExitCode.store(exitCode)
-    if (atexit(staticCFunction(::endStopped)) != 0) return Err(ShutdownError.OutOfResources)
+    // atexit runs each registration, so a second installation, after one that failed further on, adds none.
+    val addsHook = exitHookAdded.compareAndSet(expectedValue = false, newValue = true)
+    if (addsHook && atexit(staticCFunction(::endStopped)) != 0) {
+        exitHookAdded.store(false)
+        return Err(ShutdownError.OutOfResources)
+    }
     if (SetConsoleCtrlHandler(staticCFunction(::onStopControlEvent), TRUE) == FALSE) {
         return Err(ShutdownError.System(GetLastError().toInt()))
     }

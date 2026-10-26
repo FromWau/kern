@@ -26,6 +26,47 @@ class RecordingTerminalTest {
     }
 
     @Test
+    fun `writes keeps both streams in the order they were written`() {
+        val terminal = RecordingTerminal()
+
+        terminal.out("a")
+        terminal.err("b")
+        terminal.out("c")
+        terminal.err("d")
+
+        assertEquals(
+            listOf(Write(Stream.Out, "a"), Write(Stream.Err, "b"), Write(Stream.Out, "c"), Write(Stream.Err, "d")),
+            terminal.writes,
+        )
+        assertEquals("ac", terminal.out)
+        assertEquals("bd", terminal.err)
+    }
+
+    @Test
+    fun `writes leaves out the writes a failed stream lost`() {
+        val terminal = RecordingTerminal()
+        terminal.out("kept")
+
+        terminal.failWith(WriteError.BrokenPipe(Stream.Out))
+        terminal.out("lost")
+        terminal.err("still written")
+
+        assertEquals(listOf(Write(Stream.Out, "kept"), Write(Stream.Err, "still written")), terminal.writes)
+    }
+
+    @Test
+    fun `writes is a snapshot a later write does not change`() {
+        val terminal = RecordingTerminal()
+        terminal.out("first")
+
+        val before = terminal.writes
+        terminal.err("second")
+
+        assertEquals(listOf(Write(Stream.Out, "first")), before)
+        assertEquals(listOf(Write(Stream.Out, "first"), Write(Stream.Err, "second")), terminal.writes)
+    }
+
+    @Test
     fun `a new recording terminal claims no terminal colour or width`() {
         val terminal = RecordingTerminal()
 
@@ -64,6 +105,46 @@ class RecordingTerminalTest {
 
         assertEquals("kept", terminal.out)
         assertEquals("still written", terminal.err)
+    }
+
+    @Test
+    fun `lostWrites keeps what a failed stream lost in order while the other stream writes on`() {
+        val terminal = RecordingTerminal()
+
+        terminal.failWith(WriteError.BrokenPipe(Stream.Out))
+        terminal.out("first")
+        terminal.err("still written")
+        terminal.out("second")
+
+        assertEquals(listOf(Write(Stream.Out, "first"), Write(Stream.Out, "second")), terminal.lostWrites)
+        assertEquals(listOf(Write(Stream.Err, "still written")), terminal.writes)
+        assertEquals("", terminal.out)
+        assertEquals("still written", terminal.err)
+    }
+
+    @Test
+    fun `writes made before a stream fails are not lost`() {
+        val terminal = RecordingTerminal()
+        terminal.err("before")
+
+        terminal.failWith(WriteError.Refused(Stream.Err, "No space left on device"))
+        terminal.err("after")
+
+        assertEquals(listOf(Write(Stream.Err, "after")), terminal.lostWrites)
+        assertEquals("before", terminal.err)
+    }
+
+    @Test
+    fun `lostWrites is a snapshot a later lost write does not change`() {
+        val terminal = RecordingTerminal()
+        terminal.failWith(WriteError.BrokenPipe(Stream.Out))
+        terminal.out("first")
+
+        val before = terminal.lostWrites
+        terminal.out("second")
+
+        assertEquals(listOf(Write(Stream.Out, "first")), before)
+        assertEquals(listOf(Write(Stream.Out, "first"), Write(Stream.Out, "second")), terminal.lostWrites)
     }
 
     @Test

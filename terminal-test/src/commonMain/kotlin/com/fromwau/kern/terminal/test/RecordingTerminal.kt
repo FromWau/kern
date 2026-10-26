@@ -33,24 +33,43 @@ public class RecordingTerminal(
     override val errIsTerminal: Boolean = false,
 ) : Terminal {
     private val lock = reentrantLock()
-    private val written = mapOf(Stream.Out to StringBuilder(), Stream.Err to StringBuilder())
+    private val recorded = mutableListOf<Write>()
+    private val lost = mutableListOf<Write>()
     private val failures = mutableMapOf<Stream, WriteError>()
 
     /** Everything written to standard output, except the writes that failed. */
     public val out: String
-        get() = lock.withLock { written.getValue(Stream.Out).toString() }
+        get() = textOf(Stream.Out)
 
     /** Everything written to standard error, except the writes that failed. */
     public val err: String
-        get() = lock.withLock { written.getValue(Stream.Err).toString() }
+        get() = textOf(Stream.Err)
+
+    /**
+     * Every write to either stream in the order it was made, except the writes that failed. Use it to pin the order
+     * of standard output and standard error, as `2>&1` shows them.
+     *
+     * Each read is a copy: a later write does not change a list you already hold.
+     */
+    public val writes: List<Write>
+        get() = lock.withLock { recorded.toList() }
+
+    /**
+     * Every write sent to a stream after [failWith] failed it, in the order made. Use it to pin what your code
+     * tried to write to a broken stream, such as the message a CLI writes about the failure to the stream that failed.
+     *
+     * Each read is a copy, as with [writes].
+     */
+    public val lostWrites: List<Write>
+        get() = lock.withLock { lost.toList() }
 
     override fun out(text: String): Unit = write(Stream.Out, text)
 
     override fun err(text: String): Unit = write(Stream.Err, text)
 
     /**
-     * Fails every later write to [error]'s stream: nothing more is recorded for that stream, and [writeResult] reports
-     * [error] from now on. A later call for the same stream replaces it.
+     * Fails every later write to [error]'s stream: those writes go to [lostWrites] instead of [writes], [out] or [err],
+     * and [writeResult] reports [error] from now on. A later call for the same stream replaces it.
      */
     public fun failWith(error: WriteError) {
         lock.withLock { failures[error.stream] = error }
@@ -64,9 +83,16 @@ public class RecordingTerminal(
         ?.let { Err(it) }
         ?: Ok(Unit)
 
+    private fun textOf(stream: Stream): String = writes
+        .filter { it.stream == stream }
+        .joinToString("") { it.text }
+
     private fun write(stream: Stream, text: String) {
         lock.withLock {
-            if (stream !in failures) written.getValue(stream).append(text)
+            if (stream in failures) lost += Write(stream, text) else recorded += Write(stream, text)
         }
     }
 }
+
+/** One write a [RecordingTerminal] saw: the [text] sent to [stream]. */
+public data class Write(val stream: Stream, val text: String)

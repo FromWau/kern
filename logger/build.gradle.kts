@@ -12,6 +12,7 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     kernLoggerTargets()
+    kernThreadedTest()
 
     sourceSets {
         // Every target with standard streams, a file system and a thread that may block: all but the
@@ -20,11 +21,6 @@ kotlin {
             dependsOn(commonMain.get())
         }
         nativeMain.get().dependsOn(stdioMain)
-        val stdioTest = create("stdioTest") {
-            dependsOn(commonTest.get())
-        }
-        jvmTest.get().dependsOn(stdioTest)
-        nativeTest.get().dependsOn(stdioTest)
 
         // JVM and Android block a thread and track the writing sink the same way.
         val jvmAndroidMain = create("jvmAndroidMain") {

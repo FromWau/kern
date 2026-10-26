@@ -1,6 +1,5 @@
 package com.fromwau.kern.logger
 
-import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Ok
 
 @JsName("console")
@@ -15,9 +14,9 @@ private external object JsConsole {
  * The console method of each severity, so a browser's devtools filter by level. Lines are never coloured: a
  * browser console shows ANSI codes as text.
  */
-internal actual fun platformWriter(): (LogEntry, SinkConfig) -> EmptyResult<SinkError> {
+internal actual fun platformWriter(): EntryWriter {
     val localClock by lazy { systemLocalClock() }
-    return { entry, config ->
+    return EntryWriter { entry, config ->
         val line = entry.render(LogFormat.TEXT, localClock, config.timestamp)
         when (entry.level) {
             LogLevel.VERBOSE, LogLevel.DEBUG -> JsConsole.debug(line)

@@ -10,7 +10,8 @@ import kotlin.coroutines.cancellation.CancellationException
  * fun loadUser(id: Long): Result<User, CrudError> = catching({ CrudError.DbError(it) }) { dao.load(id) }
  * ```
  *
- * [block] cannot suspend; in suspending code use `suspendCatching` from `result-coroutines`.
+ * [block] cannot suspend; in suspending code use `suspendCatching` from `result-coroutines`. Unlike that, which makes a
+ * timeout in a coroutine still running an error, this rethrows every [CancellationException].
  *
  * @param toError makes your error from the [Exception] [block] threw. A [CancellationException] is rethrown
  *   instead, and an [Error], such as running out of memory, is never caught.

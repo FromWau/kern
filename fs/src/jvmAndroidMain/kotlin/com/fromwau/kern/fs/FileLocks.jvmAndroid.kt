@@ -1,7 +1,9 @@
 package com.fromwau.kern.fs
 
-import java.io.File
-import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import kotlinx.io.files.Path
 
 /**
@@ -16,17 +18,36 @@ import kotlinx.io.files.Path
  * before the gate and closed after it would destroy another thread's lock while that thread was still inside
  * its critical section, and silently, since `FileLock.isValid` stays true.
  */
-internal actual fun tryOsLock(lockFile: Path): OsLock {
+internal actual fun tryOsLock(
+    lockFile: Path,
+    permissions: Int?,
+    newMode: Int,
+): OsLock {
     val opened = try {
-        RandomAccessFile(File(lockFile.toString()), "rw")
+        // NIO, not RandomAccessFile, opens with FILE_SHARE_DELETE on Windows, and the lock file is deleted while held.
+        FileChannel.open(
+            Paths.get(lockFile.toString()),
+            setOf(StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE),
+            *creationAttributes(permissions ?: newMode),
+        )
     } catch (e: Exception) {
-        return OsLock.Failed(e.reason)
+        return OsLock.NotOpened(e)
+    }
+    try {
+        // Set as well as created with, since the umask can narrow a new file's mode and one already there has its own.
+        if (permissions != null) setFilePermissions(lockFile, permissions)
+    } catch (e: Exception) {
+        opened.close()
+        return OsLock.NotOpened(e)
     }
     val outcome = try {
         // A null tryLock means another process holds it. java.nio exposes no F_GETLK, so it cannot be named.
-        if (opened.channel.tryLock() != null) null else OsLock.Busy(holderPid = null)
+        if (opened.tryLock() != null) null else OsLock.Busy(holderPid = null)
+    } catch (_: OverlappingFileLockException) {
+        // This JVM already holds it, under a spelling of the file that passed the in-process gate.
+        OsLock.Busy(holderPid = currentProcessId())
     } catch (e: Exception) {
-        OsLock.Failed(e.reason)
+        OsLock.Failed(e)
     }
     if (outcome != null) {
         try {
@@ -36,7 +57,14 @@ internal actual fun tryOsLock(lockFile: Path): OsLock {
         }
         return outcome
     }
-    return OsLock.Held { opened.close() }
+    // Java cannot ask a channel for its file key, so the path's is read once the lock is held.
+    return OsLock.Held(fileKeyOrNull(lockFile)) { opened.close() }
+}
+
+internal actual fun fileKeyOrNull(path: Path): Any? = try {
+    keyAt(path).takeUnless { it == NoFile }
+} catch (_: Exception) {
+    null
 }
 
 // Thread.sleep clears the interrupt as it throws, so it is set again for whoever asked this thread to stop.

@@ -12,17 +12,19 @@ import platform.posix.F_GETLK
 import platform.posix.F_SETLK
 import platform.posix.F_UNLCK
 import platform.posix.F_WRLCK
+import platform.posix.O_CLOEXEC
 import platform.posix.O_CREAT
+import platform.posix.O_NONBLOCK
 import platform.posix.O_RDWR
 import platform.posix.SEEK_SET
 import platform.posix.close
 import platform.posix.errno
 import platform.posix.fcntl
 import platform.posix.flock
-import platform.posix.open
+import platform.posix.fstat
+import platform.posix.stat
 import platform.posix.usleep
 
-private const val LOCK_FILE_MODE = 420 // 0644
 private const val MICROS_PER_MILLI = 1000
 
 /**
@@ -33,10 +35,30 @@ private const val MICROS_PER_MILLI = 1000
  * `F_SETLK`, one try, rather than `F_SETLKW`: a blocking wait turns a live but stalled holder into a caller that
  * hangs with no output and no deadline. The caller retries within its own bound and names the holder instead.
  */
+internal actual fun tryOsLock(
+    lockFile: Path,
+    permissions: Int?,
+    newMode: Int,
+): OsLock = tryOsLockAt(Opening(lockFile), permissions, newMode)
+
+/** [tryOsLock] of the lock file [opening] names. */
 @OptIn(ExperimentalForeignApi::class)
-internal actual fun tryOsLock(lockFile: Path): OsLock {
-    val descriptor = open(lockFile.toString(), O_RDWR or O_CREAT, LOCK_FILE_MODE)
-    if (descriptor < 0) return OsLock.Failed(errnoReason())
+internal fun tryOsLockAt(
+    opening: Opening,
+    permissions: Int?,
+    newMode: Int,
+): OsLock {
+    val lockFile = opening.path
+    // O_NONBLOCK: opening a FIFO put at the path waits for no other end; a regular file ignores it.
+    val flags = O_RDWR or O_CREAT or opening.noFollow or O_CLOEXEC or O_NONBLOCK
+    val descriptor = openAt(opening.folder, opening.name, flags, permissions ?: newMode)
+    if (descriptor < 0) return OsLock.NotOpened(errnoFailure(about = lockFile))
+    // Set as well as created with, since the umask can narrow a new file's mode and one already there has its own.
+    if (permissions != null && setDescriptorPermissionBits(descriptor, permissions) != 0) {
+        val failure = errnoFailure(about = lockFile)
+        close(descriptor)
+        return OsLock.NotOpened(failure)
+    }
 
     val outcome = memScoped {
         val request = alloc<flock>()
@@ -44,7 +66,7 @@ internal actual fun tryOsLock(lockFile: Path): OsLock {
         when {
             fcntl(descriptor, F_SETLK, request.ptr) != -1 -> null
             // EACCES and EAGAIN mean another process holds it; anything else is a failure.
-            errno != EACCES && errno != EAGAIN -> OsLock.Failed(errnoReason())
+            errno != EACCES && errno != EAGAIN -> OsLock.Failed(errnoFailure(about = lockFile))
             else -> OsLock.Busy(holderPid(descriptor, request))
         }
     }
@@ -52,7 +74,18 @@ internal actual fun tryOsLock(lockFile: Path): OsLock {
         close(descriptor)
         return outcome
     }
-    return OsLock.Held { close(descriptor) }
+    // The open descriptor's own inode, so a file put at the path between the open and this cannot be taken for it.
+    val key = memScoped {
+        val info = alloc<stat>()
+        if (fstat(descriptor, info.ptr) == 0) info.key() else null
+    }
+    return OsLock.Held(key) { close(descriptor) }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun fileKeyOrNull(path: Path): Any? = memScoped {
+    val info = alloc<stat>()
+    if (stat(path.toString(), info.ptr) == 0) info.key() else null
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -63,10 +96,10 @@ internal actual fun sleepMillis(millis: Long): Boolean {
 
 /** Whoever the kernel says holds the lock, or null when it went away between the attempt and the question. */
 @OptIn(ExperimentalForeignApi::class)
-private fun holderPid(descriptor: Int, request: flock): Int? {
+private fun holderPid(descriptor: Int, request: flock): Long? {
     request.requestWriteLock()
     val answered = fcntl(descriptor, F_GETLK, request.ptr) != -1
-    return if (answered && request.l_type.toInt() != F_UNLCK) request.l_pid else null
+    return if (answered && request.l_type.toInt() != F_UNLCK) request.l_pid.toLong() else null
 }
 
 @OptIn(ExperimentalForeignApi::class)

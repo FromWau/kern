@@ -12,6 +12,7 @@ import kotlin.time.TimeSource
 import kotlin.time.measureTimedValue
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import platform.posix.S_IRUSR
 import platform.posix.S_IWUSR
 import platform.posix.truncate
 
@@ -33,8 +34,8 @@ class AppendingLinuxTest {
         val after = opened.state()
         opened.close()
 
-        assertEquals(AppendState.Same, before)
-        assertEquals(AppendState.Moved, after)
+        assertEquals(Ok(AppendState.Same), before)
+        assertEquals(Ok(AppendState.Moved), after)
     }
 
     @Test
@@ -46,7 +47,7 @@ class AppendingLinuxTest {
         val state = opened.state()
         opened.close()
 
-        assertEquals(AppendState.Moved, state)
+        assertEquals(Ok(AppendState.Moved), state)
     }
 
     @Test
@@ -57,19 +58,43 @@ class AppendingLinuxTest {
         val state = opened.state()
         opened.close()
 
-        assertEquals(AppendState.Deleted, state)
+        assertEquals(Ok(AppendState.Deleted), state)
+    }
+
+    @Test
+    fun `onReopen is told a deleted log was Deleted`() {
+        val states = mutableListOf<AppendState>()
+        val log = file.openAppend(Reopen.WhenMoved(onReopen = { _, state -> states += state })).assertSuccess()
+
+        SystemFileSystem.delete(file)
+        log.append("x".encodeToByteArray()).assertSuccess()
+        log.close()
+
+        assertEquals(listOf(AppendState.Deleted), states)
+    }
+
+    @Test
+    fun `onReopen is told a moved log was Moved`() {
+        val states = mutableListOf<AppendState>()
+        val log = file.openAppend(Reopen.WhenMoved(onReopen = { _, state -> states += state })).assertSuccess()
+
+        SystemFileSystem.atomicMove(file, dir / "app.log.1")
+        log.append("x".encodeToByteArray()).assertSuccess()
+        log.close()
+
+        assertEquals(listOf(AppendState.Moved), states)
     }
 
     @Test
     fun `a file whose other hard link remains is moved rather than deleted`() {
         val opened = file.openAppend().assertSuccess()
-        val _ = (dir / "app.log.1").hardLinkTo(file)
+        val _ = (dir / "app.log.1").rawHardLinkTo(file)
 
         SystemFileSystem.delete(file)
         val state = opened.state()
         opened.close()
 
-        assertEquals(AppendState.Moved, state)
+        assertEquals(Ok(AppendState.Moved), state)
     }
 
     @Test
@@ -90,25 +115,43 @@ class AppendingLinuxTest {
 
         val error = fifo.openAppend().assertError<FileError.NotRegularFile>()
 
-        assertEquals(FileType.Other, error.type)
+        assertEquals(FileType.Fifo, error.type)
     }
 
     @Test
     fun `a device at the path is NotRegularFile`() {
         val error = Path("/dev/full").openAppend().assertError<FileError.NotRegularFile>()
 
-        assertEquals(FileType.Other, error.type)
+        assertEquals(FileType.CharacterDevice, error.type)
     }
 
     @Test
-    fun `a write the system refuses is WriteFailed with its reason`() {
+    fun `a write past the file size limit is WriteFailed for Other in the system's words`() {
         val opened = file.openAppend().assertSuccess()
 
         val refused = withFileSizeLimit(bytes = 4) { opened.append("past the limit\n".encodeToByteArray()) }
         opened.close()
 
         val error = refused.assertError<FileError.WriteFailed>()
-        assertEquals("File too large", error.reason)
+        assertEquals(IoCause.Other, error.cause)
+        assertEquals("$file: File too large", error.exception?.message)
+    }
+
+    @Test
+    fun `appending to a file that may not be written is WriteFailed for Denied`() {
+        file.writeRaw("kept")
+        file.setMode(S_IRUSR)
+        try {
+            // A runner that may write it anyway, such as root, leaves nothing to observe.
+            if (file.canOpenForWriting()) return
+
+            val failure = file.openAppend().assertError<FileError.WriteFailed>()
+
+            assertEquals(IoCause.Denied, failure.cause)
+            assertEquals("$file: Permission denied", failure.exception?.message)
+        } finally {
+            file.setMode(S_IRUSR or S_IWUSR)
+        }
     }
 
     @Test
@@ -138,5 +181,34 @@ class AppendingLinuxTest {
 
         assertEquals(Ok(0.toByte()), last)
         assertTrue(took < 1.seconds, "reading the last byte took $took")
+    }
+
+    @Test
+    fun `the state of a file whose folder may not be searched is Inaccessible as Denied`() {
+        val folder = dir / "logs"
+        val opened = (folder / "app.log").openAppend().assertSuccess()
+        try {
+            folder.withMode(0) {
+                val failure = opened.state().assertError<FileError.Inaccessible>()
+                assertEquals(folder / "app.log", failure.path)
+                assertEquals(IoCause.Denied, failure.cause)
+            }
+        } finally {
+            opened.close()
+        }
+    }
+
+    @Test
+    fun `a log opened with ownerOnly under umask 022 is created 0600`() {
+        withUmask(UMASK_022) { file.openAppend(ownerOnly = true).assertSuccess().close() }
+
+        file.assertPermissions(0b110_000_000)
+    }
+
+    @Test
+    fun `a log opened without ownerOnly under umask 022 is created 0644`() {
+        withUmask(UMASK_022) { file.openAppend().assertSuccess().close() }
+
+        file.assertPermissions(0b110_100_100)
     }
 }

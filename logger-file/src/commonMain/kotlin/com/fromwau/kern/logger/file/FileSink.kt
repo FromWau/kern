@@ -3,6 +3,8 @@ package com.fromwau.kern.logger.file
 import com.fromwau.kern.fs.AppendFile
 import com.fromwau.kern.fs.AppendState
 import com.fromwau.kern.fs.FileError
+import com.fromwau.kern.fs.Writer
+import com.fromwau.kern.fs.div
 import com.fromwau.kern.fs.openAppend
 import com.fromwau.kern.logger.BatchSink
 import com.fromwau.kern.logger.DropPolicy
@@ -19,6 +21,7 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.errorOrNull
+import com.fromwau.kern.result.getOrNull
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.io.files.Path
@@ -33,10 +36,12 @@ internal val FILE_CHECK_INTERVAL: Duration = 100.milliseconds
 
 /**
  * Appends each entry to the file at [path], already resolved by you: kern opens exactly that path, never expands a
- * `~` and never picks a directory of its own. Missing parent directories are created.
+ * `~` and never picks a directory of its own. Missing parent directories are created. Take this for a file the user
+ * picked, and the [Writer] constructor for your app's own log in one of its folders.
  *
  * ```kotlin
- * Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(FileSink(dirs.state / "app.log"))) }
+ * val file = FileSink(picked, onFailure = SinkFailure.Drop())
+ * Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(file)) }
  *     .onError { error -> Log.tag("App").w(error) { "no log file" } }
  * ```
  *
@@ -50,10 +55,10 @@ internal val FILE_CHECK_INTERVAL: Duration = 100.milliseconds
  * the start of the new file; any beyond that are counted as dropped. Lines written before that window went with the
  * deleted file: they are neither written again nor counted as dropped. The JVM on macOS cannot tell a deleted file
  * from a moved one, so there the lines of that window are counted as dropped, after a move as well, even though the
- * moved file kept them. The JVM on Windows opens the file so
- * that no other process can move or delete it until the sink is closed.
+ * moved file kept them. The JVM on Windows opens the file so that no other process can move or delete it until the
+ * sink is closed.
  *
- * A failure is [SinkError.Dropped] carrying kern:fs's [FileError]: [FileError.WriteFailed] with a reason for a
+ * A failure is [SinkError.Dropped] carrying kern:fs's [FileError]: [FileError.WriteFailed] with its cause for a
  * refused write, such as on a full disk, and [FileError.NotRegularFile] for a directory or device at [path]. By
  * default the entry is retried every second until it is written. A close that cannot write the lines of a deleted
  * file again fails with the same error, and counts those lines as dropped.
@@ -75,6 +80,35 @@ public class FileSink(
     override val capacity: Int = 10_000,
     override val drop: DropPolicy = DropPolicy.OLDEST,
 ) : BatchSink {
+    /**
+     * Appends each entry to the file [name] below [writer]'s root, through [writer], as the way for an app's own log in
+     * one of its folders: the folders on the way keep to the writer's root, and a symlink planted at [name] is
+     * replaced by a new file rather than written through. Everything else is as for a [path].
+     *
+     * ```kotlin
+     * val state = dirs.state.writer().getOrElse { return warn(it) }
+     * Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(FileSink(state, "app.log"))) }
+     *     .onError { error -> Log.tag("App").w(error) { "no log file" } }
+     * ```
+     *
+     * @param writer the writer on the folder the log lives in.
+     * @param name the log file's name below [writer]'s root, such as `"logs/app.log"`. One [writer] refuses is that
+     *   write's [FileError.InvalidRelativePath].
+     * @param sinkName names the sink in errors and health, as `name` does for a [path].
+     */
+    public constructor(
+        writer: Writer,
+        name: String,
+        format: LogFormat = LogFormat.TEXT,
+        sinkName: String = "file:${writer.root / name}",
+        onFailure: SinkFailure = SinkFailure.Retry(),
+        capacity: Int = 10_000,
+        drop: DropPolicy = DropPolicy.OLDEST,
+    ) : this(writer.root / name, format, sinkName, onFailure, capacity, drop) {
+        // The sink notices a moved or deleted file itself, so each reopen is one more plain open through the writer.
+        openFile = { writer.openAppend(name, replaceLink = true) }
+    }
+
     // Test seams, set before the sink is configured. Kept out of the constructor, which a user's mistyped call lists.
     internal var timeSource: TimeSource = TimeSource.Monotonic
     internal var openFile: (Path) -> Result<AppendFile, FileError> = { it.openAppend() }
@@ -116,7 +150,7 @@ public class FileSink(
     override fun close(): EmptyResult<SinkError> {
         val failure = lock.withLock {
             forgetKeptAfterQuietSpell()
-            file?.let { settleKept(it.state()) }
+            file?.let { settleKept(it.state().getOrNull()) }
             closeHandle()
             // No later write may come to carry them, so they are written now or counted as dropped.
             if (rewriteKept) rewriteKeptNow() else null
@@ -158,7 +192,7 @@ public class FileSink(
         if (failure != null) {
             // The handle goes too, so the next attempt reopens and a deleted directory recovers once recreated.
             lastAppendFailed = true
-            settleKept(handle.state())
+            settleKept(handle.state().getOrNull())
             closeHandle()
             return failure
         }
@@ -171,7 +205,7 @@ public class FileSink(
     private fun open(): Result<AppendFile, FileError> {
         file?.let { open ->
             if (nextCheck.hasNotPassedNow()) return Ok(open)
-            val state = open.state()
+            val state = open.state().getOrNull()
             if (state == AppendState.Same) {
                 forgetKept()
                 nextCheck = timeSource.markNow() + FILE_CHECK_INTERVAL
@@ -207,8 +241,11 @@ public class FileSink(
         }
     }
 
-    /** Decides what becomes of the kept lines, given what [state] says happened to the file they went to. */
-    private fun settleKept(state: AppendState) {
+    /**
+     * Decides what becomes of the kept lines, given what [state] says happened to the file they went to, or null when
+     * that could not be looked up.
+     */
+    private fun settleKept(state: AppendState?) {
         // Lines waiting to be written again have reached no file since, whatever became of this one.
         if (rewriteKept) return
         when (state) {
@@ -218,7 +255,8 @@ public class FileSink(
                 unkept = null
             }
             AppendState.Same, AppendState.Moved -> forgetKept()
-            AppendState.Unknown -> dropKept()
+            // Not knowing whether they reached a file that still exists, they are counted as dropped.
+            AppendState.Unknown, AppendState.Closed, null -> dropKept()
         }
     }
 

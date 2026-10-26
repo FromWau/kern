@@ -16,6 +16,35 @@ class PathNamesTest {
     }
 
     @Test
+    fun `div with a String joins names as div with a Path does`() {
+        assertEquals(Path("/etc", "x"), Path("/etc") / "/x")
+        assertEquals(Path("/etc", "a", "b"), Path("/etc") / "a//b")
+        assertEquals(Path("/etc", "a"), Path("/etc") / "a/")
+        assertEquals(Path("/etc") / Path("a//b/"), Path("/etc") / "a//b/")
+    }
+
+    @Test
+    fun `div with a Path appends its names below as div with a String does`() {
+        assertEquals(Path("/etc", "app", "a.toml"), Path("/etc") / Path("app", "a.toml"))
+        assertEquals(Path("/etc", "x", "y"), Path("/etc") / Path("/x/y"))
+        assertEquals(Path("/etc"), (Path("/etc") / Path("..")).parent)
+        assertEquals(Path("/etc") / "a/../b", Path("/etc") / Path("a/../b"))
+    }
+
+    @Test
+    fun `the entry a path names folds a trailing dot and dot dot by name`() {
+        assertEquals(Path("/a"), Path("/a/b/..").namedEntry())
+        assertEquals(Path("/a"), Path("/a/b/c/./../..").namedEntry())
+        assertEquals(Path("/a/b"), Path("/a/b/.").namedEntry())
+        assertEquals(Path("/a/../b"), Path("/a/../b").namedEntry())
+        assertEquals(Path("/"), Path("/a/../..").namedEntry())
+        assertEquals(Path("."), Path("a/..").namedEntry())
+        assertEquals(Path("."), Path(".").namedEntry())
+        assertEquals(Path(".."), Path("..").namedEntry())
+        assertEquals(Path("..", ".."), Path("a/../../..").namedEntry())
+    }
+
+    @Test
     fun `extension is everything after the last dot`() {
         assertEquals("mp3", Path("/music/song.mp3").extension)
         assertEquals("gz", Path("/tmp/archive.tar.gz").extension)
@@ -66,5 +95,53 @@ class PathNamesTest {
     @Test
     fun `expandTilde leaves an absolute path alone`() {
         assertEquals(Path("/etc/app.toml"), Path("/etc/app.toml").expandTilde(Path("/home/me")))
+    }
+
+    @Test
+    fun `relativeTo gives the names below the base`() {
+        assertEquals(Path("b", "c"), Path("/a/b/c").relativeTo(Path("/a")))
+        assertEquals(Path("a"), Path("/a").relativeTo(Path("/")))
+        assertEquals(Path("b"), Path("a/b").relativeTo(Path("a")))
+    }
+
+    @Test
+    fun `relativeTo of the base itself is the empty path`() {
+        assertEquals(Path(""), Path("/a/b").relativeTo(Path("/a/b")))
+    }
+
+    @Test
+    fun `relativeTo compares whole names rather than characters`() {
+        assertNull(Path("/a/bc").relativeTo(Path("/a/b")))
+    }
+
+    @Test
+    fun `relativeTo of a path outside the base is null`() {
+        assertNull(Path("/a").relativeTo(Path("/a/b")))
+        assertNull(Path("/x/y").relativeTo(Path("/a")))
+    }
+
+    @Test
+    fun `relativeTo of one absolute and one relative path is null`() {
+        assertNull(Path("/a/b").relativeTo(Path("a")))
+        assertNull(Path("a/b").relativeTo(Path("/a")))
+    }
+
+    @Test
+    fun `relativeTo takes dot segments as written`() {
+        assertNull(Path("/a/../b").relativeTo(Path("/b")))
+        assertEquals(Path(".", "b"), Path("/a/./b").relativeTo(Path("/a")))
+    }
+
+    @Test
+    fun `relativeTo a dot base takes only a path spelled from the dot`() {
+        assertNull(Path("a").relativeTo(Path(".")))
+        assertEquals(Path("a"), Path("./a").relativeTo(Path(".")))
+    }
+
+    @Test
+    fun `relativeTo is null when the rest would climb out of the base`() {
+        assertNull(Path("/a/../b").relativeTo(Path("/a")))
+        assertNull(Path("a/b/../../c").relativeTo(Path("a")))
+        assertNull(Path("/a/..").relativeTo(Path("/a")))
     }
 }

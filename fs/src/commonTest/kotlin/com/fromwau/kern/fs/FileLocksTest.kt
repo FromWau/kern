@@ -1,14 +1,18 @@
 package com.fromwau.kern.fs
 
+import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.assertSuccess
+import com.fromwau.kern.result.getOrNull
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlinx.io.files.SystemFileSystem
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 class FileLocksTest {
     private val dir = newTempDir()
@@ -47,15 +51,15 @@ class FileLocksTest {
 
         val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertEquals(lockFile, busy.path)
-        assertNull(busy.holderPid)
-        assertTrue(busy.waitedMs >= DEFAULT_LOCK_WAIT_MILLIS, "waited ${busy.waitedMs}ms")
+        assertNotNull(busy.holderPid, "a holder in this process goes unnamed")
+        assertTrue(busy.waited >= DEFAULT_LOCK_WAIT, "waited ${busy.waited}")
     }
 
     @Test
     fun `one lock file spelled two ways is one lock`() {
         val spelledAgain = dir / "." / ".app.lock"
 
-        val outcome = lockFile.withLock(waitMillis = 0) { spelledAgain.withLock(waitMillis = 0) { } }
+        val outcome = lockFile.withLock(wait = Duration.ZERO) { spelledAgain.withLock(wait = Duration.ZERO) { } }
 
         val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
         assertEquals(spelledAgain, busy.path)
@@ -63,29 +67,44 @@ class FileLocksTest {
 
     @Test
     fun `a wait of zero refuses a lock already held at once`() {
-        val outcome = lockFile.withLock(waitMillis = 0) { lockFile.withLock(waitMillis = 0) { } }
+        val outcome = lockFile.withLock(wait = Duration.ZERO) { lockFile.withLock(wait = Duration.ZERO) { } }
 
         val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
-        assertTrue(busy.waitedMs < DEFAULT_LOCK_WAIT_MILLIS, "waited ${busy.waitedMs}ms")
+        assertTrue(busy.waited < DEFAULT_LOCK_WAIT, "waited ${busy.waited}")
+    }
+
+    @Test
+    fun `a negative wait tries once as zero does`() {
+        val outcome = lockFile.withLock(wait = Duration.ZERO) { lockFile.withLock(wait = (-1).milliseconds) { } }
+
+        val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
+        assertTrue(busy.waited < DEFAULT_LOCK_WAIT, "waited ${busy.waited}")
+    }
+
+    @Test
+    fun `what the block throws is rethrown with the lock released`() {
+        assertFailsWith<IllegalStateException> { lockFile.withLock { error("the work failed") } }
+
+        lockFile.tryLock().assertSuccess().close()
     }
 
     @Test
     fun `a raised wait is what a refusal waits out`() {
-        val raised = DEFAULT_LOCK_WAIT_MILLIS + 200
+        val raised = DEFAULT_LOCK_WAIT + 200.milliseconds
 
         val outcome = lockFile.withLock(raised) { lockFile.withLock(raised) { } }
 
         val busy = outcome.assertSuccess().assertError<FileError.LockBusy>()
-        assertTrue(busy.waitedMs >= raised, "waited ${busy.waitedMs}ms of a ${raised}ms budget")
+        assertTrue(busy.waited >= raised, "waited ${busy.waited} of a $raised budget")
     }
 
     @Test
-    fun `a lock file that cannot be opened is LockFailed`() {
-        // A folder cannot be opened for writing, so the attempt fails before any lock is taken.
+    fun `a folder at the lock path is NotRegularFile`() {
         val folder = dir / "blocked.lock"
-        SystemFileSystem.createDirectories(folder)
+        createDirectoriesRaw(folder)
 
-        folder.withLock { }.assertError<FileError.LockFailed>()
+        assertEquals(Err(FileError.NotRegularFile(folder, FileType.Directory)), folder.withLock { })
+        assertEquals(Err(FileError.NotRegularFile(folder, FileType.Directory)), folder.tryLock())
     }
 
     @Test
@@ -98,11 +117,11 @@ class FileLocksTest {
 
     @Test
     fun `tryLock holds the lock until it is closed`() {
-        val held = lockFile.tryLock().assertSuccess()!!
+        val held = lockFile.tryLock().assertSuccess()
 
         assertEquals(lockFile, held.path)
-        assertEquals(Ok(null), lockFile.tryLock())
-        lockFile.withLock(waitMillis = 0) { }.assertError<FileError.LockBusy>()
+        lockFile.tryLock().assertError<FileError.LockBusy>()
+        lockFile.withLock(wait = Duration.ZERO) { }.assertError<FileError.LockBusy>()
 
         held.close()
 
@@ -111,13 +130,26 @@ class FileLocksTest {
 
     @Test
     fun `closing a lock twice releases it once`() {
-        val first = lockFile.tryLock().assertSuccess()!!
+        val first = lockFile.tryLock().assertSuccess()
         first.close()
-        val second = lockFile.tryLock().assertSuccess()!!
+        val second = lockFile.tryLock().assertSuccess()
 
         first.close()
 
-        assertEquals(Ok(null), lockFile.tryLock(), "closing the first lock again let a third holder past the second")
+        val third = lockFile.tryLock()
+        third.getOrNull()?.close()
         second.close()
+        third.assertError<FileError.LockBusy>()
+    }
+
+    @Test
+    fun `tryLock on a lock this process holds is LockBusy naming this process with no wait`() {
+        lockFile.tryLock().assertSuccess().use {
+            val busy = lockFile.tryLock().assertError<FileError.LockBusy>()
+            val waited = lockFile.withLock(wait = Duration.ZERO) { }.assertError<FileError.LockBusy>()
+
+            assertEquals(FileError.LockBusy(lockFile, waited.holderPid, waited = Duration.ZERO), busy)
+            assertNotNull(busy.holderPid)
+        }
     }
 }

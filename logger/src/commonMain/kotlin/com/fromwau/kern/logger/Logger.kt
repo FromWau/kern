@@ -130,8 +130,8 @@ public class Logger {
      * settings its [ConfiguredSink] has now. An added sink starts taking entries. A removed sink takes no further
      * entries, writes what it had queued and is then closed on its own worker; this call does not wait for that.
      * Added back before that close, it takes its [InstalledSink] back, queue and all. A removed sink that keeps
-     * failing under [SinkFailure.Retry] gives up after 5 seconds and counts what it still had as dropped. One whose
-     * single write runs for 5 seconds without returning is [SinkState.Abandoned]: what it still had, that write
+     * failing under [SinkFailure.Retry] gives up after five seconds and counts what it still had as dropped. One whose
+     * single write runs for five seconds without returning is [SinkState.Abandoned]: what it still had, that write
      * included, counts as lost, and the logger waits for it no more. [draining] lists the removed sinks not yet done.
      *
      * @param transform makes the new config from the current one. It runs once, under the logger's lock, so two calls
@@ -617,11 +617,13 @@ private class Delivery(
 
     fun retire(removed: List<InstalledSink.Retirement>) {
         this.removed.store(removed)
-        if (senders.load() == 0) endIntakeIfRetired()
+        endIntakeIfRetired()
     }
 
     private fun endIntakeIfRetired() {
         val removed = removed.load() ?: return
+        // Re-read after removed: a sender may have entered since the exit that hit zero, and its exit ends the intake.
+        if (senders.load() != 0) return
         if (ended.compareAndSet(expectedValue = false, newValue = true)) removed.forEach { it.endIntake() }
     }
 }

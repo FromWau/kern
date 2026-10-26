@@ -17,7 +17,14 @@ private fun report(terminal: Terminal, missing: String) {
     terminal.err(red("$missing is missing\n"))
 }
 
-// Not in this README: the failure handling from kern:terminal's README, which the second snippet calls.
+// Not in the README: the code under test for the order snippet.
+private fun copy(terminal: Terminal, files: List<String>) {
+    for (file in files) {
+        if (file.startsWith("missing")) terminal.err("error: $file is missing\n") else terminal.out("copied $file\n")
+    }
+}
+
+// Not in this README: the failure handling from kern:terminal's README, which a snippet here calls.
 private suspend fun finish(terminal: Terminal): Int = exitCode(terminal, terminal.awaitWriteResult())
 
 private fun exitCode(terminal: Terminal, written: EmptyResult<WriteError>): Int =
@@ -58,5 +65,34 @@ class ReadmeSnippetsTest {
 
         assertEquals(BROKEN_PIPE_EXIT, finish(terminal))
         assertEquals("", terminal.out)
+    }
+
+    @Test
+    fun `a full standard error still exits 1 and tries to say why`() = runTest {
+        val terminal = RecordingTerminal()
+        terminal.failWith(WriteError.Refused(Stream.Err, "No space left on device"))
+
+        assertEquals(1, finish(terminal))
+        assertEquals("", terminal.err)
+        assertEquals(
+            listOf(Write(Stream.Err, "error: cannot write to standard error: No space left on device\n")),
+            terminal.lostWrites,
+        )
+    }
+
+    @Test
+    fun `an error shows between the progress lines around it`() {
+        val terminal = RecordingTerminal()
+
+        copy(terminal, listOf("a.txt", "missing.txt", "b.txt"))
+
+        assertEquals(
+            listOf(
+                Write(Stream.Out, "copied a.txt\n"),
+                Write(Stream.Err, "error: missing.txt is missing\n"),
+                Write(Stream.Out, "copied b.txt\n"),
+            ),
+            terminal.writes,
+        )
     }
 }

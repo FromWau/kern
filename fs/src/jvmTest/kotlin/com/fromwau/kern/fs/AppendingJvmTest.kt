@@ -5,6 +5,7 @@ import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.assertSuccess
 import java.io.File
 import java.io.RandomAccessFile
+import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
@@ -12,10 +13,12 @@ import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
 import kotlinx.io.files.Path
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Assumptions.assumeTrue
 
 class AppendingJvmTest {
@@ -32,12 +35,38 @@ class AppendingJvmTest {
     fun `a file whose other hard link remains is moved rather than deleted`() {
         assumeTrue(hasProc(), "no /proc to read the open file's link count through")
         val opened = file.openAppend().assertSuccess()
-        val _ = rotated.hardLinkTo(file)
+        val _ = rotated.rawHardLinkTo(file)
 
         Files.delete(Paths.get(file.toString()))
 
-        assertEquals(AppendState.Moved, opened.state())
+        assertEquals(Ok(AppendState.Moved), opened.state())
         opened.close()
+    }
+
+    @Test
+    fun `onReopen is told a deleted log was Deleted where proc shows the open file`() {
+        assumeTrue(hasProc(), "no /proc to read the open file's link count through")
+        val states = mutableListOf<AppendState>()
+        val log = file.openAppend(Reopen.WhenMoved(onReopen = { _, state -> states += state })).assertSuccess()
+
+        Files.delete(Paths.get(file.toString()))
+        log.append("x".encodeToByteArray()).assertSuccess()
+        log.close()
+
+        assertEquals(listOf(AppendState.Deleted), states)
+    }
+
+    @Test
+    fun `onReopen is told a moved log was Moved where proc shows the open file`() {
+        assumeTrue(hasProc(), "no /proc to read the open file's link count through")
+        val states = mutableListOf<AppendState>()
+        val log = file.openAppend(Reopen.WhenMoved(onReopen = { _, state -> states += state })).assertSuccess()
+
+        moveOpenFile()
+        log.append("x".encodeToByteArray()).assertSuccess()
+        log.close()
+
+        assertEquals(listOf(AppendState.Moved), states)
     }
 
     @Test
@@ -49,8 +78,8 @@ class AppendingJvmTest {
         val after = opened.state()
         opened.close()
 
-        assertEquals(AppendState.Same, before)
-        assertEquals(if (hasProc()) AppendState.Moved else AppendState.Unknown, after)
+        assertEquals(Ok(AppendState.Same), before)
+        assertEquals(Ok(if (hasProc()) AppendState.Moved else AppendState.Unknown), after)
     }
 
     @Test
@@ -62,7 +91,7 @@ class AppendingJvmTest {
         val state = opened.state()
         opened.close()
 
-        assertEquals(if (hasProc()) AppendState.Moved else AppendState.Unknown, state)
+        assertEquals(Ok(if (hasProc()) AppendState.Moved else AppendState.Unknown), state)
     }
 
     @Test
@@ -71,7 +100,7 @@ class AppendingJvmTest {
 
         Files.delete(Paths.get(file.toString()))
 
-        assertEquals(if (hasProc()) AppendState.Deleted else AppendState.Unknown, opened.state())
+        assertEquals(Ok(if (hasProc()) AppendState.Deleted else AppendState.Unknown), opened.state())
         opened.close()
     }
 
@@ -92,7 +121,7 @@ class AppendingJvmTest {
     fun `a file rotated while it is being opened is not the one kept open`() {
         File(file.toString()).writeText("old\n")
         var rotate = true
-        val opened = openAppendFile(file) {
+        val opened = openAppendFile(file, permissions = null) {
             if (rotate) {
                 rotate = false
                 Files.move(Paths.get(file.toString()), Paths.get(rotated.toString()), StandardCopyOption.ATOMIC_MOVE)
@@ -115,7 +144,7 @@ class AppendingJvmTest {
         val before = descriptors.list()!!.size
         var delete = true
 
-        val opened = openAppendFile(file) {
+        val opened = openAppendFile(file, permissions = null) {
             if (delete) {
                 delete = false
                 Files.delete(Paths.get(file.toString()))
@@ -153,7 +182,32 @@ class AppendingJvmTest {
         opened.close()
 
         assertEquals(Ok(Unit), appended)
-        last.assertError<FileError.Inaccessible>()
+        assertEquals(IoCause.Denied, last.assertError<FileError.Inaccessible>().cause)
+    }
+
+    @Test
+    fun `appending to a file no one may open is WriteFailed for Denied`() {
+        File(file.toString()).writeText("kept")
+        Files.setPosixFilePermissions(Paths.get(file.toString()), PosixFilePermissions.fromString("---------"))
+        assumeTrue(!Files.isWritable(Paths.get(file.toString())), "this user writes files without write permission")
+
+        val failure = file.openAppend().assertError<FileError.WriteFailed>()
+
+        assertEquals(IoCause.Denied, failure.cause)
+        assertIs<AccessDeniedException>(failure.exception)
+    }
+
+    @Test
+    fun `a file replaced at every open is WriteFailed for Other saying so`() {
+        File(file.toString()).writeText("")
+        var replaced = 0
+        val failure = openAppendFile(file, permissions = null) {
+            Files.move(Paths.get(file.toString()), Paths.get("$file.${replaced++}"))
+            File(file.toString()).writeText("")
+        }.assertError<FileError.WriteFailed>()
+
+        assertEquals(IoCause.Other, failure.cause)
+        assertEquals("replaced while it was being opened", failure.exception?.message)
     }
 
     @Test
@@ -162,10 +216,30 @@ class AppendingJvmTest {
 
         val error = Path("/dev/null").openAppend().assertError<FileError.NotRegularFile>()
 
-        assertEquals(FileType.Other, error.type)
+        assertEquals(FileType.CharacterDevice, error.type)
     }
 
     /** Moves [file] to [rotated] while it is open, skipping the test where the platform refuses, as Windows does. */
+
+    @Test
+    fun `the state of a file whose folder may not be searched is Inaccessible as Denied`() {
+        val folder = dir / "logs"
+        val opened = (folder / "app.log").openAppend().assertSuccess()
+        val nio = Paths.get(folder.toString())
+        Files.setPosixFilePermissions(nio, emptySet())
+        try {
+            assumeFalse(canLookUp(folder / "app.log"), "this user looks up paths in folders it may not search")
+
+            val failure = opened.state().assertError<FileError.Inaccessible>()
+
+            assertEquals(folder / "app.log", failure.path)
+            assertEquals(IoCause.Denied, failure.cause)
+        } finally {
+            Files.setPosixFilePermissions(nio, PosixFilePermissions.fromString("rwx------"))
+            opened.close()
+        }
+    }
+
     private fun moveOpenFile() {
         val moved = try {
             Files.move(Paths.get(file.toString()), Paths.get(rotated.toString()), StandardCopyOption.ATOMIC_MOVE)

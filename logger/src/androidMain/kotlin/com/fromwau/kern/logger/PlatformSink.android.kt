@@ -1,6 +1,5 @@
 package com.fromwau.kern.logger
 
-import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Ok
 import android.util.Log as Logcat
 
@@ -8,7 +7,7 @@ import android.util.Log as Logcat
  * Logcat carries the tag, severity and timestamp itself, so it is given the message, fields and error rather than
  * a rendered line.
  */
-internal actual fun platformWriter(): (LogEntry, SinkConfig) -> EmptyResult<SinkError> = { entry, _ ->
+internal actual fun platformWriter(): EntryWriter = EntryWriter { entry, _ ->
     val message = entry.summary()
     try {
         write(entry.level, entry.tag, message, entry.throwable)

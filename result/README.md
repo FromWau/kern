@@ -2,8 +2,9 @@
 
 A typed-error `Result<S, E>` for Kotlin Multiplatform.
 
-An expected failure is a value, not a thrown exception. It carries your own error type instead of a message
-string, so it reaches the caller with its payload intact, and the caller has to handle it to reach the value.
+Some failures are expected: a user is missing, a form is invalid, a server is down. With `result` such a failure is
+a value, not a thrown exception, so the caller has to handle it to get at the value. It carries your own error type
+instead of a message string, so its payload arrives intact.
 
 **Targets:** JVM, Android, js, wasmJs, wasmWasi, linuxX64, linuxArm64, mingwX64, macosArm64, iosArm64,
 iosSimulatorArm64, tvosArm64, tvosSimulatorArm64, watchosArm64, watchosSimulatorArm64, watchosDeviceArm64,
@@ -22,8 +23,8 @@ catching({ CrudError.DbError(it) }) { dao.findById(id) }                        
 
 ## Add to your build
 
-Releases are published to [maven.frommhund.xyz](https://maven.frommhund.xyz/#/releases/com/fromwau/kern/result),
-which needs no credentials and lists every version.
+Releases are on [maven.frommhund.xyz](https://maven.frommhund.xyz/#/releases/com/fromwau/kern/result). It needs no
+credentials and lists every version.
 
 ```kotlin
 repositories {
@@ -32,21 +33,21 @@ repositories {
 }
 
 dependencies {
-    implementation("com.fromwau.kern:result:$kernVersion")           // KMP: in commonMain
-    testImplementation("com.fromwau.kern:result-test:$kernVersion")  // optional test assertions
+    implementation("com.fromwau.kern:result:$kernVersion")  // KMP: in commonMain
 }
 ```
 
-Needs what [every kern module needs](../README.md#requirements). On the JVM and Android, `result` depends on nothing
-but the Kotlin standard library. On every other target it also brings `kotlinx-serialization-core`.
-For coroutines and flows, add [`result-coroutines`](../result-coroutines/README.md).
+- Needs what [every kern module needs](../README.md#requirements).
+- On the JVM and Android, `result` depends on nothing but the Kotlin standard library.
+- On every other target it also brings `kotlinx-serialization-core`.
+- For coroutines and flows, add [`result-coroutines`](../result-coroutines/README.md).
 
-Everything is in `com.fromwau.kern.result`. Import it with `import com.fromwau.kern.result.*`: Kotlin imports its
-own `kotlin.Result` by default, and a file without the import gets that one instead.
+Everything is in `com.fromwau.kern.result`. Import it with `import com.fromwau.kern.result.*`. Kotlin imports its own
+`kotlin.Result` by default, so a file without the import gets that one instead.
 
 ## Declaring your errors
 
-Every error implements `ResultError`. Seal one hierarchy per concern, with a case per failure and data as its
+Every error implements `ResultError`. Seal one hierarchy per concern. Give it a case per failure, with data as its
 payload:
 
 ```kotlin
@@ -57,12 +58,12 @@ sealed interface CrudError : ResultError {
 }
 ```
 
-A `when` over it is exhaustive, so a failure added later is a compile error wherever a caller has to react. Avoid
-a single case carrying a message string: a caller can only print it, not act on it.
+A `when` over it is exhaustive, so a failure you add later is a compile error wherever a caller has to react.
+Avoid a single case that carries a message string: a caller can only print it, not act on it.
 
-Each error has an `errorType`, the name a crash reporter or a search groups it by: `NotFound` for
-`CrudError.NotFound(3)`, its class's simple name. Two hierarchies with a case of the same name share it, so
-namespace every case of a hierarchy in one line:
+Each error has an `errorType`. That is the name a crash reporter or a search groups it by. By default it is the
+class's simple name, so `CrudError.NotFound(3)` has `NotFound`. Two hierarchies with a case of the same name share
+it. To keep them apart, namespace every case of a hierarchy in one line:
 
 ```kotlin
 sealed interface PaymentError : ResultError {
@@ -72,7 +73,7 @@ sealed interface PaymentError : ResultError {
 }
 ```
 
-A class's name changes when you rename it, and code shrinking such as R8 replaces it with a short one like `a`.
+A class's name changes when you rename it. Code shrinking such as R8 also replaces it with a short one like `a`.
 Where the type must survive both, give each case a literal instead:
 
 ```kotlin
@@ -93,12 +94,14 @@ fun findUserById(id: Long): Result<User, CrudError> {
 }
 ```
 
-- `catching(toError) { }` turns an exception into your error and rethrows cancellation. Its block cannot suspend;
-  in suspending code use `suspendCatching` from `result-coroutines`.
+- `catching(toError) { }` turns an exception into your error. It rethrows cancellation.
+- The block of `catching` cannot suspend. In suspending code use `suspendCatching` from `result-coroutines`.
 - `toResult { error }` turns a nullable value into a result.
 - `EmptyResult<E>` is `Result<Unit, E>`, for work with nothing to hand back. Its success is `Ok(Unit)`.
 
 ## Consuming one
+
+The plainest way is a `when`:
 
 ```kotlin
 when (val result = findUserById(id)) {
@@ -107,12 +110,14 @@ when (val result = findUserById(id)) {
 }
 ```
 
-Or with the operators, each running only on the case it names:
+Or use the operators. Each one runs only on the case it names:
 
 | operator        | takes                                      | does                                                         |
 |-----------------|--------------------------------------------|--------------------------------------------------------------|
 | `map`           | `(S) -> T`                                 | transforms a success value                                   |
 | `flatMap`       | `(S) -> Result<T, E>`                      | chains a next step that can itself fail                      |
+| `flatten()`     |                                            | unwraps a `Result<Result<S, E>, E>` into a `Result<S, E>`    |
+| `flatten`       | `(E) -> F`                                 | unwraps a `Result<Result<S, F>, E>`, mapping the outer error |
 | `mapError`      | `(E) -> F`                                 | transforms an error, for example across a layer boundary     |
 | `fold`          | `onSuccess: (S) -> T`, `onError: (E) -> T` | collapses both cases into one value                          |
 | `getOrElse`     | `(E) -> S`                                 | the value, or a fallback made from the error                 |
@@ -124,8 +129,8 @@ Or with the operators, each running only on the case it names:
 | `isSuccess()`   |                                            | true for a success, and smart casts to it                    |
 | `isError()`     |                                            | true for an error, and smart casts to it                     |
 
-The operators are inline, so their lambdas may suspend wherever the call may. Use `map` for a step that cannot
-fail and `flatMap` for one that returns a result:
+The operators are inline, so their lambdas may suspend wherever the call may. Use `map` for a step that cannot fail
+and `flatMap` for one that returns a result:
 
 ```kotlin
 findUserById(id).map { it.name }        // Result<String, CrudError>
@@ -133,8 +138,8 @@ findUserById(id).flatMap { save(it) }   // Result<User, CrudError>
 findUserById(id).map { save(it) }       // Result<Result<User, CrudError>, CrudError>: you wanted flatMap
 ```
 
-`Result` is covariant, so a `Result<User, CrudError.NotFound>` is a `Result<User, CrudError>`. Convert an error
-from another hierarchy with `mapError`:
+`Result` is covariant, so a `Result<User, CrudError.NotFound>` is a `Result<User, CrudError>`. Convert an error from
+another hierarchy with `mapError`:
 
 ```kotlin
 val shown: Result<User, ApiError> = findUserById(id).mapError { crud ->
@@ -148,8 +153,8 @@ val shown: Result<User, ApiError> = findUserById(id).mapError { crud ->
 
 ## Several steps in a row
 
-A `result` block runs fallible steps top to bottom. `bind()` gives a success's value, and the first error ends the
-block as its result:
+A `result` block runs steps that can each fail, top to bottom. `bind()` gives a success's value. The first error
+ends the block and becomes its result:
 
 ```kotlin
 fun register(form: Form): Result<User, SignupError> = result {
@@ -161,11 +166,8 @@ fun register(form: Form): Result<User, SignupError> = result {
 }
 ```
 
-- Declare the return type of a function whose body is a `result` block. The compiler then checks the error type
-  and the block's last expression.
-- The block may suspend. A `bind` belongs inside the block and its own coroutine.
-- `bind` leaves the block by throwing a signal that is not an `Exception`, so your `catch (e: Exception)` lets it
-  through. Swallowing it with `catch (t: Throwable)` or `runCatching` cannot make the result a success.
+Declare the return type of a function whose body is a `result` block. The compiler then checks the error type and
+the block's last expression.
 
 Without a block, `getOrElse { return Err(it) }` does the same, since `getOrElse` is inline:
 
@@ -173,7 +175,18 @@ Without a block, `getOrElse { return Err(it) }` does the same, since `getOrElse`
 val email = validateEmail(form.email).getOrElse { return Err(SignupError.Email(it)) }
 ```
 
+### Details
+
+- The block may suspend.
+- A failing `bind` in another coroutine that runs while the block does still ends the block with its error. That
+  covers one in a nested `runBlocking` or a `launch` the block joins.
+- A `bind` run after the block returned throws `IllegalStateException`.
+- `bind` leaves the block by throwing a signal that is not an `Exception`, so your `catch (e: Exception)` lets it
+  through. Swallowing it with `catch (t: Throwable)` or `runCatching` cannot make the result a success.
+
 ## Several results at once
+
+Sometimes you have a list of results, or a list of items to check. Pick by what should happen on an error:
 
 | function           | on                       | gives                            | on an error                    |
 |--------------------|--------------------------|----------------------------------|--------------------------------|
@@ -200,8 +213,9 @@ any other error.
 
 ### Collecting every error in a block
 
-When the steps do not fit one lambda, collect them in a `resultAll` block. `collect()` records a step's error and
-hands its value to a `by` property:
+A form is the usual case: you want every bad field reported, not just the first. When the steps do not fit one
+lambda, collect them in a `resultAll` block. `collect()` records a step's error and hands its value to a `by`
+property:
 
 ```kotlin
 fun validate(form: WatchlistForm): Result<Watchlist, AllErrors<FieldError>> = resultAll {
@@ -216,12 +230,12 @@ fun validate(form: WatchlistForm): Result<Watchlist, AllErrors<FieldError>> = re
 ```
 
 Collect every step before you read any. Reading a failed step ends the block, so steps collected after that read
-never run. `bind()` works here too and ends the block at once.
+never run. `bind()` works here too, and ends the block at once.
 
 ## Sending one over a wire
 
-A result is `@Serializable` when its value and error types are. kotlinx-serialization is an optional dependency:
-add the plugin and a format to your own build, and annotate your error hierarchy.
+A result is `@Serializable` when its value and error types are. kotlinx-serialization is an optional dependency. To
+use it, add the plugin and a format to your own build, and annotate your error hierarchy.
 
 ```kotlin
 @Serializable
@@ -238,13 +252,16 @@ data class Response(val user: Result<User, CrudError>)
 {"user":{"success":"ada"}}
 ```
 
-A missing annotation on an error case fails only when such an error is encoded, at runtime, so test the error
-case of anything you serialize. A case holding a `Throwable` cannot be serialized; map it to one that can before
-encoding.
+### Sharp edges
+
+- A missing annotation on an error case fails only at runtime, when such an error is encoded, so test the error
+  case of anything you serialize.
+- A case that holds a `Throwable` cannot be serialized. Map it to one that can before encoding.
 
 ## Must-use results
 
-Kotlin's return value checker turns a dropped result into a warning:
+A result nobody looks at is a failure nobody handles. Kotlin's return value checker turns a dropped result into a
+warning:
 
 ```kotlin
 kotlin {
@@ -252,15 +269,26 @@ kotlin {
 }
 ```
 
-`full` covers your own functions too, which is what an application wants: `repository.save(order)` on a line of
-its own warns. A library can use `check` instead and mark its own declarations with `@MustUseReturnValues`.
+- `full` covers your own functions too. That is what an application wants: `repository.save(order)` on a line of
+  its own warns.
+- A library can use `check` instead, and mark its own declarations with `@MustUseReturnValues`.
 
-`onSuccess`, `onError`, `bind` and `collect` are exempt. `onSuccess` and `onError` are for handling one side and
-letting the rest go, as in `fireAndForget().onError { log(it) }`.
+`onSuccess`, `onError`, `bind` and `collect` are exempt. So are `result-test`'s `assertSuccess` and `assertError`.
+`onSuccess` and `onError` are for handling one side and letting the rest go, as in
+`fireAndForget().onError { log(it) }`.
 
 ## Testing
 
-`result-test` adds assertions:
+`result-test` adds assertions. Add it beside `result`, in `commonTest` for KMP:
+
+```kotlin
+dependencies {
+    testImplementation("com.fromwau.kern:result-test:$kernVersion")
+}
+```
+
+The assertions live in `com.fromwau.kern.result`, the package of `result` itself, so the same
+`import com.fromwau.kern.result.*` brings them in:
 
 ```kotlin
 val user = findUser(7).assertSuccess()                                 // the value, or a failure naming the error
@@ -268,16 +296,29 @@ findUser(8).assertError { it is CrudError.NotFound && it.id == 8L }    // the er
 assertEquals(Err(CrudError.NotFound(8)), findUser(8))                  // an exact result, with kotlin-test
 ```
 
-`assertError<F>()` hands the error back as the case `F`, but `F` is not checked against the result's error type.
-Prefer `assertError { }`.
+`assertError { it is F }` returns the error as the result's error type `E`, not as `F`, so the case's fields are not
+in reach afterwards. To read them, use `assertError<F>()`, which returns `F`:
+
+```kotlin
+val error: CrudError = findUser(8).assertError { it is CrudError.NotFound }    // E: no .id here
+val missing = findUser(8).assertError<CrudError.NotFound>()                    // F: missing.id is 8
+```
+
+`F` is not checked against the result's error type, so a case the result can never hold compiles and fails when run.
+Prefer `assertError { }` when the check alone is enough.
 
 ## Pitfalls
 
 - **A result inside a result.** A `result { }` block, `map` or `mapSuccess` whose last step returns a result nests
-  it, and an inferred type hides that. Bind the last step, use `flatMap`, and declare return types.
+  it. An inferred type hides that. Bind the last step, use `flatMap`, and declare return types.
 - **Two unrelated error types meet at `ResultError`.** `price().flatMap { lookup(it) }` with two different error
-  hierarchies infers `Result<Quote, ResultError>`. A declared return type turns that into a compile error; convert
+  hierarchies infers `Result<Quote, ResultError>`. A declared return type turns that into a compile error. Convert
   with `mapError`.
+- **`flatten()` across two error types.** `flatten()` takes one error type for both levels. With a different one
+  inside and outside, Kotlin infers their common supertype, such as `ResultError`, as the error. Convert one side
+  first.
+  - The inner side: `map { it.mapError(...) }`.
+  - The outer side: `flatten(AppError::File)`. It wraps an outer `FileError` in a case of the inner `AppError`.
 - **`kotlin.Result` and `kotlin.Error`.** Without the star import, `Result` is Kotlin's own, and a bare `Error(...)`
   is `kotlin.Error`. Use `Ok` and `Err`.
 - **A forgotten `.collect()`.** `if (bad) Err(e)` in a `resultAll` block is a value nobody reads. Only the

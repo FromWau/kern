@@ -9,15 +9,10 @@ import kotlinx.cinterop.sizeOf
 import kotlinx.io.files.Path
 import platform.posix.memset
 import platform.windows.CloseHandle
-import platform.windows.CreateFileW
 import platform.windows.ERROR_LOCK_VIOLATION
-import platform.windows.FILE_ATTRIBUTE_NORMAL
-import platform.windows.FILE_SHARE_READ
-import platform.windows.FILE_SHARE_WRITE
 import platform.windows.GENERIC_READ
 import platform.windows.GENERIC_WRITE
 import platform.windows.GetLastError
-import platform.windows.INVALID_HANDLE_VALUE
 import platform.windows.LOCKFILE_EXCLUSIVE_LOCK
 import platform.windows.LOCKFILE_FAIL_IMMEDIATELY
 import platform.windows.LockFileEx
@@ -33,22 +28,18 @@ private const val WHOLE_FILE: UInt = 0xFFFFFFFFu
  * second holder is refused rather than passing through.
  *
  * `LOCKFILE_FAIL_IMMEDIATELY`, one try, as the other actuals do: the caller retries within its own bound.
- * Windows names no holder, so [FileError.LockBusy] carries no pid.
+ * Windows names no holder, so [FileError.LockBusy] carries no pid. A Windows file has no POSIX mode, so [permissions]
+ * and [newMode] are ignored.
  */
 @OptIn(ExperimentalForeignApi::class)
-internal actual fun tryOsLock(lockFile: Path): OsLock {
-    val handle = CreateFileW(
-        lockFile.toString(),
-        GENERIC_READ.convert<UInt>() or GENERIC_WRITE.convert<UInt>(),
-        FILE_SHARE_READ.convert<UInt>() or FILE_SHARE_WRITE.convert<UInt>(),
-        null,
-        OPEN_ALWAYS.convert<UInt>(),
-        FILE_ATTRIBUTE_NORMAL.convert<UInt>(),
-        null,
-    )
-    if (handle == null || handle == INVALID_HANDLE_VALUE) {
-        return OsLock.Failed(windowsError(GetLastError()))
-    }
+internal actual fun tryOsLock(
+    lockFile: Path,
+    permissions: Int?,
+    newMode: Int,
+): OsLock {
+    // Shared for delete too, since the lock file is deleted while it is still held.
+    val handle = openHandle(lockFile, GENERIC_READ.convert<UInt>() or GENERIC_WRITE.convert<UInt>(), OPEN_ALWAYS)
+        ?: return OsLock.NotOpened(windowsFailure(GetLastError(), lockFile))
 
     val code = memScoped {
         val request = alloc<OVERLAPPED>()
@@ -58,13 +49,13 @@ internal actual fun tryOsLock(lockFile: Path): OsLock {
         if (LockFileEx(handle, flags, 0u, WHOLE_FILE, WHOLE_FILE, request.ptr) != 0) 0u else GetLastError()
     }
     if (code == 0u) {
-        return OsLock.Held { CloseHandle(handle) }
+        return OsLock.Held(key = handle.fileKey()) { CloseHandle(handle) }
     }
     CloseHandle(handle)
     return if (code == ERROR_LOCK_VIOLATION.convert<UInt>()) {
         OsLock.Busy(holderPid = null)
     } else {
-        OsLock.Failed(windowsError(code))
+        OsLock.Failed(windowsFailure(code, lockFile))
     }
 }
 
@@ -72,4 +63,13 @@ internal actual fun tryOsLock(lockFile: Path): OsLock {
 internal actual fun sleepMillis(millis: Long): Boolean {
     Sleep(millis.convert())
     return true
+}
+
+// No access rights: reading a file's identity needs none.
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun fileKeyOrNull(path: Path): Any? {
+    val handle = openExisting(path, access = 0u) ?: return null
+    val key = handle.fileKey()
+    CloseHandle(handle)
+    return key
 }

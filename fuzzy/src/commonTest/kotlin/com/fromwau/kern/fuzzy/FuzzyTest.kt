@@ -36,6 +36,11 @@ class FuzzyTest {
     }
 
     @Test
+    fun `a word's dashes count toward the start a candidate must share`() {
+        assertNull(didYouMean("-o", listOf("--output", "--json")))
+    }
+
+    @Test
     fun `a single character is only matched by case`() {
         assertNull(didYouMean("r", listOf("run", "rm", "ps")))
         assertNull(didYouMean("s", listOf("status", "st", "commit")))
@@ -71,9 +76,18 @@ class FuzzyTest {
     }
 
     @Test
+    fun `leading dashes do not count toward the length of a candidate at the start of the word`() {
+        assertNull(didYouMean("--logout", listOf("--log")))
+        assertEquals("--help", didYouMean("--helpful", listOf("--help")))
+        assertEquals("--log", didYouMean("--logout", listOf("--log"), preferred = listOf("--log")))
+        assertNull(didYouMean("logout", listOf("log")))
+        assertNull(didYouMean("--all-x", listOf("--all")))
+    }
+
+    @Test
     fun `the longest candidate at the start of the word wins`() {
-        assertEquals("status", didYouMean("statuses", listOf("stat", "status")))
-        assertEquals("status", didYouMean("statuses", listOf("status", "stat")))
+        assertEquals("inform", didYouMean("information", listOf("info", "inform")))
+        assertEquals("inform", didYouMean("information", listOf("inform", "info")))
         assertEquals("logs", didYouMean("logsfoo", listOf("log", "logs")))
     }
 
@@ -88,7 +102,7 @@ class FuzzyTest {
     }
 
     @Test
-    fun `case is folded one character at a time`() {
+    fun `case is folded by lowercase rather than full Unicode case folding`() {
         assertNull(didYouMean("i", listOf("\u0130")))
         assertEquals("i", didYouMean("\u0130", listOf("i")))
         assertNull(didYouMean("ss", listOf("\u00DF")))
@@ -282,6 +296,22 @@ class FuzzyTest {
         assertEquals("inf", didYouMean("infinity", listOf("inf", "nan"), preferred = listOf("inf", "nan")))
         assertEquals("infi", didYouMean("infinity", listOf("inf", "infi"), preferred = listOf("inf", "infi")))
         assertNull(didYouMean("logout", listOf("log", "status")))
+    }
+
+    @Test
+    fun `a preferred name of three characters is suggested for any longer word that starts with it`() {
+        val preferred = listOf("inf", "nan")
+        assertEquals("inf", didYouMean("information", preferred, preferred))
+        assertEquals("nan", didYouMean("nanosecond", preferred, preferred))
+    }
+
+    @Test
+    fun `a name within edit reach wins over a shorter name the word starts with`() {
+        assertEquals("hostname", didYouMean("hostame", listOf("host", "hostname")))
+        assertEquals("database", didYouMean("datebase", listOf("date", "database")))
+        assertEquals("hostname", didYouMean("hostame", listOf("hostname", "host")))
+        assertEquals("status", didYouMean("statuses", listOf("stat", "status")))
+        assertEquals("status", didYouMean("statuses", listOf("status", "stat")))
     }
 
     @Test

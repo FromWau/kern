@@ -4,9 +4,11 @@ import com.fromwau.kern.logger.CloseError
 import com.fromwau.kern.logger.ConfiguredSink
 import com.fromwau.kern.logger.Flushed
 import com.fromwau.kern.logger.Log
+import com.fromwau.kern.logger.PlatformSink
 import com.fromwau.kern.logger.SinkError
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.assertSuccess
 import com.fromwau.kern.result.errorOrNull
 import com.fromwau.kern.result.onError
 import io.sentry.ScopeType
@@ -77,8 +79,12 @@ class ReadmeSnippetsJvmTest {
 
     private val crashReporting: Boolean get() = Log.sinks.value.any { it.sink is SentrySink }
 
+    // Not in the README: without the console sink Log starts with, the entries logged here are not printed.
     @BeforeTest
-    fun resetSentry() = resetSentryGlobals()
+    fun resetSentry() {
+        resetSentryGlobals()
+        Log.configure { c -> c.copy(sinks = c.sinks.filterNot { it.sink is PlatformSink }) }.assertSuccess()
+    }
 
     // A test that fails before its revoke would otherwise leave the sink and Sentry to the next.
     @AfterTest

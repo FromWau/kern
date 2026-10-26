@@ -12,6 +12,8 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     kernAllTargets()
+    // A race test spins on one thread until another moves, which never happens on the single JS or Wasm thread.
+    kernThreadedTest()
 
     sourceSets {
         commonMain.dependencies {
@@ -27,14 +29,6 @@ kotlin {
         listOf(nativeMain, webMain, wasmWasiMain).forEach { sourceSet ->
             sourceSet.dependencies { api(libs.kotlinx.serialization.core) }
         }
-
-        // Every target whose Dispatchers.Default runs in parallel: a race test spins on one thread until another
-        // moves, which never happens on the single JS or Wasm thread.
-        val threadedTest = create("threadedTest") {
-            dependsOn(commonTest.get())
-        }
-        jvmTest.get().dependsOn(threadedTest)
-        nativeTest.get().dependsOn(threadedTest)
 
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.core)

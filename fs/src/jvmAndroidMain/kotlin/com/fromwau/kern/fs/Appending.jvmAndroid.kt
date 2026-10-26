@@ -5,30 +5,46 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import kotlinx.io.files.Path
-import java.io.FileNotFoundException
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.Path as JavaPath
 
 private const val OPEN_ATTEMPTS = 4
 
-internal actual fun openAppendFile(path: Path): Result<AppendFile, FileError> = openAppendFile(path, onOpened = {})
+internal actual fun openAppendFile(
+    path: Path,
+    permissions: Int?,
+    newMode: Int,
+): Result<AppendFile, FileError> = openAppendFile(path, permissions, newMode, onOpened = {})
 
 // Java cannot ask an open stream for its file key, so the path's key is read on both sides of the open; [onOpened]
 // runs between the open and the second read.
-internal fun openAppendFile(path: Path, onOpened: () -> Unit): Result<AppendFile, FileError> = try {
-    openStream(path, onOpened)
-} catch (e: FileNotFoundException) {
-    Err(FileError.WriteFailed(path, e.openFailure()))
+internal fun openAppendFile(
+    path: Path,
+    permissions: Int?,
+    newMode: Int = NEW_FILE_MODE,
+    onOpened: () -> Unit,
+): Result<AppendFile, FileError> = try {
+    openStream(path, permissions, newMode, onOpened)
 } catch (e: Exception) {
-    Err(FileError.WriteFailed(path, e.reason))
+    Err(writeFailed(path, e))
 }
 
-private fun openStream(path: Path, onOpened: () -> Unit): Result<AppendFile, FileError> {
+private fun openStream(
+    path: Path,
+    permissions: Int?,
+    newMode: Int,
+    onOpened: () -> Unit,
+): Result<AppendFile, FileError> {
+    // java.io refuses an open with a FileNotFoundException whatever the cause; java.nio's exception types say which.
+    val options = setOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)
+    Files.newByteChannel(Paths.get(path.toString()), options, *creationAttributes(permissions ?: newMode)).close()
     repeat(OPEN_ATTEMPTS) {
         val before = keyAt(path)
         // FileOutputStream.write(ByteArray) hands the whole array to one system write, opened with O_APPEND, and on
@@ -41,21 +57,23 @@ private fun openStream(path: Path, onOpened: () -> Unit): Result<AppendFile, Fil
             out.close()
             throw e
         }
-        when {
-            // Windows has no file key, so there only a missing file is noticed.
-            after == null -> return Ok(StreamAppendFile(path, out, opened = null))
-            after != NoFile && after == before -> return Ok(StreamAppendFile(path, out, opened = after))
-            // Created, moved or deleted around the open: the stream may hold a file the path no longer names.
-            else -> out.close()
+        // Windows has no file key, so there only a missing file is noticed.
+        val kept = after == null || after != NoFile && after == before
+        if (kept) {
+            try {
+                // A stream has no call to set its file's mode, so it goes by the path, which named the open file when
+                // last checked.
+                if (permissions != null) setFilePermissions(path, permissions)
+            } catch (e: Exception) {
+                out.close()
+                throw e
+            }
+            return Ok(StreamAppendFile(path, out, opened = after))
         }
+        // Created, moved or deleted around the open: the stream may hold a file the path no longer names.
+        out.close()
     }
-    return Err(FileError.WriteFailed(path, "replaced while it was being opened, $OPEN_ATTEMPTS times"))
-}
-
-// The message is `<file> (<reason>)`, and the error already names the path.
-private fun FileNotFoundException.openFailure(): String {
-    val message = message ?: return toString()
-    return message.substringAfterLast(" (", missingDelimiterValue = "").removeSuffix(")").ifEmpty { message }
+    return Err(writeFailed(path, IOException("replaced while it was being opened")))
 }
 
 private class StreamAppendFile(
@@ -67,34 +85,40 @@ private class StreamAppendFile(
     private var closed = false
 
     override fun append(bytes: ByteArray): EmptyResult<FileError> {
-        if (closed) return Err(FileError.WriteFailed(path, CLOSED))
+        if (closed) return Err(FileError.Closed(path))
         return try {
             out.write(bytes)
             Ok(Unit)
         } catch (e: Exception) {
-            Err(FileError.WriteFailed(path, e.reason))
+            Err(writeFailed(path, e))
         }
     }
 
     // The descriptor's link under /proc/self/fd, found once, since the number stays this stream's until it closes.
     private var descriptorLink: JavaPath? = null
 
-    override fun state(): AppendState {
-        if (closed) return AppendState.Unknown
+    override fun state(): Result<AppendState, FileError> {
+        if (closed) return Ok(AppendState.Closed)
         val now = try {
             keyAt(path)
-        } catch (_: Exception) {
-            return AppendState.Unknown
+        } catch (e: Exception) {
+            // java.nio throws a plain FileSystemException for ENOTDIR, so kern's own lookup decides missing or refused.
+            when (val looked = path.metadata()) {
+                is Result.Error -> if (looked.error is FileError.NotFound) NoFile else return looked
+                is Result.Success -> return Err(inaccessible(path, e))
+            }
         }
         // Without file keys, as on Windows, the file is opened so that it cannot be deleted or moved while open.
-        if (opened == null) return if (now == NoFile) AppendState.Unknown else AppendState.Same
+        if (opened == null) return Ok(if (now == NoFile) AppendState.Unknown else AppendState.Same)
         val links = linkCount(opened)
-        return when {
-            links == 0 -> AppendState.Deleted
-            now == opened -> AppendState.Same
-            links == null -> AppendState.Unknown
-            else -> AppendState.Moved
-        }
+        return Ok(
+            when {
+                links == 0 -> AppendState.Deleted
+                now == opened -> AppendState.Same
+                links == null -> AppendState.Unknown
+                else -> AppendState.Moved
+            },
+        )
     }
 
     /** How many names the open file has, read through [descriptor]; null without `/proc`, as on macOS. */
@@ -116,20 +140,20 @@ private class StreamAppendFile(
     }
 
     override fun lastByte(): Result<Byte?, FileError> {
-        if (closed) return Err(FileError.Inaccessible(path, CLOSED))
+        if (closed) return Err(FileError.Closed(path))
         // Without /proc the path is read instead, which names the open file wherever state() answers Same.
         val source = opened?.let { descriptor(it) }?.toString() ?: path.toString()
         return try {
+            // Opened by java.nio first for a cause the type says, as openStream does.
+            Files.newByteChannel(Paths.get(source)).close()
             RandomAccessFile(source, "r").use { file ->
                 val length = file.length()
                 if (length <= 0L) return Ok(null)
                 file.seek(length - 1)
                 Ok(file.read().takeIf { it >= 0 }?.toByte())
             }
-        } catch (e: FileNotFoundException) {
-            Err(FileError.Inaccessible(path, e.openFailure()))
         } catch (e: Exception) {
-            Err(FileError.Inaccessible(path, e.reason))
+            Err(inaccessible(path, e))
         }
     }
 
@@ -143,8 +167,6 @@ private class StreamAppendFile(
         }
     }
 }
-
-private const val CLOSED = "the file was closed"
 
 private fun findDescriptor(key: Any): JavaPath? = try {
     Files.newDirectoryStream(Paths.get("/proc/self/fd")).use { links -> links.firstOrNull { keyOrNull(it) == key } }
@@ -160,10 +182,10 @@ private fun keyOrNull(path: JavaPath): Any? = try {
 }
 
 /** Stands for a path that names nothing, where a null key means the platform has no file keys at all. */
-private object NoFile
+internal object NoFile
 
 /** The device and inode behind [path], [NoFile] when it names nothing, or null where the platform has no keys. */
-private fun keyAt(path: Path): Any? = try {
+internal fun keyAt(path: Path): Any? = try {
     keyOf(Paths.get(path.toString()))
 } catch (_: NoSuchFileException) {
     NoFile

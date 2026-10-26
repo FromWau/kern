@@ -2,15 +2,19 @@ package com.fromwau.kern.logger.test
 
 import com.fromwau.kern.logger.ConfiguredSink
 import com.fromwau.kern.logger.InstalledSink
+import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.LogLevel
 import com.fromwau.kern.logger.LogSink
 import com.fromwau.kern.logger.Logger
 import com.fromwau.kern.logger.LoggerConfig
 import com.fromwau.kern.logger.SinkConfig
+import com.fromwau.kern.logger.reportFailuresTo
 import com.fromwau.kern.result.assertSuccess
 
-/** A logger with no sink. */
+/** A logger with no sink, whose reports of its own failures are dropped rather than printed. */
+@OptIn(InternalKernApi::class)
 internal fun emptyLogger(): Logger = Logger().also { logger ->
+    logger.reportFailuresTo {}
     logger.configure { LoggerConfig(emptyList()) }.assertSuccess()
 }
 

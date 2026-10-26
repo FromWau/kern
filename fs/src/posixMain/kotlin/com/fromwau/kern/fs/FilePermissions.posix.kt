@@ -20,3 +20,5 @@ internal actual fun copyGroup(
     // Asked only when the groups differ: a file system without groups, such as FAT, refuses any chown.
     source.st_gid == copy.st_gid || chown(to.toString(), UInt.MAX_VALUE, source.st_gid) == 0
 }
+
+internal actual fun restrictToOwner(path: Path) = setFilePermissions(path, OWNER_ONLY_FOLDER)

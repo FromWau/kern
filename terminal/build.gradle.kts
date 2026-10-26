@@ -11,6 +11,7 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     kernTerminalTargets()
+    kernThreadedTest()
 
     sourceSets {
         commonMain.dependencies {
@@ -30,12 +31,5 @@ kotlin {
         }
         jvmMain.get().dependsOn(jvmAndroidMain)
         androidMain.get().dependsOn(jvmAndroidMain)
-
-        // Tests that run blocks on several threads, which only the JVM and native targets have.
-        val threadsTest = create("threadsTest") {
-            dependsOn(commonTest.get())
-        }
-        jvmTest.get().dependsOn(threadsTest)
-        nativeTest.get().dependsOn(threadsTest)
     }
 }

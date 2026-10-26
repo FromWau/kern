@@ -4,6 +4,7 @@ package com.fromwau.kern.logger.file
 
 import com.fromwau.kern.fs.FileError
 import com.fromwau.kern.fs.FileType
+import com.fromwau.kern.fs.IoCause
 import com.fromwau.kern.logger.SinkConfig
 import com.fromwau.kern.logger.SinkError
 import com.fromwau.kern.logger.SinkFailure
@@ -40,14 +41,17 @@ class FileSinkLinuxTest {
     }
 
     @Test
-    fun `a write the disk refuses fails with the system's reason`() {
+    fun `a write the disk refuses fails with the system's exception`() {
         val sink = FileSink(file)
 
         val written = withFileSizeLimit(bytes = 4) { sink.write(entry, SinkConfig()) }
         val _ = sink.close()
 
         val dropped = written.assertError<SinkError.Dropped>()
-        assertEquals(FileError.WriteFailed(file, "File too large"), dropped.error)
+        val refused = assertIs<FileError.WriteFailed>(dropped.error)
+        assertEquals(file, refused.path)
+        assertEquals(IoCause.Other, refused.cause)
+        assertEquals("$file: File too large", refused.exception?.message)
     }
 
     @Test
@@ -71,7 +75,7 @@ class FileSinkLinuxTest {
         val written = sink.write(entry, SinkConfig())
         val _ = sink.close()
 
-        assertEquals(Err(SinkError.Dropped(FileError.NotRegularFile(device, FileType.Other))), written)
+        assertEquals(Err(SinkError.Dropped(FileError.NotRegularFile(device, FileType.CharacterDevice))), written)
     }
 }
 

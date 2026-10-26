@@ -18,6 +18,7 @@ import platform.posix.posix_errno
 import platform.posix.stderr
 import platform.posix.stdout
 import platform.posix.strerror
+import kotlin.concurrent.Volatile
 
 /**
  * Stdio shared by every native target; width and each stream's ANSI capability are the only per-family answers. A
@@ -51,6 +52,8 @@ internal class StdioSink(
     private val file: CPointer<FILE>?,
     private val stream: Stream,
 ) {
+    // Read by whichever thread asks failureOf, not only the one writing.
+    @Volatile
     var failure: WriteError? = null
         private set
 

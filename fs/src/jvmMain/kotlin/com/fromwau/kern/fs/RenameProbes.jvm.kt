@@ -5,7 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 // The JVM has no getuid, and a file this process creates is owned by exactly the user it runs as.
-private val currentUid: Int? by lazy {
+internal val currentUid: Int? by lazy {
     runCatching {
         val probe = Files.createTempFile("kern-uid", null)
         try {

@@ -3,6 +3,7 @@ package com.fromwau.kern.logger.file
 import com.fromwau.kern.fs.AppendFile
 import com.fromwau.kern.fs.FileError
 import com.fromwau.kern.fs.FileType
+import com.fromwau.kern.fs.IoCause
 import com.fromwau.kern.fs.openAppend
 import com.fromwau.kern.logger.LogFormat
 import com.fromwau.kern.logger.SinkConfig
@@ -16,6 +17,7 @@ import kotlinx.io.files.Path
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -69,7 +71,7 @@ class FileSinkJvmTest {
         val written = sink.write(entry, SinkConfig())
         val _ = sink.close()
 
-        assertEquals(Err(SinkError.Dropped(FileError.NotRegularFile(device, FileType.Other))), written)
+        assertEquals(Err(SinkError.Dropped(FileError.NotRegularFile(device, FileType.CharacterDevice))), written)
     }
 
     @Test
@@ -127,7 +129,7 @@ class FileSinkJvmTest {
                     override fun append(bytes: ByteArray): EmptyResult<FileError> {
                         if (!fail) return opened.append(bytes)
                         fail = false
-                        return Err(FileError.WriteFailed(path, "refused"))
+                        return Err(FileError.WriteFailed(path, IoCause.Other, IOException("refused")))
                     }
                 }
             }
