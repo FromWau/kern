@@ -53,6 +53,34 @@ does neither.
 Each `out` and `err` call is one write to the stream, with no buffering in between. When you write many small
 pieces and speed matters, join them into one string first.
 
+### Text you do not control
+
+`out` and `err` write text as it is, and so does `Styled`. A file name or a value read from input can hold an escape
+sequence that recolours the terminal, or a line break that starts a line reading like your own output. Quote it as
+GNU coreutils does first:
+
+```kotlin
+val name = "evil\u001B[31m.toml"
+terminal.out("${name.shellQuoted()}: OK\n")        // 'evil'$'\033''[31m.toml': OK
+```
+
+- It matches `ls --quoting-style=shell-escape`: a plain name prints as it is, one with a space or a shell character in
+  single quotes (`'my notes.toml'`), one with a single quote and otherwise only spaces, `:` or a leading `#` or `~` in
+  double quotes (`"it's.toml"`), and a character that does not print in `$'…'` (`$'\n'`, `$'\033'`). Pasted into bash it
+  is the same name, except a brace pattern such as `a{b,c}`, which GNU leaves unquoted and bash expands; `always = true`
+  quotes that too.
+- `shellQuoted(always = true)` quotes a plain name too (`'notes.toml'`), as `ls --quoting-style=shell-escape-always`
+  does, for a word you set apart in a sentence, as GNU's option errors do (`unrecognized option '--nope'`).
+- `shellQuoted(forMessage = true)` also quotes a name holding `:`, as GNU's messages do (`cat: 'a:b': No such file
+  or directory`), so the colon is not read as the end of the name.
+- Running text that holds input, such as an error message quoting a line of a file, is not a name. Write it with
+  `escapeControls()` instead, which escapes as `ls --quoting-style=escape` does but leaves spaces alone: an escape
+  shows as `\033`, a line break as `\n`, a backslash as `\\`, and the text keeps its shape.
+- `escapeControls(keepLayout = true)` keeps line breaks and tabs, for a message of several lines. Use it only when
+  every line break in the text is yours: escape each piece of input with `escapeControls()` before you put it in
+  such a message, or a line break in the input starts a line that reads like your own.
+- Quote only what you print for a person. Output for a program, such as JSON, has its own escaping.
+
 ## Colour
 
 Colour helps a person read output, and garbles a log file or a pipe. Style your text once. The terminal decides per

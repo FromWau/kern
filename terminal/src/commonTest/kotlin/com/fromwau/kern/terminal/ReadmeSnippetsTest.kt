@@ -122,6 +122,15 @@ class ReadmeSnippetsTest {
     }
 
     @Test
+    fun `a name you do not control prints quoted as GNU quotes it`() {
+        val terminal = RecordingTerminal()
+        val name = "evil\u001B[31m.toml"
+        terminal.out("${name.shellQuoted()}: OK\n")
+
+        assertEquals("'evil'\$'\\033''[31m.toml': OK\n", terminal.out)
+    }
+
+    @Test
     fun `the colour line is styled for standard error`() {
         val terminal = RecordingTerminal(errAnsi = true)
         colour(terminal, "notes.txt")
