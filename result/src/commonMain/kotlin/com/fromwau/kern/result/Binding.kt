@@ -17,26 +17,28 @@ public class ResultScope<E : ResultError> @PublishedApi internal constructor() {
     /** The value of this success; an error ends the [result] block with that error as its result. */
     @IgnorableReturnValue
     public fun <S> Result<S, E>.bind(): S {
-        val first = when (this) {
-            is Result.Success -> when (val now = state.load()) {
+        when (this) {
+            is Result.Success -> when (state.load()) {
                 State.Running -> return value
-                is State.Failed -> now.error
+                is State.Failed -> Unit
                 State.Closed -> throw closedError()
             }
             is Result.Error -> record(error)
         }
-        throw BindSignal(this@ResultScope, first)
+        val signal = currentBindSignal()
+        signal.target = this@ResultScope
+        throw signal
     }
 
     /** [bind] for a result of another error type, made into this block's by [convert] first. */
     @IgnorableReturnValue
     public inline fun <S, F : ResultError> Result<S, F>.bind(convert: (F) -> E): S = mapError(convert).bind()
 
-    private fun record(error: ResultError): ResultError {
+    private fun record(error: ResultError) {
         while (true) {
-            when (val now = state.load()) {
-                State.Running -> if (state.compareAndSet(State.Running, State.Failed(error))) return error
-                is State.Failed -> return now.error
+            when (state.load()) {
+                State.Running -> if (state.compareAndSet(State.Running, State.Failed(error))) return
+                is State.Failed -> return
                 State.Closed -> throw closedError()
             }
         }
@@ -47,6 +49,18 @@ public class ResultScope<E : ResultError> @PublishedApi internal constructor() {
     /** Ends the scope and gives the first error a bind in it met, or null when none failed or it was already closed. */
     @PublishedApi
     internal fun close(): ResultError? = (state.exchange(State.Closed) as? State.Failed)?.error
+
+    /** The error to end this block with when [signal] reached it, or null when the signal is on its way out further. */
+    @PublishedApi
+    internal fun claim(signal: BindSignal): ResultError? {
+        val failed = state.load() as? State.Failed ?: return null
+        val target = signal.target
+        // A signal resumed here after a suspension may carry a target its first thread has since moved on from.
+        val outward = target !== this && target != null && !target.isClosed && isThisThreadsSignal(signal)
+        return if (outward) null else failed.error
+    }
+
+    private val isClosed: Boolean get() = state.load() === State.Closed
 
     private sealed interface State {
         data object Running : State
@@ -87,19 +101,28 @@ public inline fun <S, E : ResultError> result(block: ResultScope<E>.() -> S): Re
         @Suppress("UNCHECKED_CAST")
         scope.close()?.let { Err(it as E) } ?: Ok(value)
     } catch (signal: BindSignal) {
-        // A signal bound for an outer scope belongs to that outer block.
-        if (signal.scope !== scope) throw signal
         @Suppress("UNCHECKED_CAST")
-        Err((scope.close() ?: signal.error) as E)
+        Err((scope.claim(signal) ?: throw signal) as E)
     } finally {
         // Closing twice is harmless, and an exception passing through still has to close the scope.
         val _ = scope.close()
     }
 }
 
-// Not an Exception, so a `catch (e: Exception)` in the block lets it pass.
+// Not an Exception, so a `catch (e: Exception)` in the block lets it pass. One per thread, thrown by every failing bind
+// on it, so a failure constructs no throwable and captures no stack.
 @PublishedApi
-internal class BindSignal(
-    val scope: ResultScope<*>,
-    val error: ResultError,
-) : Throwable("bind() escaped its result block; call it in the block's own coroutine")
+internal class BindSignal : ReusableThrowable("bind() escaped its result block; call it in the block's own coroutine") {
+    // The block the latest failing bind on this thread ends, since every block on the thread shares this signal.
+    var target: ResultScope<*>? = null
+}
+
+/** A throwable thrown again and again, which keeps no stack trace or suppressed exceptions where its target allows. */
+@PublishedApi
+internal expect abstract class ReusableThrowable(message: String) : Throwable
+
+/** This thread's [BindSignal]. */
+internal expect fun currentBindSignal(): BindSignal
+
+/** Whether [signal] is the one this thread throws, never replacing it as [currentBindSignal] may. */
+internal expect fun isThisThreadsSignal(signal: BindSignal): Boolean

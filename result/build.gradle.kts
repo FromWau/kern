@@ -7,6 +7,10 @@ description = "A typed-error Result for Kotlin Multiplatform: an expected failur
     "your own error type, not a thrown exception."
 
 kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
+
     // Declaring a source set by hand switches the default hierarchy off, which strands nativeMain and every leaf
     // under it. Re-applying it before the custom set below keeps both.
     applyDefaultHierarchyTemplate()
@@ -16,6 +20,19 @@ kotlin {
     kernThreadedTest()
 
     sourceSets {
+        // Only the JVM and Android need a ThreadLocal for a per-thread value, and can make a throwable keep no stack
+        // trace or suppressed exceptions.
+        val jvmAndroidMain = create("jvmAndroidMain") {
+            dependsOn(commonMain.get())
+        }
+        jvmMain.get().dependsOn(jvmAndroidMain)
+        androidMain.get().dependsOn(jvmAndroidMain)
+
+        val nonJvmMain = create("nonJvmMain") {
+            dependsOn(commonMain.get())
+        }
+        listOf(nativeMain, webMain, wasmWasiMain).forEach { sourceSet -> sourceSet.get().dependsOn(nonJvmMain) }
+
         commonMain.dependencies {
             // compileOnly, never implementation: on JVM and Android a consumer that does not serialize a
             // Result resolves only the standard library, because nothing loads the serializer.

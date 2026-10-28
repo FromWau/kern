@@ -9,9 +9,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private sealed interface StoreError : ResultError {
@@ -97,6 +99,90 @@ class BindingTest {
         }
 
         assertEquals(Err(StoreError.NotFound(2)), outer)
+    }
+
+    @Test
+    fun `an outer bind in a nested block that swallowed its own failure ends the outer block`() {
+        var inner: Result<Int, BlankError>? = null
+
+        val outer: Result<String, StoreError> = result {
+            val scope = this
+            inner = result {
+                val _ = runCatching { Err(BlankError.Blank).bind() }
+                with(scope) { find(2).bind() }.length
+            }
+            "never: $inner"
+        }
+
+        assertEquals(Err(StoreError.NotFound(2)), outer)
+        assertEquals(null, inner)
+    }
+
+    @Test
+    fun `an outer bind leaving a nested block through a use whose close fails still ends the outer block`() {
+        var inner: Result<Int, BlankError>? = null
+        val failingClose = AutoCloseable { throw IllegalStateException("close failed") }
+
+        val outer: Result<String, StoreError> = result {
+            val scope = this
+            inner = result {
+                val _ = runCatching { Err(BlankError.Blank).bind() }
+                failingClose.use { with(scope) { find(2).bind() }.length }
+            }
+            "never: $inner"
+        }
+
+        assertEquals(Err(StoreError.NotFound(2)), outer)
+        assertEquals(null, inner)
+    }
+
+    @Test
+    fun `a block failing in a finally while an outer bind unwinds keeps its error and the outer block its own`() {
+        var inner: Result<Int, BlankError>? = null
+
+        val outer: Result<String, StoreError> = result {
+            try {
+                find(2).bind()
+            } finally {
+                inner = result { Err(BlankError.Blank).bind() }
+            }
+        }
+
+        assertEquals(Err(StoreError.NotFound(2)), outer)
+        assertEquals(Err(BlankError.Blank), inner)
+    }
+
+    @Test
+    fun `every failing bind on a thread throws the same signal`() {
+        val signals = mutableListOf<Throwable>()
+
+        val _: Result<String, StoreError> = result {
+            signals += assertFails { find(2).bind() }
+            signals += assertFails { find(1).bind() }
+            "swallowed"
+        }
+        val _: Result<String, StoreError> = result {
+            signals += assertFails { find(3).bind() }
+            "swallowed"
+        }
+
+        assertIs<BindSignal>(signals.first())
+        signals.forEach { assertSame(signals.first(), it) }
+    }
+
+    @Test
+    fun `an exception suppressed onto a bind's signal is not carried by the next failing bind`() {
+        val closed: Result<String, StoreError> = result {
+            AutoCloseable { throw IllegalStateException("close failed") }.use { find(2).bind() }
+        }
+        lateinit var next: Throwable
+        val _: Result<String, StoreError> = result {
+            next = assertFails { find(3).bind() }
+            "swallowed"
+        }
+
+        assertEquals(Err(StoreError.NotFound(2)), closed)
+        assertEquals(emptyList(), next.suppressedExceptions)
     }
 
     @Test
@@ -224,6 +310,17 @@ class BindingTest {
         assertFailsWith<IllegalStateException> {
             val _: Result<Int, StoreError> = result { error("boom") }
         }
+    }
+
+    @Test
+    fun `an exception thrown in the block passes through as the one thrown`() {
+        val thrown = IllegalArgumentException("boom")
+
+        val passed = assertFailsWith<IllegalArgumentException> {
+            val _: Result<Int, StoreError> = result { throw thrown }
+        }
+
+        assertSame(thrown, passed)
     }
 
     @Test
