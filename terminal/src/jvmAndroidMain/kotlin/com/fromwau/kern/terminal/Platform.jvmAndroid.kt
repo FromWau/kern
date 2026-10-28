@@ -1,14 +1,24 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import kotlin.concurrent.getOrSet
 
 /**
  * Shared JVM/Android stdio; the platform actual supplies the sinks and the [isTty] probe, which is all
- * that differs per platform (isTerminal() vs console presence).
+ * that differs per platform (isTerminal() vs console presence). Standard input is System.in, so a program that
+ * replaced it through System.setIn reads its replacement.
  */
-internal fun jvmPlatformIo(isTty: Boolean, outSink: OutputStream, errSink: OutputStream): PlatformIo {
+internal fun jvmPlatformIo(
+    isTty: Boolean,
+    outSink: OutputStream,
+    errSink: OutputStream,
+    inSource: InputStream = System.`in`,
+): PlatformIo {
     // A sink per terminal rather than System.out/System.err: a failure recorded on a process-wide stream
     // would decide every later terminal's answer too.
     val out = StreamSink(outSink, Stream.Out)
@@ -22,7 +32,16 @@ internal fun jvmPlatformIo(isTty: Boolean, outSink: OutputStream, errSink: Outpu
         ansiCapable = true,
         env = { System.getenv(it) },
         failureOf = { if (it == Stream.Out) out.failure else err.failure },
+        inIsTty = isTty,
+        readInChunk = { buffer -> readChunk(inSource, buffer) },
     )
+}
+
+private fun readChunk(source: InputStream, buffer: ByteArray): Result<Int, ReadError> = try {
+    Ok(source.read(buffer).coerceAtLeast(0))
+} catch (e: IOException) {
+    // The JDK raises a directory and a failing device alike as a plain IOException, with no errno to tell them apart.
+    Err(ReadError.Unknown(e.message, e))
 }
 
 /** Writes UTF-8 to [sink] at once, keeps the first failure a PrintStream would swallow, and writes nothing after it. */

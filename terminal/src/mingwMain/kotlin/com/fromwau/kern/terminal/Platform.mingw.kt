@@ -6,6 +6,8 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import platform.posix._O_BINARY
+import platform.posix._setmode
 import platform.windows.CONSOLE_SCREEN_BUFFER_INFO
 import platform.windows.CP_UTF8
 import platform.windows.DWORD
@@ -26,6 +28,11 @@ internal actual fun platformIo(): PlatformIo = nativePlatformIo(
     width = configureConsoleAndDetectWidth(),
     ansiCapable = enableVirtualTerminal(STD_OUTPUT_HANDLE),
     errAnsiCapable = enableVirtualTerminal(STD_ERROR_HANDLE),
+    readInChunk = { buffer ->
+        // Windows opens standard input in text mode, which turns CRLF into LF; binary mode passes the bytes as written.
+        _setmode(STDIN, _O_BINARY)
+        readChunk(STDIN, buffer)
+    },
 )
 
 // The UTF-8 opt-in rides along because it needs the attached-console handle this loop already finds;

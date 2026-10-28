@@ -2,10 +2,14 @@ package com.fromwau.kern.terminal.test
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
+import com.fromwau.kern.terminal.ReadError
 import com.fromwau.kern.terminal.Stream
 import com.fromwau.kern.terminal.WriteError
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -186,5 +190,54 @@ class RecordingTerminalTest {
         terminal.failWith(WriteError.BrokenPipe(Stream.Out))
 
         assertEquals(Err(WriteError.BrokenPipe(Stream.Out)), terminal.awaitWriteResult())
+    }
+
+    @Test
+    fun `standard input reads the bytes it was built with exactly`() {
+        val input = byteArrayOf(
+            0xEF.toByte(),
+            0xBB.toByte(),
+            0xBF.toByte(),
+            'a'.code.toByte(),
+            0x0D,
+            0x0A,
+            0xFF.toByte(),
+        )
+        val terminal = RecordingTerminal(input = input)
+
+        assertContentEquals(input, terminal.readIn().assertSuccess())
+    }
+
+    @Test
+    fun `standard input is read to its end once`() {
+        val terminal = RecordingTerminal(input = "text".encodeToByteArray())
+
+        terminal.readIn().assertSuccess()
+
+        assertContentEquals(ByteArray(0), terminal.readIn().assertSuccess())
+    }
+
+    @Test
+    fun `standard input past maxBytes is TooLarge and stays unread`() {
+        val terminal = RecordingTerminal(input = "123456".encodeToByteArray())
+
+        assertEquals(ReadError.TooLarge(4, 5), terminal.readIn(maxBytes = 4).assertError<ReadError.TooLarge>())
+        assertContentEquals("123456".encodeToByteArray(), terminal.readIn(maxBytes = 6).assertSuccess())
+    }
+
+    @Test
+    fun `a failed read reports the error it was told`() {
+        val terminal = RecordingTerminal(input = "text".encodeToByteArray())
+
+        terminal.failWith(ReadError.IsADirectory)
+
+        terminal.readIn().assertError<ReadError.IsADirectory>()
+        assertEquals(Ok(Unit), terminal.writeResult())
+    }
+
+    @Test
+    fun `standard input is a terminal when built as one`() {
+        assertTrue(RecordingTerminal(inIsTerminal = true).inIsTerminal)
+        assertFalse(RecordingTerminal().inIsTerminal)
     }
 }

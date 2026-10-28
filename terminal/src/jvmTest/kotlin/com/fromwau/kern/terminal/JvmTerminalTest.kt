@@ -3,11 +3,17 @@ package com.fromwau.kern.terminal
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.assertSuccess
 import kotlinx.coroutines.test.runTest
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 private class FailingStream : OutputStream() {
     val thrown = IOException("No space left on device")
@@ -19,8 +25,17 @@ private class WorkingStream : OutputStream() {
     override fun write(b: Int) = Unit
 }
 
+private class FailingInput : InputStream() {
+    val thrown = IOException("Is a directory")
+
+    override fun read(): Int = throw thrown
+}
+
 private fun terminal(out: OutputStream, err: OutputStream) =
     jvmPlatformIo(isTty = false, outSink = out, errSink = err).toTerminal()
+
+private fun reading(input: InputStream, isTty: Boolean = false) =
+    jvmPlatformIo(isTty = isTty, outSink = WorkingStream(), errSink = WorkingStream(), inSource = input).toTerminal()
 
 /** The JVM survives a failed write and keeps it, without a reason the JDK does not give. */
 class JvmTerminalTest {
@@ -100,5 +115,36 @@ class JvmTerminalTest {
         terminal.afterWrites { answer = it }
 
         assertEquals(terminal.writeResult(), answer)
+    }
+
+    @Test
+    fun `standard input comes through byte for byte`() {
+        val bytes = byteArrayOf(
+            0xEF.toByte(),
+            0xBB.toByte(),
+            0xBF.toByte(),
+            'a'.code.toByte(),
+            0x0D,
+            0x0A,
+            0xC3.toByte(),
+        )
+
+        assertContentEquals(bytes, reading(ByteArrayInputStream(bytes)).readIn().assertSuccess())
+    }
+
+    @Test
+    fun `a failed read of standard input is Unknown with the platform's message and exception`() {
+        val input = FailingInput()
+
+        assertEquals(
+            Err(ReadError.Unknown("Is a directory", input.thrown)),
+            reading(input).readIn(),
+        )
+    }
+
+    @Test
+    fun `standard input is a terminal when the one probe says so`() {
+        assertTrue(reading(ByteArrayInputStream(ByteArray(0)), isTty = true).inIsTerminal)
+        assertFalse(reading(ByteArrayInputStream(ByteArray(0)), isTty = false).inIsTerminal)
     }
 }

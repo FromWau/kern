@@ -23,6 +23,7 @@ kotlin {
         }
 
         commonTest.dependencies {
+            implementation(project(":result-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
     }

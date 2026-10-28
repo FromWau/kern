@@ -3,6 +3,7 @@ package com.fromwau.kern.terminal
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -25,6 +26,10 @@ internal class PlatformIo(
     val failureOf: (Stream) -> WriteError? = { null },
     /** Calls back once every write so far has landed or failed, for a platform that reports failures later. */
     val afterPendingWrites: (landed: () -> Unit) -> Unit = { landed -> landed() },
+    /** Whether standard input is a tty. The JVM's only probe covers stdin and stdout together. */
+    val inIsTty: Boolean = false,
+    /** Reads the next bytes of standard input into the buffer: how many, 0 at its end, or why the read failed. */
+    val readInChunk: (buffer: ByteArray) -> Result<Int, ReadError> = { Ok(0) },
 )
 
 /** The platform's own stdio. Constructing it may configure the terminal (Windows code page and VT mode). */
@@ -55,6 +60,10 @@ internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
 
     override val errIsTerminal: Boolean = errIsTty
 
+    override val inIsTerminal: Boolean = inIsTty
+
+    override fun readIn(maxBytes: Long?): Result<ByteArray, ReadError> = readAll(maxBytes, readInChunk)
+
     override fun writeResult(): EmptyResult<WriteError> =
         (failureOf(Stream.Out) ?: failureOf(Stream.Err))?.let { Err(it) } ?: Ok(Unit)
 
@@ -67,6 +76,37 @@ internal fun PlatformIo.toTerminal(): Terminal = object : Terminal {
     override suspend fun awaitWriteResult(): EmptyResult<WriteError> =
         suspendCoroutine { answered -> afterPendingWrites { answered.resume(writeResult()) } }
 }
+
+/**
+ * Every chunk [readChunk] gives up to the end, or [ReadError.TooLarge] once more than [maxBytes] arrived, reading no
+ * further than the one byte past it, as kern-fs reads a stream.
+ */
+internal fun readAll(
+    maxBytes: Long?,
+    readChunk: (buffer: ByteArray) -> Result<Int, ReadError>,
+): Result<ByteArray, ReadError> {
+    // Below zero no byte fits, so even an empty input is too large, as kern-fs answers for an empty file.
+    val tooMany = if (maxBytes == null || maxBytes == Long.MAX_VALUE) null else maxOf(maxBytes + 1, 0)
+    if (maxBytes != null && tooMany == 0L) return Err(ReadError.TooLarge(maxBytes, 0))
+    val buffer = ByteArray(READ_CHUNK_BYTES)
+    var bytes = ByteArray(0)
+    var size = 0
+    while (true) {
+        val room = tooMany?.minus(size)
+        val target = if (room != null && room < buffer.size) ByteArray(room.toInt()) else buffer
+        val count = when (val read = readChunk(target)) {
+            is Result.Success -> read.value
+            is Result.Error -> return read
+        }
+        if (count == 0) return Ok(bytes.copyOf(size))
+        if (size + count > bytes.size) bytes = bytes.copyOf(maxOf(bytes.size * 2, size + count))
+        target.copyInto(bytes, size, 0, count)
+        size += count
+        if (maxBytes != null && tooMany != null && size >= tooMany) return Err(ReadError.TooLarge(maxBytes, tooMany))
+    }
+}
+
+private const val READ_CHUNK_BYTES = 64 * 1024
 
 /**
  * Whether ANSI colour should be emitted, in one place so every caller agrees. Precedence: `NO_COLOR` >

@@ -2,6 +2,9 @@
 
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
 import kotlin.js.ExperimentalWasmJsInterop
 
 /**
@@ -25,6 +28,8 @@ private fun nodePlatformIo(): PlatformIo {
         env = ::nodeEnv,
         failureOf = { if (it == Stream.Out) out.failure else err.failure },
         afterPendingWrites = { landed -> afterNodeWrites(stdout = true) { afterNodeWrites(stdout = false, landed) } },
+        inIsTty = nodeIsATty(STDIN),
+        readInChunk = { buffer -> nodeReadChunk(STDIN, buffer) },
     )
 }
 
@@ -36,6 +41,7 @@ private fun browserPlatformIo(): PlatformIo = PlatformIo(
     width = null,
     ansiCapable = false,
     env = { null },
+    readInChunk = { Err(ReadError.Unavailable) },
 )
 
 /** Writes to Node's stream at once, keeps the first failure, thrown or reported by Node, and writes nothing after. */
@@ -60,6 +66,55 @@ private class NodeStream(private val stream: Stream) {
         }
     }
 }
+
+/** Reads the next bytes of [fd] into [buffer] with Node's synchronous read: how many, 0 at its end, or why not. */
+internal fun nodeReadChunk(fd: Int, buffer: ByteArray): Result<Int, ReadError> {
+    val chunk = nodeReadLatin1(fd, buffer.size) ?: return Err(
+        if (nodeReadErrorCode() == "EISDIR") ReadError.IsADirectory else ReadError.Unknown(nodeReadErrorMessage()),
+    )
+    for (index in chunk.indices) buffer[index] = chunk[index].code.toByte()
+    return Ok(chunk.length)
+}
+
+// Latin-1 maps each byte to the character of the same code, so the bytes cross into Kotlin as one string, unchanged.
+// A descriptor Node made non-blocking answers EAGAIN while the writer is quiet, so the read sleeps 10 ms and asks
+// again rather than spin. Windows ends a pipe with the code EOF rather than a read of 0 bytes.
+private fun nodeReadLatin1(fd: Int, size: Int): String? = js(
+    """(() => {
+        const key = Symbol.for('kern.terminal.readError');
+        const fs = typeof process.getBuiltinModule === 'function' ? process.getBuiltinModule('fs') : require('fs');
+        const buffer = Buffer.alloc(size);
+        for (;;) {
+            try {
+                const count = fs.readSync(fd, buffer, 0, size, null);
+                return buffer.toString('latin1', 0, count);
+            } catch (e) {
+                if (e && e.code === 'EAGAIN') {
+                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+                    continue;
+                }
+                if (e && e.code === 'EOF') return '';
+                globalThis[key] = e;
+                return null;
+            }
+        }
+    })()""",
+)
+
+private fun nodeReadErrorCode(): String? = js(
+    "(() => { const e = globalThis[Symbol.for('kern.terminal.readError')]; " +
+        "return e == null ? null : String(e.code || ''); })()",
+)
+
+private fun nodeReadErrorMessage(): String? = js(
+    "(() => { const e = globalThis[Symbol.for('kern.terminal.readError')]; " +
+        "return e == null ? null : String(e.message || e); })()",
+)
+
+// Asked of the descriptor rather than process.stdin, whose first use turns standard input into a stream.
+private fun nodeIsATty(fd: Int): Boolean = js(
+    "(typeof process.getBuiltinModule === 'function' ? process.getBuiltinModule('tty') : require('tty')).isatty(fd)",
+)
 
 private fun isNode(): Boolean =
     js("typeof process !== 'undefined' && process.versions != null && typeof process.versions.node === 'string'")
@@ -104,6 +159,8 @@ private fun afterNodeWrites(stdout: Boolean, callback: () -> Unit): Unit = js(
 private fun consoleLog(text: String): Unit = js("console.log(text)")
 
 private fun consoleError(text: String): Unit = js("console.error(text)")
+
+private const val STDIN = 0
 
 private val queue = AfterWritesQueue()
 

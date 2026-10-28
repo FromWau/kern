@@ -1,5 +1,6 @@
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,6 +32,12 @@ class PlatformWasiTest {
         stream.write("lost\n")
 
         assertEquals(WriteError.Refused(Stream.Out, "WASI errno 8"), stream.failure)
+    }
+
+    @Test
+    fun `a read the host refuses is Refused with its errno`() {
+        // WASI's EBADF: the host has no descriptor 99.
+        assertEquals(Err(ReadError.Refused("WASI errno 8")), readChunk(99, ByteArray(16)))
     }
 
     @Test

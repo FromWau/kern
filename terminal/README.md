@@ -6,10 +6,10 @@ Writing to a console is the easy part. The hard part is knowing whether the othe
 the user has said about colour, and what Windows needs before it renders an escape sequence. This module answers
 that once, the same way, on every target.
 
-**Output only.** Reading stdin, asking whether stdin is a pipe, exiting the process and looking up environment
-variables are all outside it. A program that needs those keeps its own `expect` declarations for them.
-`outIsTerminal` and `errIsTerminal` say whether each *output* stream is a terminal. They come from the same probe
-that decides its colour.
+Standard input is read whole, as bytes: see [Reading standard input](#reading-standard-input). Exiting the process
+and looking up environment variables are outside this module. A program that needs those keeps its own `expect`
+declarations for them. `outIsTerminal` and `errIsTerminal` say whether each output stream is a terminal. They come
+from the same probe that decides its colour.
 
 **Targets:** JVM, Android, js, wasmJs, wasmWasi, linuxX64, linuxArm64, mingwX64, macosArm64, iosArm64,
 iosSimulatorArm64, androidNativeArm64, androidNativeX64, androidNativeArm32, androidNativeX86.
@@ -383,6 +383,60 @@ fun ignoreBrokenPipes() {
   rather than `nativeMain`.
 - Writes to the closed pipe then fail as `BrokenPipe`.
 
+## Reading standard input
+
+`readIn()` reads every byte of standard input up to its end, for a program fed through a pipe or `< file`:
+
+```kotlin
+fun readConfig(terminal: Terminal): String? {
+    if (terminal.inIsTerminal) {
+        terminal.err("error: pipe the config in, as in: app < config.toml\n")
+        return null
+    }
+    val bytes = terminal.readIn(maxBytes = 1_048_576).getOrElse { error ->
+        terminal.err("error: cannot read standard input: ${describe(error)}\n")
+        return null
+    }
+    return bytes.decodeToString()
+}
+
+fun describe(error: ReadError): String = when (error) {
+    ReadError.IsADirectory -> "it is a directory"
+    is ReadError.TooLarge -> "it holds more than ${error.limitBytes} bytes"
+    ReadError.Unavailable -> "there is none here"
+    is ReadError.Refused -> error.detail ?: "the system refused"
+    is ReadError.Unknown -> error.detail ?: "unknown failure"
+}
+```
+
+- The bytes are exactly what was written. A CRLF stays a CRLF, also on Windows, a byte order mark stays, and bytes
+  that are no valid UTF-8 come through. Decoding is yours: `decodeToString()` turns invalid UTF-8 into U+FFFD.
+- It blocks until the writer closes its end. At a terminal that is when the user ends the input, as Ctrl-D does on
+  Linux and macOS, so check `inIsTerminal` first when nobody is meant to type.
+- Read it once. The first call uses it up: a second finds nothing more in a pipe or a file, and at a terminal it
+  waits for the user to type again.
+- Past `maxBytes` the read stops with `ReadError.TooLarge`, one byte past the limit, which `atLeastBytes` holds. The
+  rest is never read. Leave `maxBytes` out to read it all, but give it when standard input may never end, as
+  `< /dev/zero` does: a pipe, a file, a socket or a device are all read alike.
+- `getOrElse` is `com.fromwau.kern.result.getOrElse`, from `kern:result`, which comes along with this module.
+
+### What each platform reads
+
+- **JVM and Android** read `System.in`. Every failure, a directory too, is `Unknown`, with the `IOException` as
+  its `cause`. `inIsTerminal` comes from the probe behind `outIsTerminal`, which answers for standard input and
+  output together, so a redirected standard output makes it false.
+- **Linux, macOS, iOS and Android native** read descriptor 0. A directory is `IsADirectory` where the system reports
+  `EISDIR`, as Linux does, and any other failure is `Refused` with the system's message. While a non-blocking
+  descriptor has nothing yet, it waits 10 ms and asks again, as Node does. `inIsTerminal` is `isatty(0)`.
+- **Windows native** reads descriptor 0 the same way, switched to binary mode first so CRLF is not turned into LF.
+  `inIsTerminal` is `isatty(0)`.
+- **WASI** reads descriptor 0, a directory is `IsADirectory`, and any other failure is `Refused` with its errno.
+  `inIsTerminal` is true for a character device that cannot seek, as for the output streams.
+- **Node** reads descriptor 0 synchronously, a directory is `IsADirectory`, and any other failure is `Unknown` with
+  Node's message. While a non-blocking descriptor has nothing yet, it waits 10 ms and asks again. `inIsTerminal` is
+  `tty.isatty(0)`.
+- **A browser** has no standard input: `readIn()` is `ReadError.Unavailable` and `inIsTerminal` is false.
+
 ## Testing
 
 `RecordingTerminal`, from `kern:terminal-test`, keeps what each stream was sent. It fails a stream's writes when you
@@ -397,7 +451,17 @@ terminal.failWith(WriteError.Refused(Stream.Err, "disk full"))
 ```
 
 `WriteError.Unknown(Stream.Out, "No space left on device")` builds the third kind. Its `cause` is optional, since it
-is null outside the JVM and Android. See the [terminal-test README](../terminal-test/README.md).
+is null outside the JVM and Android.
+
+Its standard input holds the bytes you build it with, and its read fails when you tell it to:
+
+```kotlin
+val piped = RecordingTerminal(input = "name = \"kern\"\n".encodeToByteArray())
+val broken = RecordingTerminal()
+broken.failWith(ReadError.IsADirectory)
+```
+
+See the [terminal-test README](../terminal-test/README.md).
 
 `Terminal` is an interface, so a terminal of your own works too:
 
@@ -412,8 +476,9 @@ class Recorder : Terminal {
 One that overrides only `out` and `err` has these defaults:
 
 - `columns` is `0`.
-- `ansi`, `errAnsi`, `outIsTerminal` and `errIsTerminal` are false.
+- `ansi`, `errAnsi`, `outIsTerminal`, `errIsTerminal` and `inIsTerminal` are false.
 - Every write succeeds.
+- `readIn()` reads no bytes, as from `/dev/null`.
 
 So there is no wrapping and there are no escape codes. To report failures, override `writeResult()`.
 `writeResult(stream)`, `afterWrites` and `awaitWriteResult()` read it, so overriding only `writeResult(stream)`

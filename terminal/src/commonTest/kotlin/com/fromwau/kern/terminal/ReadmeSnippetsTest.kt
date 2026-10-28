@@ -4,11 +4,15 @@ import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.assertSuccess
+import com.fromwau.kern.result.getOrElse
 import com.fromwau.kern.terminal.test.RecordingTerminal
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val ESC = Char(27)
@@ -69,6 +73,33 @@ private fun failingTerminal(): RecordingTerminal {
     terminal.failWith(WriteError.BrokenPipe(Stream.Out))
     terminal.failWith(WriteError.Refused(Stream.Err, "disk full"))
     return terminal
+}
+
+fun readConfig(terminal: Terminal): String? {
+    if (terminal.inIsTerminal) {
+        terminal.err("error: pipe the config in, as in: app < config.toml\n")
+        return null
+    }
+    val bytes = terminal.readIn(maxBytes = 1_048_576).getOrElse { error ->
+        terminal.err("error: cannot read standard input: ${describe(error)}\n")
+        return null
+    }
+    return bytes.decodeToString()
+}
+
+fun describe(error: ReadError): String = when (error) {
+    ReadError.IsADirectory -> "it is a directory"
+    is ReadError.TooLarge -> "it holds more than ${error.limitBytes} bytes"
+    ReadError.Unavailable -> "there is none here"
+    is ReadError.Refused -> error.detail ?: "the system refused"
+    is ReadError.Unknown -> error.detail ?: "unknown failure"
+}
+
+private fun readingTerminals(): Pair<RecordingTerminal, RecordingTerminal> {
+    val piped = RecordingTerminal(input = "name = \"kern\"\n".encodeToByteArray())
+    val broken = RecordingTerminal()
+    broken.failWith(ReadError.IsADirectory)
+    return piped to broken
 }
 
 suspend fun finish(terminal: Terminal): Int = exitCode(terminal, terminal.awaitWriteResult())
@@ -220,7 +251,43 @@ class ReadmeSnippetsTest {
 
         assertEquals("x", recorder.written.toString())
         assertEquals(0, recorder.columns)
-        assertFalse(recorder.ansi || recorder.errAnsi || recorder.outIsTerminal || recorder.errIsTerminal)
+        assertFalse(
+            recorder.ansi || recorder.errAnsi || recorder.outIsTerminal || recorder.errIsTerminal ||
+                recorder.inIsTerminal,
+        )
+        assertContentEquals(ByteArray(0), recorder.readIn().assertSuccess())
         assertEquals(0, finish(recorder))
+    }
+
+    @Test
+    fun `reading a piped config gives its text`() {
+        val (piped, _) = readingTerminals()
+
+        assertEquals("name = \"kern\"\n", readConfig(piped))
+        assertEquals("", piped.err)
+    }
+
+    @Test
+    fun `reading a config at a terminal asks for a pipe instead of waiting`() {
+        val terminal = RecordingTerminal(inIsTerminal = true, input = "typed".encodeToByteArray())
+
+        assertNull(readConfig(terminal))
+        assertEquals("error: pipe the config in, as in: app < config.toml\n", terminal.err)
+    }
+
+    @Test
+    fun `reading a config that fails says why`() {
+        val (_, broken) = readingTerminals()
+
+        assertNull(readConfig(broken))
+        assertEquals("error: cannot read standard input: it is a directory\n", broken.err)
+    }
+
+    @Test
+    fun `reading a config past the limit names the limit`() {
+        val terminal = RecordingTerminal(input = ByteArray(1_048_577))
+
+        assertNull(readConfig(terminal))
+        assertEquals("error: cannot read standard input: it holds more than 1048576 bytes\n", terminal.err)
     }
 }

@@ -4,7 +4,8 @@ A test `Terminal` for [`kern:terminal`](../terminal/README.md).
 
 Code that prints is worth testing: the right text, on the right stream, coloured or not, and the right exit code when
 a pipe closes. `RecordingTerminal` keeps what each stream was sent. It answers the width, colour and tty questions
-with what you built it with. And it fails a stream's writes when you tell it to.
+with what you built it with, and standard input holds the bytes you give it. And it fails a stream's writes, or the
+read, when you tell it to.
 
 **Targets:** the same as [`kern:terminal`](../terminal/README.md).
 
@@ -51,6 +52,7 @@ should claim:
 | `errAnsi`       | `false` | whether standard error takes colour      |
 | `outIsTerminal` | `false` | whether standard output is a terminal    |
 | `errIsTerminal` | `false` | whether standard error is a terminal     |
+| `inIsTerminal`  | `false` | whether standard input is a terminal     |
 
 Writes from several threads are kept in the order they were made. So a logger writing from its own thread can use
 one too.
@@ -136,6 +138,38 @@ Each `Write` in `lostWrites` is in the order it was made, and each read is a cop
 - `afterWrites` runs its block at once on every target, Node included, since a `RecordingTerminal` has no writes to
   wait for.
 - A call to `afterWrites` from inside a block runs once that block returns, as on the real terminal.
+
+## Feeding standard input
+
+`input` is what `readIn()` reads, byte for byte, the first time. A second read finds nothing more, as with a pipe:
+
+```kotlin
+@Test
+fun `the piped name is greeted`() {
+    val terminal = RecordingTerminal(input = "kern\n".encodeToByteArray())
+
+    greet(terminal)
+
+    assertEquals("hello, kern\n", terminal.out)
+}
+```
+
+- `greet` here is the code under test: it reads standard input and greets the name it holds.
+- `readIn(maxBytes)` on an input longer than `maxBytes` is `ReadError.TooLarge` with one byte past the limit as
+  `atLeastBytes`, as a real read answers, and leaves the input unread.
+- `failWith(ReadError)` fails every later `readIn()` with that error, as `failWith(WriteError)` fails a stream:
+
+```kotlin
+@Test
+fun `a directory as standard input is reported`() {
+    val terminal = RecordingTerminal()
+    terminal.failWith(ReadError.IsADirectory)
+
+    greet(terminal)
+
+    assertEquals("error: standard input is a directory\n", terminal.err)
+}
+```
 
 ## License
 

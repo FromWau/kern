@@ -2,7 +2,7 @@ plugins {
     id("kern-module")
 }
 
-description = "Terminal IO for Kotlin Multiplatform: stdout/stderr, tty and width detection, styled text, and " +
+description = "Terminal IO for Kotlin Multiplatform: stdout/stderr, stdin, tty and width detection, styled text, and " +
     "one ANSI colour policy that honours NO_COLOR, FORCE_COLOR and a piped handle."
 
 kotlin {
@@ -21,6 +21,7 @@ kotlin {
 
         commonTest.dependencies {
             implementation(project(":terminal-test"))
+            implementation(project(":result-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
 

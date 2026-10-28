@@ -2,6 +2,9 @@
 
 package com.fromwau.kern.terminal
 
+import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
 import kotlin.wasm.ExperimentalWasmInterop
 import kotlin.wasm.WasmImport
 import kotlin.wasm.unsafe.MemoryAllocator
@@ -9,7 +12,9 @@ import kotlin.wasm.unsafe.Pointer
 import kotlin.wasm.unsafe.UnsafeWasmMemoryApi
 import kotlin.wasm.unsafe.withScopedMemoryAllocator
 
-/** Standard output and error through WASI's file descriptors 1 and 2. WASI has no way to ask for the width. */
+/**
+ * Standard input, output and error through WASI's file descriptors 0, 1 and 2. WASI has no way to ask for the width.
+ */
 internal actual fun platformIo(): PlatformIo {
     val out = WasiStream(STDOUT, Stream.Out)
     val err = WasiStream(STDERR, Stream.Err)
@@ -23,7 +28,31 @@ internal actual fun platformIo(): PlatformIo {
         ansiCapable = true,
         env = { environment[it] },
         failureOf = { if (it == Stream.Out) out.failure else err.failure },
+        inIsTty = isTerminal(STDIN),
+        readInChunk = { buffer -> readChunk(STDIN, buffer) },
     )
+}
+
+/** Reads the next bytes of [fd] into [buffer]: how many, 0 at its end, or why the host refused. */
+internal fun readChunk(fd: Int, buffer: ByteArray): Result<Int, ReadError> = withScopedMemoryAllocator { allocator ->
+    val memory = allocator.allocate(buffer.size)
+    val iovec = allocator.allocate(8)
+    val read = allocator.allocate(4)
+    iovec.storeInt(memory.address.toInt())
+    (iovec + 4).storeInt(buffer.size)
+    var errno: Int
+    do {
+        errno = fdRead(fd, iovec.address.toInt(), 1, read.address.toInt())
+    } while (errno == ERRNO_INTR)
+    when (errno) {
+        SUCCESS -> {
+            val count = read.loadInt()
+            for (index in 0 until count) buffer[index] = (memory + index).loadByte()
+            Ok(count)
+        }
+        ERRNO_ISDIR -> Err(ReadError.IsADirectory)
+        else -> Err(ReadError.Refused("WASI errno $errno"))
+    }
 }
 
 /** Writes to [fd] at once, keeps the first write the host refused, and writes nothing after it. */
@@ -103,6 +132,9 @@ private fun MemoryAllocator.copyOf(bytes: ByteArray): Pointer {
 @WasmImport("wasi_snapshot_preview1", "fd_write")
 private external fun fdWrite(fd: Int, iovs: Int, iovsLength: Int, written: Int): Int
 
+@WasmImport("wasi_snapshot_preview1", "fd_read")
+private external fun fdRead(fd: Int, iovs: Int, iovsLength: Int, read: Int): Int
+
 @WasmImport("wasi_snapshot_preview1", "fd_fdstat_get")
 private external fun fdFdstatGet(fd: Int, stat: Int): Int
 
@@ -112,9 +144,12 @@ private external fun environSizesGet(count: Int, bufferSize: Int): Int
 @WasmImport("wasi_snapshot_preview1", "environ_get")
 private external fun environGet(pointers: Int, buffer: Int): Int
 
+private const val STDIN = 0
 private const val STDOUT = 1
 private const val STDERR = 2
 private const val SUCCESS = 0
+private const val ERRNO_INTR = 27
+private const val ERRNO_ISDIR = 31
 private const val ERRNO_PIPE = 64
 
 // No WASI errno is negative.

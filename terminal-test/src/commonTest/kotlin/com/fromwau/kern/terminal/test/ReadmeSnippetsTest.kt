@@ -3,6 +3,7 @@ package com.fromwau.kern.terminal.test
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.terminal.BROKEN_PIPE_EXIT
+import com.fromwau.kern.terminal.ReadError
 import com.fromwau.kern.terminal.Stream
 import com.fromwau.kern.terminal.Terminal
 import com.fromwau.kern.terminal.WriteError
@@ -21,6 +22,18 @@ private fun report(terminal: Terminal, missing: String) {
 private fun copy(terminal: Terminal, files: List<String>) {
     for (file in files) {
         if (file.startsWith("missing")) terminal.err("error: $file is missing\n") else terminal.out("copied $file\n")
+    }
+}
+
+// Not in the README: the code under test for the standard input snippets.
+private fun greet(terminal: Terminal) {
+    when (val read = terminal.readIn()) {
+        is Result.Success -> terminal.out("hello, ${read.value.decodeToString().trim()}\n")
+        is Result.Error -> if (read.error == ReadError.IsADirectory) {
+            terminal.err("error: standard input is a directory\n")
+        } else {
+            terminal.err("error: cannot read standard input\n")
+        }
     }
 }
 
@@ -94,5 +107,24 @@ class ReadmeSnippetsTest {
             ),
             terminal.writes,
         )
+    }
+
+    @Test
+    fun `the piped name is greeted`() {
+        val terminal = RecordingTerminal(input = "kern\n".encodeToByteArray())
+
+        greet(terminal)
+
+        assertEquals("hello, kern\n", terminal.out)
+    }
+
+    @Test
+    fun `a directory as standard input is reported`() {
+        val terminal = RecordingTerminal()
+        terminal.failWith(ReadError.IsADirectory)
+
+        greet(terminal)
+
+        assertEquals("error: standard input is a directory\n", terminal.err)
     }
 }

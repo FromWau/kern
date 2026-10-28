@@ -4,11 +4,14 @@ package com.fromwau.kern.terminal
 
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.assertError
+import com.fromwau.kern.result.assertSuccess
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
@@ -159,7 +162,59 @@ class PlatformWebTest {
     fun `the environment is read from the host`() {
         assertNotNull(platformIo().env("PATH"))
     }
+
+    @Test
+    fun `a file read as standard input comes through byte for byte`() {
+        val bytes = byteArrayOf(
+            0xEF.toByte(),
+            0xBB.toByte(),
+            0xBF.toByte(),
+            'a'.code.toByte(),
+            0x0D,
+            0x0A,
+            0xFF.toByte(),
+        )
+        val fd = openTempFileHolding(bytes.joinToString("") { (it.toInt() and 0xFF).toChar().toString() })
+        try {
+            assertContentEquals(bytes, readAll(maxBytes = null) { nodeReadChunk(fd, it) }.assertSuccess())
+        } finally {
+            closeAndRemoveTempFile(fd)
+        }
+    }
+
+    @Test
+    fun `a directory read as standard input is IsADirectory`() {
+        val fd = openTempDirectory()
+        try {
+            readAll(maxBytes = null) { nodeReadChunk(fd, it) }.assertError<ReadError.IsADirectory>()
+        } finally {
+            closeFd(fd)
+        }
+    }
 }
+
+// The text's characters are written as Latin-1, one byte each, so it can hold any byte.
+private fun openTempFileHolding(latin1: String): Int = js(
+    """(() => {
+        const fs = process.getBuiltinModule('fs');
+        const path = process.getBuiltinModule('path').join(
+            process.getBuiltinModule('os').tmpdir(), 'kern-terminal-stdin-' + process.pid + '-' + Date.now());
+        fs.writeFileSync(path, Buffer.from(latin1, 'latin1'));
+        const fd = fs.openSync(path, 'r');
+        globalThis.kernTempPaths = globalThis.kernTempPaths || {};
+        globalThis.kernTempPaths[fd] = path;
+        return fd;
+    })()""",
+)
+
+private fun closeAndRemoveTempFile(fd: Int): Unit = js(
+    "{ const fs = process.getBuiltinModule('fs'); fs.closeSync(fd); fs.rmSync(globalThis.kernTempPaths[fd]); }",
+)
+
+private fun openTempDirectory(): Int =
+    js("process.getBuiltinModule('fs').openSync(process.getBuiltinModule('os').tmpdir(), 'r')")
+
+private fun closeFd(fd: Int): Unit = js("process.getBuiltinModule('fs').closeSync(fd)")
 
 private fun setStdoutIsTty(value: Boolean): Unit = js("{ process.stdout.isTTY = value ? true : undefined; }")
 

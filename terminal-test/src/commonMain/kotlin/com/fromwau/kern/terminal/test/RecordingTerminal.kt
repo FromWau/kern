@@ -3,6 +3,8 @@ package com.fromwau.kern.terminal.test
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
+import com.fromwau.kern.terminal.ReadError
 import com.fromwau.kern.terminal.Stream
 import com.fromwau.kern.terminal.Terminal
 import com.fromwau.kern.terminal.WriteError
@@ -10,7 +12,8 @@ import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 
 /**
- * A [Terminal] for tests: it keeps what each stream was sent, and fails a stream's writes when you tell it to.
+ * A [Terminal] for tests: it keeps what each stream was sent, hands [readIn] the [input] you give it, and fails a
+ * stream's writes or the read when you tell it to.
  *
  * ```kotlin
  * val terminal = RecordingTerminal()
@@ -22,8 +25,10 @@ import kotlinx.atomicfu.locks.withLock
  * assertEquals("", terminal.out)
  * ```
  *
- * Each parameter is what the property of the same name answers. Writes from several threads are kept in the order
- * they were made.
+ * Each parameter but [input] is what the property of the same name answers. Writes from several threads are kept in
+ * the order they were made.
+ *
+ * @param input the bytes [readIn] reads, copied, so changing the array afterwards changes nothing.
  */
 public class RecordingTerminal(
     override val columns: Int = 0,
@@ -31,11 +36,16 @@ public class RecordingTerminal(
     override val errAnsi: Boolean = false,
     override val outIsTerminal: Boolean = false,
     override val errIsTerminal: Boolean = false,
+    override val inIsTerminal: Boolean = false,
+    input: ByteArray = ByteArray(0),
 ) : Terminal {
     private val lock = reentrantLock()
     private val recorded = mutableListOf<Write>()
     private val lost = mutableListOf<Write>()
     private val failures = mutableMapOf<Stream, WriteError>()
+    private val input = input.copyOf()
+    private var inputRead = false
+    private var readFailure: ReadError? = null
 
     /** Everything written to standard output, except the writes that failed. */
     public val out: String
@@ -73,6 +83,29 @@ public class RecordingTerminal(
      */
     public fun failWith(error: WriteError) {
         lock.withLock { failures[error.stream] = error }
+    }
+
+    /** Fails every later [readIn] with [error]. A later call replaces it. */
+    public fun failWith(error: ReadError) {
+        lock.withLock { readFailure = error }
+    }
+
+    /**
+     * The input this terminal was built with, the first time, and nothing after, as a real standard input reads only
+     * to its end once. Past [maxBytes] it is [ReadError.TooLarge] one byte past the limit, as a real read answers, and
+     * nothing is read. After [failWith] it is that error.
+     */
+    override fun readIn(maxBytes: Long?): Result<ByteArray, ReadError> = lock.withLock {
+        val failure = readFailure
+        val unread = if (inputRead) ByteArray(0) else input
+        when {
+            failure != null -> Err(failure)
+            maxBytes != null && unread.size > maxBytes -> Err(ReadError.TooLarge(maxBytes, maxOf(maxBytes + 1, 0)))
+            else -> {
+                inputRead = true
+                Ok(unread.copyOf())
+            }
+        }
     }
 
     override fun writeResult(): EmptyResult<WriteError> = lock.withLock { failures[Stream.Out] ?: failures[Stream.Err] }

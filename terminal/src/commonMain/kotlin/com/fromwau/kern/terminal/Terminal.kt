@@ -22,10 +22,10 @@ public const val BROKEN_PIPE_EXIT: Int = 128 + 13
  * }
  * ```
  *
- * A terminal of your own that overrides only [out] and [err] has a [columns] of 0, [ansi], [errAnsi], [outIsTerminal]
- * and [errIsTerminal] false, and every write succeeds: no wrapping and no escape codes unless something says
- * otherwise. To report failures, override [writeResult]; the per-stream [writeResult], [afterWrites] and
- * [awaitWriteResult] read it.
+ * A terminal of your own that overrides only [out] and [err] has a [columns] of 0, [ansi], [errAnsi], [outIsTerminal],
+ * [errIsTerminal] and [inIsTerminal] false, every write succeeds and [readIn] reads nothing: no wrapping and no escape
+ * codes unless something says otherwise. To report failures, override [writeResult]; the per-stream [writeResult],
+ * [afterWrites] and [awaitWriteResult] read it.
  */
 public interface Terminal {
     /** Writes [text] to standard output. No newline is added, so include one when you want one. */
@@ -60,6 +60,35 @@ public interface Terminal {
      * there it is always false.
      */
     public val errIsTerminal: Boolean get() = false
+
+    /**
+     * Whether standard input is a terminal: true when a person may be typing, false for a pipe, a file or nothing at
+     * all. Use it to skip a prompt or to refuse to wait for input nobody will type. On the JVM and Android the only
+     * probe answers for standard input and output together, so a redirected standard output makes it false. A browser
+     * has no standard input, so there it is false.
+     */
+    public val inIsTerminal: Boolean get() = false
+
+    /**
+     * Every byte of standard input up to its end, exactly as it was written: no newline or encoding translation, so a
+     * CRLF, a byte order mark or bytes that are no valid UTF-8 come through as they are. It blocks until the writer
+     * closes its end, or, at a terminal, until the user ends the input, as Ctrl-D does on Linux and macOS.
+     * Read it once: the first call uses it up, so a second finds nothing more in a pipe or a file, and at a terminal
+     * waits for the user to type again.
+     *
+     * ```kotlin
+     * val text = terminal.readIn(maxBytes = 1_048_576).getOrElse { return fail(it) }.decodeToString()
+     * ```
+     *
+     * It reads whatever standard input is, a pipe, a file, a socket or a device, so give [maxBytes] when it may never
+     * end, as `/dev/zero` does. The default answers an empty input, as a process whose standard input is `/dev/null`
+     * reads.
+     *
+     * @param maxBytes the most bytes read; once more than that arrives, the read stops with [ReadError.TooLarge].
+     *   Null reads it all, however much that is.
+     * @return the bytes, or why they could not be read.
+     */
+    public fun readIn(maxBytes: Long? = null): Result<ByteArray, ReadError> = Ok(ByteArray(0))
 
     /**
      * Whether every write so far reached its destination, or why one did not: standard output's failure before
@@ -150,6 +179,40 @@ public sealed interface WriteError : ResultError {
         val detail: String?,
         val cause: Throwable? = null,
     ) : WriteError
+}
+
+/** Why standard input could not be read. */
+public sealed interface ReadError : ResultError {
+    /**
+     * Standard input is a directory, as with `app < /tmp`. Kotlin/Native, Node and WASI report it where the system
+     * does, as Linux does; the JVM and Android answer [Unknown].
+     */
+    public data object IsADirectory : ReadError
+
+    /**
+     * Standard input holds at least [atLeastBytes] bytes, more than the caller's limit of [limitBytes]. It is a lower
+     * bound, one byte past the limit: the read stops there instead of reading the rest.
+     */
+    public data class TooLarge(
+        val limitBytes: Long,
+        val atLeastBytes: Long,
+    ) : ReadError
+
+    /** This process has no standard input to read, as in a browser. */
+    public data object Unavailable : ReadError
+
+    /** The system refused the read, as a failing device does. [detail] is its own message. */
+    public data class Refused(val detail: String?) : ReadError
+
+    /**
+     * A read failed for a reason the platform does not report: the JVM and Android raise every failure as the same
+     * exception, and Node gives only its message. [detail] is the platform's message, for showing, not for deciding.
+     * [cause] is the exception the JDK threw, for you to inspect or log; it is null elsewhere.
+     */
+    public data class Unknown(
+        val detail: String?,
+        val cause: Throwable? = null,
+    ) : ReadError
 }
 
 /**

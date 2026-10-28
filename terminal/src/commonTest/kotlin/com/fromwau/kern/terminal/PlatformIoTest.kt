@@ -3,6 +3,8 @@ package com.fromwau.kern.terminal
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
+import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.assertError
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,6 +23,8 @@ private fun io(
     env: Map<String, String> = emptyMap(),
     failureOf: (Stream) -> WriteError? = { null },
     afterPendingWrites: (() -> Unit) -> Unit = { it() },
+    inIsTty: Boolean = false,
+    readInChunk: (ByteArray) -> Result<Int, ReadError> = { Ok(0) },
 ) = PlatformIo(
     writeOut = out,
     writeErr = err,
@@ -32,6 +36,8 @@ private fun io(
     env = { env[it] },
     failureOf = failureOf,
     afterPendingWrites = afterPendingWrites,
+    inIsTty = inIsTty,
+    readInChunk = readInChunk,
 )
 
 /**
@@ -72,6 +78,19 @@ class PlatformIoTest {
         val outRedirected = io(isTty = false, errIsTty = true).toTerminal()
         assertFalse(outRedirected.outIsTerminal)
         assertTrue(outRedirected.errIsTerminal)
+    }
+
+    @Test
+    fun `standard input says whether it is a terminal from its own probe`() {
+        assertTrue(io(inIsTty = true).toTerminal().inIsTerminal)
+        assertFalse(io(isTty = true, errIsTty = true, inIsTty = false).toTerminal().inIsTerminal)
+    }
+
+    @Test
+    fun `standard input is read from the platform's reads`() {
+        val terminal = io(readInChunk = { Err(ReadError.Unavailable) }).toTerminal()
+
+        terminal.readIn().assertError<ReadError.Unavailable>()
     }
 
     @Test
