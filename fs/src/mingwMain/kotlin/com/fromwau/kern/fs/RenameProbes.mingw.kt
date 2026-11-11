@@ -61,3 +61,9 @@ internal fun openExisting(
     path: Path,
     access: UInt,
 ): HANDLE? = openHandle(path, access, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS.convert())
+
+// Windows has no extended attributes of this kind, and Auto does not rename an existing file there.
+internal actual fun copyAttributes(
+    from: Path,
+    to: Path,
+): Boolean = true

@@ -280,7 +280,7 @@ private val keywords = listOf("true", "false", "inf", "nan")
 
 private val signedKeywords = listOf("inf", "nan")
 
-internal val tomlKeywords: List<CandidateSet> = listOf(
+internal val shortKeywords: List<CandidateSet> = listOf(
     CandidateSet(
         "keywords",
         keywords,

@@ -26,8 +26,8 @@ import kotlin.uuid.Uuid
  * **By rename.** The content goes into `.<name>.<id>.tmp` beside the file, is forced to disk and renamed over
  * the file, so readers see the old content or the new and never part of it. A failure, or a killed process,
  * leaves the file as it was, plus at most that temp file, which [leftovers] finds. The new file takes the old
- * one's permissions and group, but other hard links keep the old content, this user owns it, and timestamps,
- * ACLs and extended attributes start fresh, unless [modifiedAt] gives the modification time.
+ * one's permissions, group, ACL and extended attributes, but other hard links keep the old content, this user owns
+ * it, and timestamps start fresh, unless [modifiedAt] gives the modification time.
  *
  * **In place.** The old content is copied to `.<name>.<id>.bak.part` beside the file and, once complete, renamed to
  * the backup `.<name>.<id>.bak`; then the file itself is written, so its inode, owner and links stay. A failed write
@@ -68,10 +68,15 @@ import kotlin.uuid.Uuid
  * @param modifiedAt gives the file this modification time, as finely as the platform keeps it: a write by rename sets
  *   it on the new file before it takes the name, and an in-place write once the content is written. Null leaves the
  *   time the write gives it.
+ * @param unchangedSince refuses the write when the file is no longer the one this [stamp] describes, so a write of
+ *   text read from the file does not replace what another process wrote since. It is compared before the write looks
+ *   for a backup beside the file, and again right before a rename puts the new file in place or an in-place write
+ *   empties the file, after its backup is made. Null writes whatever the file holds.
  * @return the [Written] way, [WriteWay.Renamed] or [WriteWay.InPlace], with the info of the file written;
- *   [FileError.PendingBackup] when a backup of the file waits beside it, with nothing written. A missing parent
- *   folder that could not be made is [FileError.WriteFailed] naming this path, with the folder as its
- *   [FailedAt.Folder]. Any other failure making the folders is what [createDirectories] answers.
+ *   [FileError.ChangedSince] when the file changed since [unchangedSince], and [FileError.PendingBackup] when a backup
+ *   of the file waits beside it, each with nothing written. A missing parent folder that could not be made is
+ *   [FileError.WriteFailed] naming this path, with the folder as its [FailedAt.Folder]. Any other failure making the
+ *   folders is what [createDirectories] answers.
  */
 public fun Path.writeText(
     text: String,
@@ -79,7 +84,9 @@ public fun Path.writeText(
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError> = writeBytes(text.encodeToByteArray(), mode, ownerOnly, executable, modifiedAt)
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError> =
+    writeBytes(text.encodeToByteArray(), mode, ownerOnly, executable, modifiedAt, unchangedSince)
 
 /** [writeText] for raw bytes, with the same answer. */
 public fun Path.writeBytes(
@@ -88,9 +95,11 @@ public fun Path.writeBytes(
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError> = write(mode, ownerOnly, executable = executable, modifiedAt = modifiedAt) {
-    it.write(bytes)
-}
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError> =
+    write(mode, ownerOnly, executable = executable, modifiedAt = modifiedAt, unchangedSince = unchangedSince) {
+        it.write(bytes)
+    }
 
 /**
  * Copies this file's content to [target], replacing what [target] held the way [writeBytes] would, with the same
@@ -173,7 +182,7 @@ internal fun Path.keptAttributes(): Result<KeptAttributes, FileError> = try {
 }
 
 /** This file opened for reading, or with [streams] the FIFO or character device too, as [openFileSource] opens it. */
-internal fun Path.openSource(streams: Boolean = false): Result<FileSource, FileError> = try {
+internal fun Path.openSource(streams: Boolean = false): Result<FileSource, FileError.ReadFileError> = try {
     Ok(openFileSource(this, streams = streams))
 } catch (e: NotRegularFileFailure) {
     Err(FileError.NotRegularFile(this, e.type))
@@ -197,20 +206,24 @@ internal fun Path.writeFrom(
 
 /**
  * Replaces this file's content with what [content] puts into the sink it is handed, as [writeText] describes.
- * [content] runs at most once. [keepGroup] hands a renamed copy the file's group, as [copyGroup] does, and [backUp],
- * when set, makes an in-place write's backup in place of [WriteFolder.copyFile]. With [kept], the file gets those
+ * [content] runs at most once. [keepGroup] hands a renamed copy the file's group, as [copyGroup] does,
+ * [carryAttributes] its ACL and extended attributes, as [copyAttributes] does, and [backUp], when set, makes an
+ * in-place write's backup in place of [WriteFolder.copyFile]. With [kept], the file gets those
  * permissions before any content and that modification time after it, as [copyTo] describes; without, [modifiedAt].
+ * [unchangedSince] refuses a file changed since, as [writeText] describes.
  */
 internal fun Path.write(
     mode: WriteMode,
     ownerOnly: Boolean = false,
     keepGroup: (from: Path, to: Path) -> Boolean = ::copyGroup,
+    carryAttributes: (from: Path, to: Path) -> Boolean = ::copyAttributes,
     kept: KeptAttributes? = null,
     backUp: ((from: Path, to: Path, ownerOnly: Boolean) -> HeldFile)? = null,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
+    unchangedSince: FileStamp? = null,
     content: (Sink) -> Unit,
-): Result<Written, FileError> {
+): Result<Written, FileError.WriteFileError> {
     refusedPath()?.let { return it }
     val entry = namedEntry()
     if (entry != this) return Err(folderWriteError(entry))
@@ -229,6 +242,7 @@ internal fun Path.write(
     val way = replacementFor(mode, target, existed, identity)
     // Asked before any folder or file is made, so a name that cannot be written leaves nothing behind.
     sidecarTooLong(target, way, existed)?.let { return it }
+    if (target.changedSince(unchangedSince)) return Err(FileError.ChangedSince(this))
     val folder = PathFolder(target.parent, keepGroup, backUp)
     folder.pendingBackup(target.name, this) { linkToCopies() }?.let { return Err(it) }
     val created = createFoldersFor(target, ownerOnly)
@@ -243,6 +257,8 @@ internal fun Path.write(
         permissions = if (ownerOnly) OWNER_READ_WRITE else kept?.permissions,
         executable = executable,
         modified = modifiedTimeFor(modifiedAt, kept),
+        carryAttributes = carryAttributes,
+        unchangedSince = unchangedSince,
     )
     return when (way) {
         Replacement.Rename -> plan.byRename(existed)
@@ -252,11 +268,25 @@ internal fun Path.write(
 }
 
 /**
+ * Whether the file at this path is no longer the one [stamp] describes, a file that cannot be looked up included;
+ * false without a stamp.
+ */
+private fun Path.changedSince(stamp: FileStamp?): Boolean {
+    if (stamp == null) return false
+    val now = try {
+        stampAt(this)
+    } catch (_: Exception) {
+        null
+    }
+    return now != stamp
+}
+
+/**
  * Why a write of this path, which names the folder [entry] by a trailing `.` or `..`, is refused:
  * [FileError.NotRegularFile] when a folder is there, [FileError.NotADirectory] naming [entry] when something else is,
  * [FileError.NotFound] when nothing is, or the error looking it up.
  */
-internal fun Path.folderWriteError(entry: Path): FileError = when (val looked = entry.metadata()) {
+internal fun Path.folderWriteError(entry: Path): FileError.WriteFileError = when (val looked = entry.metadata()) {
     is Result.Success -> when {
         looked.value.isDirectory -> FileError.NotRegularFile(this, FileType.Directory)
         else -> FileError.NotADirectory(entry, entry.typeOf(looked.value))
@@ -275,7 +305,7 @@ internal fun Path.folderWriteError(entry: Path): FileError = when (val looked = 
 private fun Path.createFoldersFor(
     target: Path,
     ownerOnly: Boolean,
-): EmptyResult<FileError> {
+): EmptyResult<FileError.WriteFileError> {
     val created = makeFolders(target.parent ?: return Ok(Unit), pathFolderMode(ownerOnly))
     val failed = (created as? Result.Error)?.error as? FileError.WriteFailed ?: return created
     return Err(failed.copy(path = this, at = FailedAt.Folder(failed.path)))
@@ -339,7 +369,8 @@ private fun whyRenameLoses(identity: FileIdentity): AtomicRefusal? = when {
  * One write of [path] into the file [name] in [folder], the file it lands in, as a write worked it out: the
  * [permissions] and [modified] time the file gets, where it has them, whether it is made [executable], whether its
  * temp and backup are made for the owner alone, [ownerOnly], and which [mode] decides a group that cannot be kept.
- * A new file without [permissions] asks for [newFileMode], which the umask narrows.
+ * A new file without [permissions] asks for [newFileMode], which the umask narrows. With [unchangedSince], a file
+ * changed since is refused right before the rename or the emptying.
  */
 internal class WritePlan(
     val path: Path,
@@ -352,12 +383,15 @@ internal class WritePlan(
     val executable: Boolean,
     val modified: Instant?,
     val newFileMode: Int = NEW_FILE_MODE,
+    val carryAttributes: (from: Path, to: Path) -> Boolean = ::copyAttributes,
+    val unchangedSince: FileStamp? = null,
 ) {
     private val target: Path = folder.pathOf(name)
 
-    fun byRename(existed: Boolean): Result<Written, FileError> {
+    fun byRename(existed: Boolean): Result<Written, FileError.WriteFileError> {
         val temp = target.tempBeside()
         var written: FileInfo? = null
+        var changed = false
         val failure = try {
             if (existed) {
                 // A rename never opens the file, so without this it would replace one this process may not touch.
@@ -370,10 +404,10 @@ internal class WritePlan(
             val made = failingAt(FailedAt.Temp(temp)) {
                 folder.createHeldFile(temp.name, OWNER_READ_WRITE.takeIf { ownerOnly }, newFileMode)
             }
-            val renames = made.use { copy ->
+            val lost = made.use { copy ->
                 val groupKept = !existed || folder.copyGroup(name, temp.name)
-                val renaming = groupKept || mode == WriteMode.Replace
-                if (renaming) {
+                var lost = if (groupKept) null else AtomicRefusal.GroupNotKept
+                if (lost == null || mode == WriteMode.Replace) {
                     // After the group, since a chown can clear the setuid and setgid bits. A group that was not kept
                     // gets none of the file's group permissions, which were meant for the group the copy does not have.
                     val keep = if (groupKept) PERMISSION_BITS else PERMISSION_BITS and GROUP_BITS.inv()
@@ -381,6 +415,12 @@ internal class WritePlan(
                         permissions != null -> copy.setPermissions(permissions and keep)
                         existed -> folder.permissionBits(name)?.let { copy.setPermissions(it and keep) }
                     }
+                    // After the permissions, which would set an ACL's mask, and before the execute bits added to it.
+                    if (existed && !carryAttributes(target, folder.pathOf(temp.name))) {
+                        lost = lost ?: AtomicRefusal.Attributes
+                    }
+                }
+                if (lost == null || mode == WriteMode.Replace) {
                     if (executable) {
                         folder.permissionBits(temp.name)?.let { copy.setPermissions(it.withExecuteForReaders()) }
                     }
@@ -390,15 +430,20 @@ internal class WritePlan(
                         .use(content)
                     modified?.let { copy.setModifiedTime(it) }
                     copy.sync()
-                    failingAt(FailedAt.Temp(temp)) { copy.moveTo(target) }
-                    // Read after the rename, which moves the file's changedAt on most file systems.
-                    written = failingAt(FailedAt.LinkTarget(target)) { copy.info() }
+                    changed = target.changedSince(unchangedSince)
+                    if (!changed) {
+                        failingAt(FailedAt.Temp(temp)) { copy.moveTo(target) }
+                        // Read after the rename, which moves the file's changedAt on most file systems.
+                        written = failingAt(FailedAt.LinkTarget(target)) { copy.info() }
+                    }
+                    null
+                } else {
+                    lost
                 }
-                renaming
             }
-            if (!renames) {
+            if (lost != null) {
                 folder.deleteQuietly(temp.name)
-                if (mode == WriteMode.Atomic) return Err(FileError.AtomicRefused(path, AtomicRefusal.GroupNotKept))
+                if (mode == WriteMode.Atomic) return Err(FileError.AtomicRefused(path, lost))
                 path.sidecarTooLong(target, Replacement.InPlace, existed = true)?.let { return it }
                 return inPlace(existed = true)
             }
@@ -406,16 +451,16 @@ internal class WritePlan(
         } catch (e: Exception) {
             e
         }
-        if (failure != null) {
+        if (failure != null || changed) {
             folder.deleteQuietly(temp.name)
-            return Err(failure.writeError(path))
+            return Err(failure?.writeError(path) ?: FileError.ChangedSince(path))
         }
         // The content is in place once renamed, so a folder that will not sync costs durability, not the write.
         val _ = folder.sync()
         return Ok(Written(WriteWay.Renamed, checkNotNull(written)))
     }
 
-    fun inPlace(existed: Boolean): Result<Written, FileError> {
+    fun inPlace(existed: Boolean): Result<Written, FileError.WriteFileError> {
         var partPath: Path? = null
         var backupPath: Path? = null
         var backup: HeldFile? = null
@@ -423,21 +468,32 @@ internal class WritePlan(
             if (existed) {
                 val id = newWriteId()
                 partPath = target.besideWith(PARTIAL_BACKUP_SUFFIX, id)
-                backup = failingAt(FailedAt.Backup(partPath)) { folder.backUp(name, partPath.name, ownerOnly) }
+                // The mode of a file with an ACL holds its mask, which can let the group into a copy it may not read.
+                val forOwnerAlone = ownerOnly || fileIdentity(target)?.carriesAttributes == true
+                backup = failingAt(FailedAt.Backup(partPath)) { folder.backUp(name, partPath.name, forOwnerAlone) }
                 // Only a backup holding all the file had is ever named as one, so a crash during the copy cannot pass
                 // for a backup worth restoring.
                 backupPath = target.besideWith(BACKUP_SUFFIX, id)
                 failingAt(FailedAt.Backup(partPath)) { backup.moveTo(backupPath) }
             }
-            // Opening empties the file, so an open that fails has changed nothing and needs no restore.
-            failingAt(FailedAt.LinkTarget(target)) {
-                folder.openSink(name, append = false, inPlaceMode(existed), newFileMode)
+            if (target.changedSince(unchangedSince)) {
+                null
+            } else {
+                // Opening empties the file, so an open that fails has changed nothing and needs no restore.
+                failingAt(FailedAt.LinkTarget(target)) {
+                    folder.openSink(name, append = false, inPlaceMode(existed), newFileMode)
+                }
             }
         } catch (e: Exception) {
             backup?.closeQuietly()
             partPath?.let { folder.deleteQuietly(it.name) }
             backupPath?.let { folder.deleteQuietly(it.name) }
             return Err(e.writeError(path))
+        }
+        if (sink == null) {
+            backup?.closeQuietly()
+            backupPath?.let { folder.deleteQuietly(it.name) }
+            return Err(FileError.ChangedSince(path))
         }
 
         return try {
@@ -662,7 +718,7 @@ internal fun makeFolders(
     folder: Path,
     mode: Int = FOLDER_MODE,
     folderMode: Int = mode,
-): EmptyResult<FileError> {
+): EmptyResult<FileError.WriteFileError> {
     val above = if (folder.name == "." || folder.name == "..") folderMode else mode
     val missing = mutableListOf<Path>()
     // Only the levels below the deepest existing directory: on Windows, an ancestor can be a UNC server name.
@@ -697,7 +753,7 @@ internal fun makeFolders(
  * else is [FileError.NotADirectory]. One that could not be looked up answers neither, since treating it as
  * missing would ask for a level that may well be there.
  */
-private fun Path.directoryHere(): Result<Boolean, FileError> = metadata().fold(
+private fun Path.directoryHere(): Result<Boolean, FileError.WriteFileError> = metadata().fold(
     onSuccess = { if (it.isDirectory) Ok(true) else Err(FileError.NotADirectory(this, typeOf(it))) },
     onError = { if (it is FileError.NotFound) Ok(false) else Err(it) },
 )

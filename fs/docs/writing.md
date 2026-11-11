@@ -15,14 +15,16 @@ fun Path.writeText(
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError>
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError>
 fun Path.writeBytes(
     bytes: ByteArray,
     mode: WriteMode = WriteMode.Auto,
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError>
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError>
 fun Path.copyTo(
     target: Path,
     mode: WriteMode = WriteMode.Auto,
@@ -31,6 +33,7 @@ fun Path.copyTo(
     keepAttributes: Boolean = false,
     modifiedAt: Instant? = null,
 ): Result<Copied, FileError>
+fun Path.stamp(): Result<FileStamp, FileError.LookupError>
 ```
 
 ## Rules
@@ -51,7 +54,8 @@ fun Path.copyTo(
   file.
 - Readers see the old content or the new. A failure leaves the file as it was.
 - A renamed file is a new file. It takes the old one's permissions and group, and it belongs to you.
-- It starts with fresh timestamps, ACLs and extended attributes. Other hard links keep the old content.
+- It gets the old file's ACL and extended attributes, and starts with fresh timestamps. Other hard links keep the old
+  content.
 - A new file is written by rename in every mode but `InPlace`.
 
 ### In place
@@ -59,6 +63,7 @@ fun Path.copyTo(
 - The old content is first copied to the backup `.<name>.<id>.bak`. Then the file itself is written, so its inode,
   owner and links stay.
 - A failed write copies the backup back. If that fails too, the answer is `RestoreFailed`.
+- The backup of a file with an ACL or extended attributes is `600`, so it lets no one in that the file's ACL keeps out.
 
 ### Permissions and time
 
@@ -89,6 +94,19 @@ fun Path.copyTo(
 - To find that backup, each write and copy lists the target's folder once. That costs more in a folder of many files.
 - A folder it cannot list lets the write go ahead.
 
+### A file changed since it was read
+
+- `stamp()` tells the file as it is from the same file once written: which file it is, its size, modification time
+  and change time. Two stamps are equal while nothing writes the file.
+- A write given `unchangedSince = stamp` refuses a file that is no longer the one the stamp describes: written,
+  replaced or removed since. The answer is `ChangedSince(path)`, and nothing is written.
+- It compares twice. First before it looks for a backup beside the file, so a write under way that has emptied the file
+  is `ChangedSince` and not `PendingBackup`. Then right before a rename puts the new file in place, or before an
+  in-place write empties the file, once its backup is made.
+- A refused rename deletes its temp, and a refused in-place write deletes its backup.
+- Nothing locks the file between the last compare and the rename or the emptying, so two writes can still race there.
+- A write in place that keeps the size and lands within one tick of the file system's clock can pass unseen.
+
 ### Write modes
 
 This is what each `WriteMode` does to a file that already exists:
@@ -101,16 +119,22 @@ This is what each `WriteMode` does to a file that already exists:
 | `InPlace` | yes | kept | kept | kept | kept |
 
 - `Replace` keeps the permissions, less the group's when it cannot keep the group, so `660` becomes `600`.
+- A rename gives the new file the old one's ACL and extended attributes, an SELinux label included, and takes off
+  any the folder's default ACL gave it. One that cannot be copied makes `Auto` write in place and `Atomic` refuse
+  with `AtomicRefused(Attributes)`. `Replace` renames anyway and loses it.
+- That copy runs on Linux. The JVM copies only `user.*`, as it cannot see an ACL. Apple and Android do not copy, nor
+  does any target copy `chattr` flags, so a rename loses those.
 
 To pick one:
 
-- `Auto` renames a file of yours with no other hard links. It writes any other file in place.
+- `Auto` renames a file of yours with no other hard links, once the new file has its group, ACL and extended
+  attributes. It writes any other file in place.
 - Use `Replace` when a write must never go through a hard link into the content another name shows.
 - `Replace` already is the policy "never half a file, cut hard links if needed", so you need no `Atomic` write before
   it. Pair the two only to learn that links were cut, as
   [Find out whether a write cut other hard links off](#find-out-whether-a-write-cut-other-hard-links-off) does.
 - Use `Atomic` when a half-written file must never be seen and a refusal is fine.
-- Use `InPlace` to keep the file's inode, owner and hard links.
+- Use `InPlace` to keep the file's inode, owner, hard links, ACL and extended attributes.
 
 ## Tasks
 
@@ -174,6 +198,25 @@ When the folder is too open:
 ```kotlin
 (dirs.data / "hook.sh").writeText("#!/bin/sh\nexec tool sync\n", executable = true).onError { return report(it) }
 ```
+
+### Edit a file without losing another process's write
+
+Take the stamp before you read, and give it to the write. A write by another process while you read or edited then
+refuses yours.
+
+```kotlin
+val stamp = config.stamp().getOrElse { return report(it) }
+val text = config.readText().getOrElse { return report(it) }
+val written = config.writeText(edit(text), unchangedSince = stamp)
+if (written.errorOrNull() is FileError.ChangedSince) {
+    println("$config changed while it was edited, so nothing was written")
+} else {
+    written.onError { return report(it) }
+}
+```
+
+To refuse a read that overlapped a write before you edit half a file, compare `config.stamp()` with `stamp` right
+after the read too.
 
 ### Find out whether a write cut other hard links off
 

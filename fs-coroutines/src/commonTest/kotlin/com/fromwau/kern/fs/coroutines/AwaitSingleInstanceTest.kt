@@ -235,7 +235,7 @@ class AwaitSingleInstanceTest {
 
     @Test
     fun `the waiting startup passes on the work's own error and a busy instance's`() = runTest {
-        val missing = dirs.data / "missing.toml"
+        val missing = dirs.data / "missing.txt"
 
         val failed = runWhenFree(dirs, "app", 1.seconds) { missing.readText().map { 0 } }
 

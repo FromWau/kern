@@ -60,16 +60,16 @@ sequence that recolours the terminal, or a line break that starts a line reading
 GNU coreutils does first:
 
 ```kotlin
-val name = "evil\u001B[31m.toml"
-terminal.out("${name.shellQuoted()}: OK\n")        // 'evil'$'\033''[31m.toml': OK
+val name = "evil\u001B[31m.txt"
+terminal.out("${name.shellQuoted()}: OK\n")        // 'evil'$'\033''[31m.txt': OK
 ```
 
 - It matches `ls --quoting-style=shell-escape`: a plain name prints as it is, one with a space or a shell character in
-  single quotes (`'my notes.toml'`), one with a single quote and otherwise only spaces, `:` or a leading `#` or `~` in
-  double quotes (`"it's.toml"`), and a character that does not print in `$'…'` (`$'\n'`, `$'\033'`). Pasted into bash it
+  single quotes (`'my notes.txt'`), one with a single quote and otherwise only spaces, `:` or a leading `#` or `~` in
+  double quotes (`"it's.txt"`), and a character that does not print in `$'…'` (`$'\n'`, `$'\033'`). Pasted into bash it
   is the same name, except a brace pattern such as `a{b,c}`, which GNU leaves unquoted and bash expands; `always = true`
   quotes that too.
-- `shellQuoted(always = true)` quotes a plain name too (`'notes.toml'`), as `ls --quoting-style=shell-escape-always`
+- `shellQuoted(always = true)` quotes a plain name too (`'notes.txt'`), as `ls --quoting-style=shell-escape-always`
   does, for a word you set apart in a sentence, as GNU's option errors do (`unrecognized option '--nope'`).
 - `shellQuoted(forMessage = true)` also quotes a name holding `:`, as GNU's messages do (`cat: 'a:b': No such file
   or directory`), so the colon is not read as the end of the name.
@@ -212,6 +212,14 @@ val width = if (terminal.outIsTerminal) terminal.columns else 0  // 0: do not wr
 
 `outIsTerminal` comes from the probe that decides `ansi`, and `errIsTerminal` from the one that decides `errAnsi`.
 On the JVM and Android `outIsTerminal` is false whenever stdin is redirected, and `errIsTerminal` is always false.
+
+Text takes as many columns as glibc's `wcwidth` says, not one per character: `displayColumns()` counts them, two for a
+character East Asian scripts write wide, emoji among them, none for a combining mark. Pad by it to line a caret up
+under a character, or to align and wrap text that may hold such characters:
+
+```kotlin
+val caret = " ".repeat(line.take(column).displayColumns()) + "^"
+```
 
 ### Details
 
@@ -418,7 +426,7 @@ fun ignoreBrokenPipes() {
 ```kotlin
 fun readConfig(terminal: Terminal): String? {
     if (terminal.inIsTerminal) {
-        terminal.err("error: pipe the config in, as in: app < config.toml\n")
+        terminal.err("error: pipe the config in, as in: app < config.txt\n")
         return null
     }
     val bytes = terminal.readIn(maxBytes = 1_048_576).getOrElse { error ->

@@ -171,6 +171,7 @@ internal fun FileError.placedAs(
         is FileError.FolderReplaced -> this
         is FileError.InvalidRelativePath -> copy(folder = moved(folder))
         is FileError.PendingBackup -> copy(path = moved(path))
+        is FileError.ChangedSince -> copy(path = moved(path))
         is FileError.OutputClash -> copy(path = moved(path))
     }
 }

@@ -18,7 +18,7 @@ internal class Gnu(
 )
 
 internal val gnu = listOf(
-        Gnu("plain.toml", ls = "plain.toml", message = "plain.toml", always = "'plain.toml'", escape = "plain.toml"),
+        Gnu("plain.txt", ls = "plain.txt", message = "plain.txt", always = "'plain.txt'", escape = "plain.txt"),
         Gnu("a b", ls = "'a b'", message = "'a b'", always = "'a b'", escape = null),
         Gnu("it's", ls = "\"it's\"", message = "\"it's\"", always = "\"it's\"", escape = "it's"),
         Gnu("a\"b", ls = "'a\"b'", message = "'a\"b'", always = "'a\"b'", escape = "a\"b"),
@@ -292,6 +292,6 @@ class ShellQuotedTest {
 
     @Test
     fun `a name that needs no quoting comes back as it is`() {
-        assertEquals("notes.toml", "notes.toml".shellQuoted())
+        assertEquals("notes.txt", "notes.txt".shellQuoted())
     }
 }

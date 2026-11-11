@@ -12,11 +12,20 @@ import kotlin.time.Duration
 public sealed interface FileError : ResultError {
     public val path: Path
 
+    /** What reading a whole file, with [readBytes] or [readText], can fail with. */
+    public sealed interface ReadFileError : FileError
+
+    /** What writing a whole file, with [writeBytes] or [writeText], can fail with. */
+    public sealed interface WriteFileError : FileError
+
+    /** What looking a path up, as [info] and [realPath] do, can fail with; so can every whole-file read and write. */
+    public sealed interface LookupError : ReadFileError, WriteFileError
+
     /**
      * Nothing is at [path]: it is missing, a symlink whose target is missing, or a path that runs through a file
      * and so cannot resolve. A path that could not be looked up is [Inaccessible] instead, on every target.
      */
-    public data class NotFound(override val path: Path) : FileError
+    public data class NotFound(override val path: Path) : LookupError
 
     /**
      * Something is already at [path], a symlink whose target is missing included, where [createSymlink] or
@@ -38,7 +47,7 @@ public sealed interface FileError : ResultError {
         override val path: Path,
         val cause: IoCause,
         val exception: Throwable?,
-    ) : FileError {
+    ) : LookupError {
         override fun equals(other: Any?): Boolean = other is Inaccessible && path == other.path && cause == other.cause
 
         override fun hashCode(): Int = hashOf(path, cause)
@@ -51,7 +60,7 @@ public sealed interface FileError : ResultError {
     public data class NotRegularFile(
         override val path: Path,
         val type: FileType,
-    ) : FileError
+    ) : ReadFileError, WriteFileError
 
     /** [readSymlink] found no symlink at [path] but a [type]. */
     public data class NotASymlink(
@@ -66,7 +75,7 @@ public sealed interface FileError : ResultError {
     public data class NotADirectory(
         override val path: Path,
         val type: FileType,
-    ) : FileError
+    ) : WriteFileError
 
     /**
      * [path] holds at least [atLeastBytes] bytes, more than the caller's limit of [limitBytes]. It is a lower
@@ -76,7 +85,7 @@ public sealed interface FileError : ResultError {
         override val path: Path,
         val limitBytes: Long,
         val atLeastBytes: Long,
-    ) : FileError
+    ) : ReadFileError
 
     /**
      * A check refused what is at [path], which [info] describes, for the reason [why] gives: the `accept` check given
@@ -94,7 +103,7 @@ public sealed interface FileError : ResultError {
         val info: FileInfo,
         val why: RefusedBecause,
         val asked: Path,
-    ) : FileError {
+    ) : ReadFileError {
         override fun toString(): String {
             val place = if (asked == path) "$path" else "$path for $asked"
             return "Refused($place: $why${info.permissions?.let { ", $it" } ?: ""})"
@@ -108,7 +117,7 @@ public sealed interface FileError : ResultError {
     public data class AtomicRefused(
         override val path: Path,
         val why: AtomicRefusal,
-    ) : FileError
+    ) : WriteFileError
 
     /**
      * The name or link target a call was given is not one this call makes, as the case says: [InvalidRelativePath],
@@ -125,7 +134,7 @@ public sealed interface FileError : ResultError {
         override val path: Path,
         val name: LongName,
         val bytes: Int,
-    ) : NameRefused {
+    ) : NameRefused, LookupError {
         override fun toString(): String = "NameTooLong(path=${path.namesCutToPrint()}, name=$name, bytes=$bytes)"
     }
 
@@ -137,7 +146,7 @@ public sealed interface FileError : ResultError {
     public data class InvalidName(
         override val path: Path,
         val reason: NameProblem,
-    ) : NameRefused {
+    ) : NameRefused, LookupError {
         override fun toString(): String =
             "InvalidName(path=${path.toString().replace("${Char(0)}", "\\0")}, reason=$reason)"
     }
@@ -173,7 +182,7 @@ public sealed interface FileError : ResultError {
         val cause: IoCause,
         val exception: Throwable?,
         val at: FailedAt? = null,
-    ) : FileError {
+    ) : WriteFileError {
         override fun equals(other: Any?): Boolean =
             other is WriteFailed && path == other.path && cause == other.cause && at == other.at
 
@@ -196,7 +205,7 @@ public sealed interface FileError : ResultError {
         val exception: Throwable?,
         val backup: Path?,
         val at: FailedAt? = null,
-    ) : FileError {
+    ) : WriteFileError {
         override fun equals(other: Any?): Boolean =
             other is RestoreFailed &&
                 path == other.path &&
@@ -298,7 +307,13 @@ public sealed interface FileError : ResultError {
     public data class PendingBackup(
         override val path: Path,
         val backup: Leftover.Backup,
-    ) : FileError
+    ) : WriteFileError
+
+    /**
+     * A write of [path] given a [FileStamp] as `unchangedSince` found the file no longer the one it describes: written,
+     * replaced or removed since the stamp was taken, as by another process writing it. Nothing was written.
+     */
+    public data class ChangedSince(override val path: Path) : WriteFileError
 
     /**
      * Two entries of a [mirrorTo] source go to one output, [path] in the destination. The entry at [firstRelative],
@@ -354,7 +369,7 @@ public sealed interface FailedAt {
  *
  * @param value called only on [FileError.NotFound].
  */
-public inline fun <S> Result<S, FileError>.orIfNotFound(value: () -> S): Result<S, FileError> =
+public inline fun <S, E : FileError> Result<S, E>.orIfNotFound(value: () -> S): Result<S, E> =
     if (this is Result.Error && error is FileError.NotFound) Ok(value()) else this
 
 /**
@@ -366,7 +381,7 @@ public inline fun <S> Result<S, FileError>.orIfNotFound(value: () -> S): Result<
  * if (token == null) println("not logged in")
  * ```
  */
-public fun <S> Result<S, FileError>.orNullIfNotFound(): Result<S?, FileError> = orIfNotFound<S?> { null }
+public fun <S, E : FileError> Result<S, E>.orNullIfNotFound(): Result<S?, E> = orIfNotFound<S?, E> { null }
 
 private fun hashOf(
     path: Path,
@@ -490,6 +505,9 @@ public enum class AtomicRefusal {
 
     /** The new file could not be given the old one's group, so a rename would change who may share it. */
     GroupNotKept,
+
+    /** The new file could not be given the old one's ACL or extended attributes, so a rename would lose them. */
+    Attributes,
 
     /**
      * The path is a symlink this platform cannot follow, and a rename would put a regular file in the link's

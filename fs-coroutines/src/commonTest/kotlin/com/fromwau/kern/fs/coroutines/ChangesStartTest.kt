@@ -53,7 +53,7 @@ class ChangesStartTest {
             serve()
         }
 
-        val first = listOf(config.info())
+        val first = listOf<Result<FileInfo, FileError>>(config.info())
         assertEquals(first, loadsWhenServing)
         assertEquals(first, loads)
     }

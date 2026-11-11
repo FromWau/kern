@@ -15,3 +15,9 @@ internal actual fun fileIdentity(path: Path): FileIdentity? = try {
 } catch (_: ErrnoException) {
     null
 }
+
+// Not checked: there is no Android device here to run it on.
+internal actual fun copyAttributes(
+    from: Path,
+    to: Path,
+): Boolean = true

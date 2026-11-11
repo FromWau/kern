@@ -14,22 +14,22 @@ package com.fromwau.kern.fs
 public sealed interface WriteMode {
     /**
      * Renames when the file has no other hard links, belongs to this user, and the new file can be given its
-     * group; writes in place when any of these is not so or cannot be read. The default.
+     * group, ACL and extended attributes; writes in place when any of these is not so or cannot be read. The default.
      */
     public data object Auto : WriteMode
 
     /**
      * Always renames, and refuses with [FileError.AtomicRefused] a file it knows a rename would change: one with
-     * other hard links, another owner, or a group the new file cannot be given. When the links or the owner cannot
-     * be read, it renames.
+     * other hard links, another owner, or a group, ACL or extended attributes the new file cannot be given. When the
+     * links or the owner cannot be read, it renames.
      */
     public data object Atomic : WriteMode
 
     /**
      * Always renames, whatever that cuts off: other hard links keep the old content, another user's file becomes
-     * this user's, and the group is kept when it can be. When it cannot, the new file gets the old one's
-     * permissions without the group's, so a `660` file becomes `600`. A file this process may not read or write,
-     * or a folder it may not write, is still refused as by every write.
+     * this user's, and the group, ACL and extended attributes are kept when they can be. When it cannot, the new
+     * file gets the old one's permissions without the group's, so a `660` file becomes `600`. A file this process may
+     * not read or write, or a folder it may not write, is still refused as by every write.
      */
     public data object Replace : WriteMode
 

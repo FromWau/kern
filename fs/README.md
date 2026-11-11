@@ -154,7 +154,7 @@ Each page covers one job in depth.
 |---|---|---|
 | [Writer](docs/writer.md) | an app folder no name and no symlink reaches outside; private folders | `writer`, `privateWriter`, `reader` |
 | [Reading](docs/reading.md) | looking a path up, reading a file, a file only you may change, a config that reloads | `readText`, `info`, `orIfNotFound` |
-| [Writing](docs/writing.md) | replacing a file by rename or in place, `WriteMode`, `ownerOnly`, secrets, copying | `writeText`, `copyTo` |
+| [Writing](docs/writing.md) | replacing a file by rename or in place, `WriteMode`, `ownerOnly`, a file changed since read, secrets, copying | `writeText`, `stamp`, `copyTo` |
 | [Appending](docs/appending.md) | adding to the end of a file, logs another tool rotates | `openAppend`, `Reopen.WhenMoved` |
 | [Folders and moves](docs/folders-and-moves.md) | creating folders, building one whole, moving, removing, listing, symlinks | `createDirectories`, `createDirectoryAtomically`, `moveTo`, `switchSymlinkTo` |
 | [Walking](docs/walking.md) | every entry under a folder, which links to follow, mirroring a tree | `walkTopDown`, `mirrorTo` |
@@ -211,22 +211,22 @@ fun Path.readText(
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<String, FileError>
+): Result<String, FileError.ReadFileError>
 fun Path.readBytes(
     maxBytes: Long? = null,
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<ByteArray, FileError>
+): Result<ByteArray, FileError.ReadFileError>
 fun Path.readPrefix(maxBytes: Long): Result<ByteArray, FileError>
 fun Path.fileType(followLinks: Boolean = true): Result<FileType, FileError>
 fun Path.fileSize(): Result<Long, FileError>
 fun Path.modifiedAt(): Result<Instant, FileError>
 fun Path.permissions(): Result<Permissions?, FileError>
-fun Path.info(): Result<FileInfo, FileError>
+fun Path.info(): Result<FileInfo, FileError.LookupError>
 fun Path.isSymlink(): Result<Boolean, FileError>
-fun Path.realPath(): Result<Path, FileError>
-fun Path.canonicalPath(): Result<Path, FileError>
+fun Path.realPath(): Result<Path, FileError.LookupError>
+fun Path.canonicalPath(): Result<Path, FileError.LookupError>
 fun Path.readSymlink(): Result<Path, FileError>
 fun Path.list(): Result<List<Path>, FileError>
 fun Path.walkTopDown(
@@ -249,8 +249,8 @@ fun Path.mirrorTo(
         out.copyFrom(source.path, name, keepAttributes = true).map { }
     },
 ): Result<MirrorReport, FileError>
-inline fun <S> Result<S, FileError>.orIfNotFound(value: () -> S): Result<S, FileError>
-fun <S> Result<S, FileError>.orNullIfNotFound(): Result<S?, FileError>
+inline fun <S, E : FileError> Result<S, E>.orIfNotFound(value: () -> S): Result<S, E>
+fun <S, E : FileError> Result<S, E>.orNullIfNotFound(): Result<S?, E>
 
 fun Path.writeText(
     text: String,
@@ -258,14 +258,16 @@ fun Path.writeText(
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError>
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError>
 fun Path.writeBytes(
     bytes: ByteArray,
     mode: WriteMode = WriteMode.Auto,
     ownerOnly: Boolean = false,
     executable: Boolean = false,
     modifiedAt: Instant? = null,
-): Result<Written, FileError>
+    unchangedSince: FileStamp? = null,
+): Result<Written, FileError.WriteFileError>
 fun Path.copyTo(
     target: Path,
     mode: WriteMode = WriteMode.Auto,
@@ -274,6 +276,7 @@ fun Path.copyTo(
     keepAttributes: Boolean = false,
     modifiedAt: Instant? = null,
 ): Result<Copied, FileError>
+fun Path.stamp(): Result<FileStamp, FileError.LookupError>
 fun Path.openAppend(
     reopen: Reopen = Reopen.Never,
     ownerOnly: Boolean = false,
@@ -408,6 +411,8 @@ so a power cut there can still lose a write that returned `Ok`.
 - Readers can see the file half-written while it runs.
 - Only one write may run on a file at a time. Two at once can mix, and a failed one can undo another that finished.
 - A rename write is atomic for readers. But of two at once, the last rename wins and the other is lost.
+- A write given `unchangedSince = stamp()` refuses a file another write changed since the stamp, as
+  [Writing](docs/writing.md#a-file-changed-since-it-was-read) describes. It narrows that race but locks nothing.
 
 **A killed write** leaves something beside the file, depending on when it stopped. `<id>` identifies the write, so a
 copy of your own such as `.app.toml.before-my-edit.bak` is never counted.

@@ -35,7 +35,7 @@ public fun Path.readText(
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<String, FileError> = readBytes(maxBytes, trusted, streams, accept).map { it.decodeToString() }
+): Result<String, FileError.ReadFileError> = readBytes(maxBytes, trusted, streams, accept).map { it.decodeToString() }
 
 /**
  * The whole file as bytes. A directory, FIFO, device or socket is [FileError.NotRegularFile] and is never
@@ -77,7 +77,7 @@ public fun Path.readBytes(
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<ByteArray, FileError> = readableMetadata(streams).flatMap { metadata ->
+): Result<ByteArray, FileError.ReadFileError> = readableMetadata(streams).flatMap { metadata ->
     when {
         // A stream's size is unknown, below zero, until it is read.
         maxBytes != null && metadata.size >= 0 && metadata.size > maxBytes -> {
@@ -92,7 +92,7 @@ public fun Path.readBytes(
  * [FileError.Refused] for the folder this file sits in, or for the one the file a link here leads to really sits in,
  * when someone besides this user may change it, since whoever may write a folder can swap the file for their own.
  */
-private fun Path.untrustedFolder(): FileError? {
+private fun Path.untrustedFolder(): FileError.ReadFileError? {
     val real = canonicalPath().getOrElse { return it }
     for (folder in listOfNotNull(folderOrDot(), real.parent).distinct()) {
         val info = folder.info().getOrElse { return it }
@@ -126,7 +126,7 @@ internal fun Path.readWhole(
     trusted: Boolean = false,
     streams: Boolean = false,
     onOpened: () -> Unit = {},
-): Result<ByteArray, FileError> = openSource(streams).flatMap { opened ->
+): Result<ByteArray, FileError.ReadFileError> = openSource(streams).flatMap { opened ->
     onOpened()
     val refusal = if (accept == null && !trusted) {
         null
@@ -157,7 +157,7 @@ internal fun Path.refusalOf(
     accept: ((FileInfo) -> Boolean)?,
     private: Boolean = false,
     file: Path = canonicalPath().getOrNull() ?: this,
-): FileError? {
+): FileError.ReadFileError? {
     val info = try {
         opened.info()
     } catch (e: Exception) {
@@ -186,7 +186,7 @@ internal sealed interface Read {
 internal fun Path.readFrom(
     opened: RawSource,
     read: Read,
-): Result<ByteArray, FileError> = try {
+): Result<ByteArray, FileError.ReadFileError> = try {
     opened
         .buffered()
         .use { source ->
@@ -252,7 +252,7 @@ public fun Path.fileSize(): Result<Long, FileError> = readableMetadata().map { i
  * [metadata] for a regular file at this path, or with [streams] a FIFO or character device; anything else is
  * [FileError.NotRegularFile] naming what it is.
  */
-private fun Path.readableMetadata(streams: Boolean = false): Result<FileMetadata, FileError> =
+private fun Path.readableMetadata(streams: Boolean = false): Result<FileMetadata, FileError.ReadFileError> =
     metadata().flatMap { metadata ->
         val type = typeOf(metadata)
         if (type.isReadable(streams)) Ok(metadata) else Err(FileError.NotRegularFile(this, type))
@@ -288,7 +288,7 @@ public fun Path.list(): Result<List<Path>, FileError> = metadata().flatMap { met
  */
 internal fun Path.metadata(
     lookUp: (Path) -> FileMetadata? = ::systemMetadataOrNull,
-): Result<FileMetadata, FileError> {
+): Result<FileMetadata, FileError.LookupError> {
     refusedPath()?.let { return it }
     val found = lookUp(this)
     // kotlinx-io's JVM lookup reads a file deleted halfway through it as neither file nor folder, so only the probe,
@@ -314,7 +314,7 @@ private fun systemMetadataOrNull(path: Path): FileMetadata? = try {
  * Why this path, there a moment ago, failed with [failure]: [FileError.NotFound] when the failure says so or it has
  * gone since, otherwise [FileError.Inaccessible]. A failure naming no cause takes looking it up again to tell apart.
  */
-internal fun Path.inaccessibleUnlessGone(failure: Exception): Result<Nothing, FileError> {
+internal fun Path.inaccessibleUnlessGone(failure: Exception): Result<Nothing, FileError.LookupError> {
     // Not looked up again: a file renamed into place since would turn this NotFound into Inaccessible.
     if (failure.ioCause() == IoCause.NotFound) return Err(FileError.NotFound(this))
     return metadata().flatMap { Err(inaccessible(this, failure)) }
@@ -327,19 +327,19 @@ internal fun Path.inaccessibleUnlessGone(failure: Exception): Result<Nothing, Fi
  * [FileError.NameTooLong] with [LongName.Path].
  */
 @InternalKernApi
-public fun Path.pathError(): FileError? =
+public fun Path.pathError(): FileError.LookupError? =
     if (toString().isEmpty()) FileError.NotFound(this) else refusedName()?.error
 
 /** [pathError] as the error result every public call returns for it. */
 @OptIn(InternalKernApi::class)
-internal fun Path.refusedPath(): Err<FileError>? = pathError()?.let(::Err)
+internal fun Path.refusedPath(): Err<FileError.LookupError>? = pathError()?.let(::Err)
 
 /**
  * [FileError.InvalidName] for a path holding a NUL, which a native call reads as the end of the path and so would
  * reach another file, or [FileError.NameTooLong] for one with a name longer than [LONGEST_NAME_BYTES]; null otherwise.
  * A symlink's target, which may be empty, is checked by this alone.
  */
-internal fun Path.refusedName(): Err<FileError>? {
+internal fun Path.refusedName(): Err<FileError.LookupError>? {
     if (NUL in toString()) return Err(FileError.InvalidName(this, NameProblem.Nul))
     val longest = generateSequence(this) { it.parent }.maxOf { it.name.encodeToByteArray().size }
     return if (longest <= LONGEST_NAME_BYTES) null else Err(FileError.NameTooLong(this, LongName.Path, longest))

@@ -22,8 +22,12 @@ internal actual fun fileIdentity(path: Path): FileIdentity? = memScoped {
     FileIdentity(
         linkCount = info.st_nlink.convert(),
         ownedByCurrentUser = info.st_uid == geteuid(),
+        carriesAttributes = carriesAttributes(path),
     )
 }
+
+/** Whether [path] has an ACL or extended attributes, following symlinks. */
+internal expect fun carriesAttributes(path: Path): Boolean
 
 internal actual fun isSameFile(
     first: Path,

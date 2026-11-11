@@ -9,6 +9,7 @@ import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.assertSuccess
+import com.fromwau.kern.result.errorOrNull
 import com.fromwau.kern.result.getOrElse
 import com.fromwau.kern.result.getOrNull
 import com.fromwau.kern.result.map
@@ -1222,6 +1223,37 @@ class DocsTasksJvmTest {
         assertEquals(emptyList(), reports)
         assertEquals(listOf("$settings was written in place, so readers may have seen it half-written"), printed)
         assertEquals("a = 2", other.readRaw())
+    }
+
+    /** The stamped edit from docs/writing.md, as written there. */
+    private fun editConfig(
+        config: Path,
+        edit: (String) -> String,
+    ) {
+        val stamp = config.stamp().getOrElse { return report(it) }
+        val text = config.readText().getOrElse { return report(it) }
+        val written = config.writeText(edit(text), unchangedSince = stamp)
+        if (written.errorOrNull() is FileError.ChangedSince) {
+            println("$config changed while it was edited, so nothing was written")
+        } else {
+            written.onError { return report(it) }
+        }
+    }
+
+    @Test
+    fun `the stamped edit writes the edit and refuses a file another write changed meanwhile`() {
+        val config = (dir / "app.toml").writeRaw("a = 1")
+        editConfig(config) { "$it\nb = 2" }
+        assertEquals("a = 1\nb = 2", config.readRaw())
+
+        editConfig(config) { text ->
+            config.writeRaw("theirs = 1")
+            "$text\nc = 3"
+        }
+
+        assertEquals(emptyList(), reports)
+        assertEquals(listOf("$config changed while it was edited, so nothing was written"), printed)
+        assertEquals("theirs = 1", config.readRaw())
     }
 
     /** The file copy from docs/writing.md, as written there, without its writer line. */

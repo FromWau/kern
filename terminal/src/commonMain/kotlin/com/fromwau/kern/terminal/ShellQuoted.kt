@@ -7,10 +7,10 @@ package com.fromwau.kern.terminal
  * with `always = true` to paste any name back exactly.
  *
  * ```kotlin
- * "notes.toml".shellQuoted()             // notes.toml
- * "my notes.toml".shellQuoted()          // 'my notes.toml'
- * "it's.toml".shellQuoted()              // "it's.toml"
- * "evil\u001B[31m.toml".shellQuoted()    // 'evil'$'\033''[31m.toml'
+ * "notes.txt".shellQuoted()             // notes.txt
+ * "my notes.txt".shellQuoted()          // 'my notes.txt'
+ * "it's.txt".shellQuoted()              // "it's.txt"
+ * "evil\u001B[31m.txt".shellQuoted()    // 'evil'$'\033''[31m.txt'
  * ```
  *
  * It matches `ls --quoting-style=shell-escape` and the names in GNU's messages, as `cat` prints them:
@@ -18,13 +18,13 @@ package com.fromwau.kern.terminal
  *   past its start and `{` or `}` beside other characters.
  * - Any other name is put in single quotes, a single quote inside written `'\''`. A name with a single quote whose
  *   other special characters are only spaces, `:` or a leading `#` or `~` is put in double quotes instead
- *   (`"it's a.toml"`).
+ *   (`"it's a.txt"`).
  * - A character that does not print, such as a line break, an escape, DEL, a C1 control or an unassigned code point,
  *   is written in `$'…'` with C's escapes (`\n`, `\t`) or three octal digits per byte (`\033`).
  *
  * @param forMessage quotes a name holding `:` too, as GNU does where a name stands in a `name: message` line, so the
  *   colon cannot be read as the end of the name.
- * @param always quotes every name, a plain one too (`'notes.toml'`), as `ls --quoting-style=shell-escape-always`
+ * @param always quotes every name, a plain one too (`'notes.txt'`), as `ls --quoting-style=shell-escape-always`
  *   does, for a word you set apart in a sentence, as GNU's option errors do (`unrecognized option '--nope'`).
  */
 public fun String.shellQuoted(

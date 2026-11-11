@@ -61,6 +61,8 @@ These hold for every call on a writer. The details at the end of this section co
 - **A write renames a new file into place.** Readers never see half of it, and other hard links keep the old content.
 - `inPlace = true` writes into the file itself. It keeps the file's inode, owner and hard links, with a backup beside
   it until the write is done.
+- A write by rename gives the new file the old one's ACL and extended attributes where it can, and loses one it
+  cannot copy. Use `inPlace` for a file whose attributes must stay.
 - **A backup stops a write.** A killed in-place write leaves a `Backup` beside the file. Until you
   [restore or discard it](#deal-with-what-a-killed-write-left), a write of that file is `PendingBackup(path, backup)`
   and writes nothing.

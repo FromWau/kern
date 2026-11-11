@@ -80,7 +80,7 @@ internal class NotRegularFileFailure(val type: FileType) : IOException("not a re
  * What a write of [path] that failed this way answers: the refused open's own error, or [FileError.WriteFailed] naming
  * where it was refused when [failingAt] marked that.
  */
-internal fun Exception.writeError(path: Path): FileError {
+internal fun Exception.writeError(path: Path): FileError.WriteFileError {
     val (failure, at) = located()
     return (failure as? NotRegularFileFailure)?.let { FileError.NotRegularFile(path, it.type) }
         ?: writeFailed(path, failure, at)

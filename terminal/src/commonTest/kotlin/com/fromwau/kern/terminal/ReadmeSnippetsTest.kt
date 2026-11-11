@@ -77,7 +77,7 @@ private fun failingTerminal(): RecordingTerminal {
 
 fun readConfig(terminal: Terminal): String? {
     if (terminal.inIsTerminal) {
-        terminal.err("error: pipe the config in, as in: app < config.toml\n")
+        terminal.err("error: pipe the config in, as in: app < config.txt\n")
         return null
     }
     val bytes = terminal.readIn(maxBytes = 1_048_576).getOrElse { error ->
@@ -122,12 +122,21 @@ class ReadmeSnippetsTest {
     }
 
     @Test
+    fun `a caret padded by display columns stands under a character after wide ones`() {
+        val line = "\u65E5\u672C x"
+        val column = 3
+        val caret = " ".repeat(line.take(column).displayColumns()) + "^"
+
+        assertEquals("     ^", caret)
+    }
+
+    @Test
     fun `a name you do not control prints quoted as GNU quotes it`() {
         val terminal = RecordingTerminal()
-        val name = "evil\u001B[31m.toml"
+        val name = "evil\u001B[31m.txt"
         terminal.out("${name.shellQuoted()}: OK\n")
 
-        assertEquals("'evil'\$'\\033''[31m.toml': OK\n", terminal.out)
+        assertEquals("'evil'\$'\\033''[31m.txt': OK\n", terminal.out)
     }
 
     @Test
@@ -281,7 +290,7 @@ class ReadmeSnippetsTest {
         val terminal = RecordingTerminal(inIsTerminal = true, input = "typed".encodeToByteArray())
 
         assertNull(readConfig(terminal))
-        assertEquals("error: pipe the config in, as in: app < config.toml\n", terminal.err)
+        assertEquals("error: pipe the config in, as in: app < config.txt\n", terminal.err)
     }
 
     @Test

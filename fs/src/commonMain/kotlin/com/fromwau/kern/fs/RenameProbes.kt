@@ -6,9 +6,19 @@ import kotlinx.io.files.Path
 internal data class FileIdentity(
     val linkCount: Long,
     val ownedByCurrentUser: Boolean,
+    val carriesAttributes: Boolean = false,
 ) {
     val hasOtherLinks: Boolean get() = linkCount > 1
 }
+
+/**
+ * Gives [to] the ACL and extended attributes of [from], following symlinks, and takes off any [from] does not have.
+ * False when one could not be read, set or taken off.
+ */
+internal expect fun copyAttributes(
+    from: Path,
+    to: Path,
+): Boolean
 
 /** [path]'s link count and whether this process's user owns it, following symlinks; null when it cannot be read. */
 internal expect fun fileIdentity(path: Path): FileIdentity?

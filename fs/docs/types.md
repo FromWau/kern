@@ -25,6 +25,12 @@ Part of [`fs`](../README.md).
 - `NameRefused` is the sealed group of `InvalidRelativePath`, `Escapes`, `InvalidName` and `NameTooLong`. Each means
   the name or link target a call was given is not one it makes, and nothing was changed. Check
   `is FileError.NameRefused` to skip such a name and fail on the rest.
+- A lookup and a whole-file read or write fail with a narrower group, so a `when` names only what can happen:
+  - `LookupError`, from `info()`, `realPath()` and `canonicalPath()`, is `NotFound`, `Inaccessible`, `NameTooLong` or
+    `InvalidName`.
+  - `ReadFileError`, from `readText` and `readBytes`, is a `LookupError`, `NotRegularFile`, `TooLarge` or `Refused`.
+  - `WriteFileError`, from `writeText` and `writeBytes`, is a `LookupError`, `NotRegularFile`, `NotADirectory`,
+    `AtomicRefused`, `PendingBackup`, `ChangedSince`, `WriteFailed` or `RestoreFailed`.
 - A `FileType` of `Symlink` comes only from a call that looks at a link itself: `fileType(followLinks = false)`,
   `AlreadyExists` and `moveTo`'s `NotADirectory`.
 
@@ -124,6 +130,7 @@ The table gives the short meaning of each case. Details, below the table, has th
 | `FolderReplaced(path)` | the root of a [`Writer`](writer.md) is gone or replaced, so the writer did nothing |
 | `InvalidRelativePath(folder: Path, entry: String, problem: RelativePathProblem)` | the name a `Writer` was given is no relative path below its root |
 | `PendingBackup(path, backup: Leftover.Backup)` | a write found the backup of a killed in-place write, and wrote nothing |
+| `ChangedSince(path)` | a write given `unchangedSince` found the file changed since its stamp, and wrote nothing |
 | `OutputClash(path, firstRelative: Path)` | two entries of a `mirrorTo` source go to one output |
 | `MirrorOverlap(path, dst: Path)` | `mirrorTo` was asked to mirror a folder into itself or into a folder above it |
 | `RestoreFailed(path, cause: IoCause, exception: Throwable?, backup: Path?, at: FailedAt?)` | a write failed and undoing it failed too, so the file is damaged |
@@ -144,8 +151,8 @@ The table gives the short meaning of each case. Details, below the table, has th
 - `NotADirectory` is a file, FIFO, device or socket where a folder was expected. It is also a symlink a folder was
   moved onto, as `Symlink`, such as at the output of a `mirrorTo` folder when that removal stayed, as
   `removalsDeclined` lists it.
-- The `why` of `AtomicRefused` is `OtherHardLinks`, `OtherOwner`, `GroupNotKept`, or on Windows native `Symlink`, a
-  link it cannot follow.
+- The `why` of `AtomicRefused` is `OtherHardLinks`, `OtherOwner`, `GroupNotKept`, `Attributes`, or on Windows native
+  `Symlink`, a link it cannot follow.
 - `Refused`:
   - `info` is what is there.
   - `asked` is the path the call was given. It differs from `path` when the refused place is a folder on the way, or
@@ -304,6 +311,9 @@ The other types the calls take or hand back:
   `changedAt`, and so can the rename. An `info()` read next matches it.
 - `Copied`, what `copyTo` did: a `Written`, or `Copied.Unchanged(info)` for a copy onto the file itself. Either has
   `info`.
+- `FileStamp`, from `stamp()`, what a write given `unchangedSince` compares, as
+  [Writing](writing.md#a-file-changed-since-it-was-read) describes. It shows nothing but equality: two stamps of one
+  file are equal while nothing writes it.
 - `Symlinks`, an enum for `walkTopDown` and `mirrorTo`, as [Symlinks](walking.md#symlinks) describes. A walk's default
   is `Inside`, and a mirror's is `AsLinks`.
   - `Inside` follows only a link that ends inside the root. `Anywhere` follows every link. Both walk each real folder

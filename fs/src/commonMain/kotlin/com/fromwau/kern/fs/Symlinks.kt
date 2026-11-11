@@ -268,7 +268,7 @@ internal expect fun moveLink(
  * @return the resolved path; [FileError.NotFound] when nothing is there, or [FileError.Inaccessible] when it may
  *   not be looked up.
  */
-public fun Path.realPath(): Result<Path, FileError> = metadata().flatMap {
+public fun Path.realPath(): Result<Path, FileError.LookupError> = metadata().flatMap {
     try {
         Ok(realPath(this))
     } catch (e: Exception) {
@@ -289,7 +289,7 @@ public fun Path.realPath(): Result<Path, FileError> = metadata().flatMap {
  * @return the absolute path; [FileError.NotFound] for an empty path, or for a missing rest below a regular file, as a
  *   lookup of such a path answers; [FileError.Inaccessible] for a part that may not be looked up, or a symlink loop.
  */
-public fun Path.canonicalPath(): Result<Path, FileError> {
+public fun Path.canonicalPath(): Result<Path, FileError.LookupError> {
     refusedPath()?.let { return it }
     val absolute = try {
         fromWorkingDirectory()

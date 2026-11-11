@@ -18,7 +18,7 @@ import kotlinx.io.files.Path
  * @return the info; [FileError.NotFound] when nothing is there, or [FileError.Inaccessible] when it may not be looked
  *   up.
  */
-public fun Path.info(): Result<FileInfo, FileError> {
+public fun Path.info(): Result<FileInfo, FileError.LookupError> {
     refusedPath()?.let { return it }
     return try {
         Ok(fileInfoAt(this))

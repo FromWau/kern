@@ -1,8 +1,11 @@
 package com.fromwau.kern.fs
 
 import kotlinx.io.files.Path
+import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.nio.file.attribute.UserDefinedFileAttributeView
 
 // The JVM has no getuid, and a file this process creates is owned by exactly the user it runs as.
 internal val currentUid: Int? by lazy {
@@ -25,8 +28,42 @@ internal actual fun fileIdentity(path: Path): FileIdentity? {
         FileIdentity(
             linkCount = (Files.getAttribute(file, "unix:nlink") as Int).toLong(),
             ownedByCurrentUser = Files.getAttribute(file, "unix:uid") == uid,
+            carriesAttributes = carriesUserAttributes(file),
         )
     } catch (_: Exception) {
         null
+    }
+}
+
+// Linux only: macOS lists its own attributes on many files. java.nio has no view of a POSIX ACL at all.
+private val looksAtAttributes: Boolean = System.getProperty("os.name") == "Linux"
+
+private fun userAttributes(file: java.nio.file.Path): UserDefinedFileAttributeView? =
+    if (looksAtAttributes) Files.getFileAttributeView(file, UserDefinedFileAttributeView::class.java) else null
+
+// A file system without attributes is not an identity that cannot be read.
+private fun carriesUserAttributes(file: java.nio.file.Path): Boolean = try {
+    userAttributes(file)?.list()?.isNotEmpty() == true
+} catch (_: IOException) {
+    false
+}
+
+internal actual fun copyAttributes(
+    from: Path,
+    to: Path,
+): Boolean {
+    val source = userAttributes(Paths.get(from.toString())) ?: return true
+    val copy = userAttributes(Paths.get(to.toString())) ?: return true
+    return try {
+        val wanted = source.list()
+        (copy.list() - wanted.toSet()).forEach(copy::delete)
+        wanted.forEach { name ->
+            val value = ByteBuffer.allocate(source.size(name))
+            source.read(name, value)
+            copy.write(name, value.flip())
+        }
+        true
+    } catch (_: IOException) {
+        false
     }
 }

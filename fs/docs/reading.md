@@ -15,23 +15,23 @@ fun Path.readText(
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<String, FileError>
+): Result<String, FileError.ReadFileError>
 fun Path.readBytes(
     maxBytes: Long? = null,
     trusted: Boolean = false,
     streams: Boolean = false,
     accept: ((FileInfo) -> Boolean)? = null,
-): Result<ByteArray, FileError>
+): Result<ByteArray, FileError.ReadFileError>
 fun Path.readPrefix(maxBytes: Long): Result<ByteArray, FileError>
 fun Path.fileType(followLinks: Boolean = true): Result<FileType, FileError>
 fun Path.fileSize(): Result<Long, FileError>
 fun Path.modifiedAt(): Result<Instant, FileError>
 fun Path.permissions(): Result<Permissions?, FileError>
-fun Path.info(): Result<FileInfo, FileError>
+fun Path.info(): Result<FileInfo, FileError.LookupError>
 fun Path.isSymlink(): Result<Boolean, FileError>
-fun Path.realPath(): Result<Path, FileError>
-inline fun <S> Result<S, FileError>.orIfNotFound(value: () -> S): Result<S, FileError>
-fun <S> Result<S, FileError>.orNullIfNotFound(): Result<S?, FileError>
+fun Path.realPath(): Result<Path, FileError.LookupError>
+inline fun <S, E : FileError> Result<S, E>.orIfNotFound(value: () -> S): Result<S, E>
+fun <S, E : FileError> Result<S, E>.orNullIfNotFound(): Result<S?, E>
 ```
 
 ## Rules

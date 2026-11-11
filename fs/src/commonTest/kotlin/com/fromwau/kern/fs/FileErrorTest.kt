@@ -206,11 +206,83 @@ class FileErrorTest {
         assertEquals(IoCause.Other, causeOfErrno(2) { values[it] })
     }
 
+    @Test
+    fun `a whole-file read fails as a lookup or as NotRegularFile TooLarge or Refused`() {
+        val info = FileInfo(FileType.Regular, 1, Instant.fromEpochSeconds(0), null, null, false, 1)
+        val errors = listOf(
+            FileError.NotRegularFile(path, FileType.Directory),
+            FileError.TooLarge(path, limitBytes = 1, atLeastBytes = 2),
+            FileError.Refused(path, info, RefusedBecause.OtherOwner, path),
+        )
+
+        assertEquals(LOOKUPS + listOf("NotRegularFile", "TooLarge", "Refused"), (lookups + errors).map { it.case() })
+    }
+
+    @Test
+    fun `a whole-file write fails as a lookup or as one of the failures only a write has`() {
+        val errors = listOf(
+            FileError.NotRegularFile(path, FileType.Directory),
+            FileError.NotADirectory(path, FileType.Regular),
+            FileError.AtomicRefused(path, AtomicRefusal.Symlink),
+            FileError.PendingBackup(path, Leftover.Backup(path, elsewhere, null, null)),
+            FileError.ChangedSince(path),
+            FileError.WriteFailed(path, IoCause.NoSpace, null),
+            FileError.RestoreFailed(path, IoCause.NoSpace, null, backup = elsewhere),
+        )
+        val writes = listOf(
+            "NotRegularFile",
+            "NotADirectory",
+            "AtomicRefused",
+            "PendingBackup",
+            "ChangedSince",
+            "WriteFailed",
+            "RestoreFailed",
+        )
+
+        assertEquals(LOOKUPS + writes, (lookups + errors).map { it.case() })
+    }
+
+    private val lookups: List<FileError.LookupError> = listOf(
+        FileError.NotFound(path),
+        FileError.Inaccessible(path, IoCause.Denied, null),
+        FileError.NameTooLong(path, LongName.Path, 256),
+        FileError.InvalidName(path, NameProblem.Nul),
+    )
+
+    // No else in either: a case added to a set fails to compile here, so it is added on purpose.
+    private fun FileError.ReadFileError.case(): String = when (this) {
+        is FileError.NotFound -> "NotFound"
+        is FileError.Inaccessible -> "Inaccessible"
+        is FileError.NameTooLong -> "NameTooLong"
+        is FileError.InvalidName -> "InvalidName"
+        is FileError.NotRegularFile -> "NotRegularFile"
+        is FileError.TooLarge -> "TooLarge"
+        is FileError.Refused -> "Refused"
+    }
+
+    private fun FileError.WriteFileError.case(): String = when (this) {
+        is FileError.NotFound -> "NotFound"
+        is FileError.Inaccessible -> "Inaccessible"
+        is FileError.NameTooLong -> "NameTooLong"
+        is FileError.InvalidName -> "InvalidName"
+        is FileError.NotRegularFile -> "NotRegularFile"
+        is FileError.NotADirectory -> "NotADirectory"
+        is FileError.AtomicRefused -> "AtomicRefused"
+        is FileError.PendingBackup -> "PendingBackup"
+        is FileError.ChangedSince -> "ChangedSince"
+        is FileError.WriteFailed -> "WriteFailed"
+        is FileError.RestoreFailed -> "RestoreFailed"
+    }
+
     private fun assertEqualIgnoringException(
         first: FileError,
         second: FileError,
     ) {
         assertEquals(first, second)
         assertEquals(first.hashCode(), second.hashCode())
+    }
+
+    private companion object {
+        val LOOKUPS = listOf("NotFound", "Inaccessible", "NameTooLong", "InvalidName")
     }
 }

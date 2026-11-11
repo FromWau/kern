@@ -32,5 +32,5 @@ class CorpusTest {
     fun `the third held out corpus is all right`() = assertMisses(heldOut3, 68)
 
     @Test
-    fun `the toml keyword corpus is all right`() = assertMisses(tomlKeywords, 45)
+    fun `the short keyword corpus is all right`() = assertMisses(shortKeywords, 45)
 }
