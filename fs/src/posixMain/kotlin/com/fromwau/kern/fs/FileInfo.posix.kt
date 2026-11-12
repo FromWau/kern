@@ -15,6 +15,8 @@ import platform.posix.lstat
 import platform.posix.stat
 import kotlin.time.Instant
 
+public actual fun currentUserId(): Long? = geteuid().toLong()
+
 internal actual fun fileInfoAt(path: Path): FileInfo = memScoped {
     val info = alloc<stat>()
     if (stat(path.toString(), info.ptr) != 0) throw errnoFailure(about = path)

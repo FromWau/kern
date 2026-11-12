@@ -224,6 +224,8 @@ fun Path.fileSize(): Result<Long, FileError>
 fun Path.modifiedAt(): Result<Instant, FileError>
 fun Path.permissions(): Result<Permissions?, FileError>
 fun Path.info(): Result<FileInfo, FileError.LookupError>
+fun Path.mayExecute(): Result<Boolean, FileError.LookupError>
+fun currentUserId(): Long?
 fun Path.isSymlink(): Result<Boolean, FileError>
 fun Path.realPath(): Result<Path, FileError.LookupError>
 fun Path.canonicalPath(): Result<Path, FileError.LookupError>

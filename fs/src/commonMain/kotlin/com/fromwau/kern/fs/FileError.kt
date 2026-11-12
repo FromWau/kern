@@ -281,6 +281,16 @@ public sealed interface FileError : ResultError {
     public data class FolderReplaced(override val path: Path) : FileError
 
     /**
+     * The file at [path] is on [fileSystem], whose files keep their size and times while their text moves, so no watch
+     * by the system or by a lookup could tell when it changed. A watch of it answers this once and ends; read such a
+     * file on a timer instead, as `TextWatch.Read` in `kern:fs-coroutines` does.
+     */
+    public data class Unwatchable(
+        override val path: Path,
+        val fileSystem: PseudoFileSystem,
+    ) : FileError
+
+    /**
      * [entry], the name a [Writer] was given, is no relative path below its root [folder], for the [problem] given.
      * Nothing was looked up or done. [path] is [folder]. Printed, a NUL in [entry] shows as `\0`, and an [entry] over
      * 64 characters is cut there and followed by its length in bytes.

@@ -1,6 +1,8 @@
 package com.fromwau.kern.fs
 
+import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
+import com.fromwau.kern.result.flatMap
 import com.fromwau.kern.result.map
 import kotlin.jvm.JvmInline
 import kotlinx.io.files.Path
@@ -21,6 +23,43 @@ import kotlinx.io.files.Path
  *   is there, or [FileError.Inaccessible] when it may not be looked up.
  */
 public fun Path.permissions(): Result<Permissions?, FileError> = info().map { it.permissions }
+
+/**
+ * Whether this process may run the file at this path, following symlinks, as the system decides it: by `access(2)`
+ * with `X_OK`, so the owner, group and other bits are weighed for this user, and supplementary groups, ACLs and a
+ * file system mounted `noexec` count too. Mode bits alone get those wrong, so ask this rather than
+ * [Permissions.anyExecute] before running a file, such as when looking a command up on `PATH`.
+ *
+ * ```kotlin
+ * val command = pathVariable.split(':')
+ *     .map { folder -> Path(folder) / "grim" }
+ *     .firstOrNull { it.mayExecute().getOrNull() == true }
+ *     ?: return println("grim is not on PATH")
+ * ```
+ *
+ * `access(2)` judges as the real user and group, which differ from those [info] judges by only in a setuid or setgid
+ * program. Root may run any regular file with an execute bit, as the system lets it. Linux and Apple ask
+ * `access`, Android `Os.access`, and the JVM `Files.isExecutable`, which asks `access` on Linux and macOS.
+ *
+ * @return true when this process may run the file; false for a regular file it may not run, and for a folder or
+ *   anything else that is no regular file, since only a file runs. On Windows, native or JVM, any regular file is
+ *   true: Windows has no execute bit, and whether a file runs depends on its extension. [FileError.NotFound] when
+ *   nothing is there, or [FileError.Inaccessible] when it may not be looked up.
+ */
+public fun Path.mayExecute(): Result<Boolean, FileError.LookupError> = info().flatMap { found ->
+    when {
+        found.type != FileType.Regular -> Ok(false)
+        mayExecuteAt(this) -> Ok(true)
+        // A file gone between the two lookups is NotFound rather than one this process may not run.
+        else -> info().map { false }
+    }
+}
+
+/**
+ * Whether the system lets this process execute the regular file at [path], following symlinks; false too when it
+ * cannot say, such as for a file gone since it was looked up.
+ */
+internal expect fun mayExecuteAt(path: Path): Boolean
 
 /**
  * The permission bits of a mode: nine for owner, group and others, and setuid, setgid and sticky above them, so

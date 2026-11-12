@@ -11,6 +11,9 @@ import java.nio.file.attribute.UserPrincipal
 import kotlin.time.Instant
 import java.nio.file.Path as NioPath
 
+// java.nio answers `unix:uid` as the uid_t's bits in a signed Int.
+public actual fun currentUserId(): Long? = currentUid?.toUInt()?.toLong()
+
 internal actual fun fileInfoAt(path: Path): FileInfo = fileInfoWith(path, AttributeViews.here)
 
 internal actual fun ownFileInfoAt(path: Path): FileInfo =

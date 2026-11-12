@@ -1,5 +1,6 @@
 package com.fromwau.kern.fs
 
+import com.sun.security.auth.module.UnixSystem
 import kotlinx.io.files.Path
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -7,16 +8,13 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.nio.file.attribute.UserDefinedFileAttributeView
 
-// The JVM has no getuid, and a file this process creates is owned by exactly the user it runs as.
+// A runtime without the jdk.security.auth module, or without UnixSystem's native half, cannot name the uid.
 internal val currentUid: Int? by lazy {
-    runCatching {
-        val probe = Files.createTempFile("kern-uid", null)
-        try {
-            Files.getAttribute(probe, "unix:uid") as Int
-        } finally {
-            Files.deleteIfExists(probe)
-        }
-    }.getOrNull()
+    try {
+        UnixSystem().uid.toInt()
+    } catch (_: LinkageError) {
+        null
+    }
 }
 
 internal actual fun fileIdentity(path: Path): FileIdentity? {

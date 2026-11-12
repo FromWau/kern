@@ -40,7 +40,7 @@ public fun Path.info(): Result<FileInfo, FileError.LookupError> {
  * @property changedAt when the file's content or attributes last changed, such as its permissions or owner: the
  *   `ctime` of Linux and Apple. No call sets it, so a copy given an old [modifiedAt] still shows when it was made.
  * @property permissions the permission bits, as [permissions] gives them.
- * @property ownedByMe whether the user this process runs as owns the file.
+ * @property ownedByMe whether the user this process runs as owns the file, the one [currentUserId] names.
  * @property links how many hard links the file has, its names in all folders: `1` for a file with no other name. Null
  *   where the platform does not say, as on the JVM on Windows or without unix attributes.
  */
@@ -53,6 +53,24 @@ public data class FileInfo(
     val ownedByMe: Boolean?,
     val links: Int?,
 )
+
+/**
+ * The numeric id of the user this process runs as, its effective uid: the one [FileInfo.ownedByMe] compares a file's
+ * owner with, and the one a peer asks for when it checks who is calling, such as D-Bus `EXTERNAL` authentication or
+ * a polkit `unix-user` subject.
+ *
+ * ```kotlin
+ * val uid = currentUserId() ?: return println("$socket: no numeric user id to authenticate with")
+ * send("AUTH EXTERNAL ${hex(uid.toString())}")
+ * ```
+ *
+ * Linux and Apple ask `geteuid`, and Android `Os.geteuid`. The JVM asks the JDK's `UnixSystem` once per process,
+ * which reads `getuid`: the real uid, the same as the effective one unless the JVM was started setuid.
+ *
+ * @return the uid, 0 for root, as the unsigned 32-bit number the system keeps. Null on Windows, native or JVM, where
+ *   a user is a SID rather than a number, and on a JVM without the `jdk.security.auth` module.
+ */
+public expect fun currentUserId(): Long?
 
 /** [info] of [path] from the platform's own lookup, following symlinks, throwing why it could not be read. */
 internal expect fun fileInfoAt(path: Path): FileInfo

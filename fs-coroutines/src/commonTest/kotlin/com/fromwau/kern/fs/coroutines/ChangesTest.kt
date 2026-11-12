@@ -77,7 +77,7 @@ class ChangesTest {
         withContext(Dispatchers.Default) {
             coroutineScope {
                 val channel = Channel<Result<FileInfo, FileError>>(Channel.UNLIMITED)
-                val watch = launch { path.changes(pollEvery).collect { channel.send(it) } }
+                val watch = launch { path.changes(Watch.System(pollEvery)).collect { channel.send(it) } }
                 try {
                     Answers(channel).block()
                 } finally {
@@ -118,20 +118,18 @@ class ChangesTest {
     }
 
     @Test
-    fun `a watched folder's mode changing answers again and a file edit answers once`() {
+    fun `a watched folder's mode changing gives no answer and a file edit answers its new info`() {
         if (dir.permissions().assertSuccess() == null) return
         file.writeText("a = 1").assertSuccess()
 
         watching {
-            val first = next()
+            assertEquals(5, next().size())
             dir.chmod(0b111_111_111).assertSuccess()
-            assertEquals(first, next())
             dir.chmod(0b111_101_101).assertSuccess()
-            assertEquals(first, next())
+            assertNull(within(500.milliseconds))
 
             file.writeText("a = 10").assertSuccess()
             assertEquals(6, next().size())
-            assertNull(within(500.milliseconds))
         }
     }
 
@@ -215,7 +213,7 @@ class ChangesTest {
         val folder = dir / "config"
         val config = folder / "app.toml"
 
-        watching(config, pollEvery = 50.milliseconds) {
+        watching(config) {
             assertEquals(Err(FileError.NotFound(config)), next())
             folder.createDirectories().assertSuccess()
             config.writeText("a = 1").assertSuccess()
@@ -231,7 +229,7 @@ class ChangesTest {
         val config = folder / "app.toml"
         config.writeText("a = 1").assertSuccess()
 
-        watching(config, pollEvery = 50.milliseconds) {
+        watching(config) {
             assertEquals(5, next().size())
             folder.deleteRecursively().assertSuccess()
             assertEquals(Err(FileError.NotFound(config)), next())
@@ -248,7 +246,7 @@ class ChangesTest {
         val config = folder / "app.toml"
         config.writeText("a = 1").assertSuccess()
 
-        watching(config, pollEvery = 50.milliseconds) {
+        watching(config) {
             assertEquals(5, next().size())
             folder.moveTo(dir / "moved").assertSuccess()
             assertEquals(Err(FileError.NotFound(config)), next())
@@ -256,6 +254,20 @@ class ChangesTest {
             assertEquals(6, next().size())
             config.writeText("a = 100").assertSuccess()
             until(sizeIs(7))
+        }
+    }
+
+    @Test
+    fun `a file where a folder on the way belongs is waited for until the folder is made`() {
+        val a = dir / "a"
+        val config = a / "b" / "app.toml"
+        a.writeText("not a folder").assertSuccess()
+
+        watching(config) {
+            val _ = next()
+            a.delete().assertSuccess()
+            config.writeText("a = 1").assertSuccess()
+            until(sizeIs(5))
         }
     }
 

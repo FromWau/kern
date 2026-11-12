@@ -6,6 +6,8 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.io.files.Path
+import platform.posix.X_OK
+import platform.posix.access
 import platform.posix.chown
 import platform.posix.stat
 
@@ -22,3 +24,5 @@ internal actual fun copyGroup(
 }
 
 internal actual fun restrictToOwner(path: Path) = setFilePermissions(path, OWNER_ONLY_FOLDER)
+
+internal actual fun mayExecuteAt(path: Path): Boolean = access(path.toString(), X_OK) == 0

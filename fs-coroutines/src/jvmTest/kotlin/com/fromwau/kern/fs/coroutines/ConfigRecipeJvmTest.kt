@@ -55,7 +55,7 @@ class ConfigRecipeJvmTest {
 
     /** The config watch from fs's docs/reading.md, as written there. */
     suspend fun watchConfig(config: Path, load: (String) -> Unit) {
-        config.textChanges(maxBytes = 1_048_576, trusted = true).collect { change ->
+        config.textChanges(maxBytes = 1_048_576, trusted = true, watch = Watch.System()).collect { change ->
             change.onSuccess(load).onError { failure ->
                 when (failure) {
                     is FileError.NotFound -> println("$config is not there, so nothing new is loaded")

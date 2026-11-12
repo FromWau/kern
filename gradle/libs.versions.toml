@@ -1,8 +1,7 @@
 [versions]
-# One version across every kern module, released together, so a consumer pins a single number.
-kernVersion = "0.6.4"
+kernVersion = "0.6.5"
 
-agp = "9.4.1"
+agp = "9.5.1"
 android-compileSdk = "37"
 # 26 is where Android got `java.nio.file`, which is how kotlinx-io moves a file, so below it a failed write
 # cannot put its backup back and reports a damaged file instead. Lower it and that case stops working.
@@ -13,14 +12,14 @@ dotenv-gradle = "0.1.0"
 jdk-build = "25"
 jdk-target = "17"
 
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 kotlinx-atomicfu = "0.33.0"
 kotlinx-benchmark = "0.5.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-datetime = "0.8.0"
-kotlinx-io = "0.9.1"
-kotlinx-serialization = "1.11.0"
-sentry-kmp = "0.27.0"
+kotlinx-io = "0.9.2"
+kotlinx-serialization = "1.13.0"
+sentry-kmp = "0.29.0"
 
 [libraries]
 android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }

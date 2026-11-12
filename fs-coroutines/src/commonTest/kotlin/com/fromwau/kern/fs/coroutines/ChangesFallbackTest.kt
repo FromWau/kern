@@ -7,6 +7,7 @@ import com.fromwau.kern.fs.createDirectories
 import com.fromwau.kern.fs.createSymlink
 import com.fromwau.kern.fs.deleteRecursively
 import com.fromwau.kern.fs.div
+import com.fromwau.kern.fs.moveTo
 import com.fromwau.kern.fs.permissions
 import com.fromwau.kern.fs.switchSymlinkTo
 import com.fromwau.kern.fs.test.chmod
@@ -205,7 +206,7 @@ class ChangesFallbackTest {
         assertEquals(5, answers.size())
 
         (dir / "mid" / "app.toml").switchSymlinkTo(Path("../other/app.toml")).assertSuccess()
-        first.wakes.send(Wake.Event)
+        first.wakes.send(Wake.Changed)
         runCurrent()
 
         assertEquals(6, answers.size())
@@ -317,7 +318,8 @@ class ChangesFallbackTest {
     @Test
     fun `cancelling a collection that polls after a refusal stops its lookups`() = runTest {
         file.writeText("a = 1").assertSuccess()
-        val collector = backgroundScope.launch { file.changes(pollEvery, Opener(FolderWatch.Refused)).collect {} }
+        val polls = file.changes(pollEvery, Opener(FolderWatch.Refused))
+        val collector = backgroundScope.launch { polls.collect {} }
         runCurrent()
 
         collector.cancel()
@@ -356,42 +358,75 @@ class ChangesFallbackTest {
     }
 
     @Test
-    fun `a folder missing when its watch was asked for is asked for again though it is there by the next look`() =
-        runTest {
-            file.writeText("a = 1").assertSuccess()
-            val waker = FakeWaker()
-            val opener = Opener(FolderWatch.Missing, waker)
-            val answers = answers(opener)
-            assertEquals(5, answers.size())
-
-            wait(pollEvery)
-            assertEquals(2, opener.calls)
-
-            file.writeText("a = 10").assertSuccess()
-            waker.wakes.send(Wake.Event)
-            runCurrent()
-            assertEquals(6, answers.size())
-        }
-
-    @Test
-    fun `a missing folder is NotFound once and is watched once it is there`() = runTest {
+    fun `a missing folder is waited for in the nearest folder that is there without lookups on the timer`() = runTest {
         val folder = dir / "config"
         val config = folder / "app.toml"
-        val waker = FakeWaker()
-        val opener = Opener(FolderWatch.Missing, FolderWatch.Missing, waker)
+        val above = FakeWaker()
+        val opener = Opener(FolderWatch.Missing, above, FakeWaker())
+        val answers = answers(opener, config)
+        assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
+        assertEquals(mapOf(real(dir) to setOf("config")), opener.asked[1])
+
+        wait(pollEvery * 5)
+        assertEquals(2, opener.calls)
+
+        config.writeText("a = 1").assertSuccess()
+        above.wakes.send(Wake.Changed)
+        runCurrent()
+
+        assertEquals(5, answers.size())
+        assertTrue(above.closed)
+        assertEquals(mapOf(real(folder) to setOf("app.toml")), opener.asked[2])
+    }
+
+    @Test
+    fun `a look while a missing folder is awaited keeps waiting without asking for the watch again`() = runTest {
+        val config = dir / "config" / "app.toml"
+        val above = FakeWaker()
+        val opener = Opener(FolderWatch.Missing, above, FakeWaker())
         val answers = answers(opener, config)
         assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
 
-        wait(pollEvery)
-        folder.createDirectories().assertSuccess()
-        wait(pollEvery)
-        assertNull(answers.tryReceive().getOrNull())
-        assertEquals(3, opener.calls)
+        above.wakes.send(Wake.Look)
+        runCurrent()
+
+        assertEquals(2, opener.calls)
+        assertFalse(above.closed)
+    }
+
+    @Test
+    fun `a missing folder two levels down is waited for one folder at a time`() = runTest {
+        val config = dir / "a" / "b" / "app.toml"
+        val aboveA = FakeWaker()
+        val aboveB = FakeWaker()
+        val opener = Opener(FolderWatch.Missing, aboveA, FolderWatch.Missing, aboveB, FakeWaker())
+        val answers = answers(opener, config)
+        assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
+
+        (dir / "a").createDirectories().assertSuccess()
+        aboveA.wakes.send(Wake.Look)
+        runCurrent()
+        assertEquals(mapOf(real(dir / "a") to setOf("b")), opener.asked[3])
 
         config.writeText("a = 1").assertSuccess()
-        waker.wakes.send(Wake.Event)
+        aboveB.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(5, answers.size())
+        assertEquals(5, opener.calls)
+    }
+
+    @Test
+    fun `a folder made while the watch above it is set is watched at once`() = runTest {
+        val config = dir / "config" / "app.toml"
+        val opener = Opener(FolderWatch.Missing, FakeWaker(), FakeWaker()) { call ->
+            if (call == 2) config.writeText("a = 1").assertSuccess()
+        }
+
+        val answers = answers(opener, config)
+
+        assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
+        assertEquals(5, answers.size())
+        assertEquals(3, opener.calls)
     }
 
     @Test
@@ -403,12 +438,12 @@ class ChangesFallbackTest {
         assertEquals(5, answers.size())
 
         file.writeText("a = 10").assertSuccess()
-        waker.wakes.send(Wake.Event)
+        waker.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(6, answers.size())
 
         file.writeText("a = 100").assertSuccess()
-        waker.wakes.send(Wake.Event)
+        waker.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(7, answers.size())
         assertEquals(1, opener.calls)
@@ -416,10 +451,11 @@ class ChangesFallbackTest {
     }
 
     @Test
-    fun `an overflow looks at once and keeps the watch`() = runTest {
+    fun `an overflow looks at once and opens the watch again`() = runTest {
         file.writeText("a = 1").assertSuccess()
         val waker = FakeWaker()
-        val opener = Opener(waker)
+        val again = FakeWaker()
+        val opener = Opener(waker, again)
         val answers = answers(opener)
         assertEquals(5, answers.size())
 
@@ -427,25 +463,142 @@ class ChangesFallbackTest {
         waker.wakes.send(Wake.Overflow)
         runCurrent()
         assertEquals(6, answers.size())
+        assertTrue(waker.closed)
+        assertEquals(2, opener.calls)
 
         file.writeText("a = 100").assertSuccess()
-        waker.wakes.send(Wake.Event)
+        again.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(7, answers.size())
-        assertEquals(1, opener.calls)
-        assertFalse(waker.closed)
     }
 
     @Test
-    fun `nothing that changed is no answer`() = runTest {
+    fun `a folder above swapped for another at its path is found at the next quiet wake and moves the watch`() =
+        runTest {
+            val config = dir / "top" / "mid" / "app.toml"
+            config.writeText("a = 1").assertSuccess()
+            (dir / "new" / "mid" / "app.toml").writeText("a = 10").assertSuccess()
+            val waker = FakeWaker()
+            val opener = Opener(waker, FakeWaker())
+            val answers = answers(opener, config)
+            assertEquals(5, answers.size())
+
+            (dir / "top").moveTo(dir / "top.old").assertSuccess()
+            (dir / "new").moveTo(dir / "top").assertSuccess()
+            waker.wakes.send(Wake.Quiet)
+            runCurrent()
+
+            assertEquals(6, answers.size())
+            assertTrue(waker.closed)
+            assertEquals(2, opener.calls)
+        }
+
+    @Test
+    fun `a watch refused once its folder is gone waits for the folder instead of looking on the timer`() = runTest {
+        val folder = dir / "config"
+        val config = folder / "app.toml"
+        config.writeText("a = 1").assertSuccess()
+        val waker = FakeWaker()
+        val opener = Opener(waker, FolderWatch.Missing, FakeWaker())
+        val answers = answers(opener, config)
+        assertEquals(5, answers.size())
+
+        folder.deleteRecursively().assertSuccess()
+        waker.wakes.send(Wake.Refused)
+        runCurrent()
+
+        assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
+        assertEquals(3, opener.calls)
+        assertEquals(mapOf(real(dir) to setOf("config")), opener.asked[2])
+    }
+
+    @Test
+    fun `a link into a missing folder pointed elsewhere is found at the next quiet wake`() = runTest {
+        val link = dir / "link"
+        (dir / "real").writeText("a = 1").assertSuccess()
+        link.createSymlink(dir / "missing" / "app.toml").assertSuccess()
+        val above = FakeWaker()
+        val opener = Opener(FolderWatch.Missing, above, FakeWaker())
+        val answers = answers(opener, link)
+        assertEquals(Err(FileError.NotFound(link)), answers.tryReceive().getOrNull())
+
+        link.switchSymlinkTo(dir / "real").assertSuccess()
+        above.wakes.send(Wake.Quiet)
+        runCurrent()
+
+        assertEquals(5, answers.size())
+        assertTrue(above.closed)
+    }
+
+    @Test
+    fun `a folder link whose target folder is made later is found at the next quiet wake`() = runTest {
+        (dir / "releases").createDirectories().assertSuccess()
+        (dir / "current").createSymlink(Path("releases/v1")).assertSuccess()
+        val config = dir / "current" / "app.toml"
+        val above = FakeWaker()
+        val opener = Opener(FolderWatch.Missing, above, FakeWaker())
+        val answers = answers(opener, config)
+        assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
+
+        (dir / "releases" / "v1" / "app.toml").writeText("a = 1").assertSuccess()
+        above.wakes.send(Wake.Quiet)
+        runCurrent()
+
+        assertEquals(5, answers.size())
+        assertTrue(above.closed)
+    }
+
+    @Test
+    fun `a change the system tells of answers again though the file looks the same`() = runTest {
+        file.writeText("a = 1").assertSuccess()
+        val waker = FakeWaker()
+        val answers = answers(Opener(waker))
+        val first = answers.tryReceive().getOrNull()
+
+        waker.wakes.send(Wake.Changed)
+        runCurrent()
+
+        assertEquals(first, answers.tryReceive().getOrNull())
+        assertNull(answers.tryReceive().getOrNull())
+    }
+
+    @Test
+    fun `an overflow answers again though the file looks the same`() = runTest {
+        file.writeText("a = 1").assertSuccess()
+        val waker = FakeWaker()
+        val answers = answers(Opener(waker))
+        val first = answers.tryReceive().getOrNull()
+
+        waker.wakes.send(Wake.Overflow)
+        runCurrent()
+
+        assertEquals(first, answers.tryReceive().getOrNull())
+    }
+
+    @Test
+    fun `a look answers only what differs`() = runTest {
         file.writeText("a = 1").assertSuccess()
         val waker = FakeWaker()
         val answers = answers(Opener(waker))
         assertEquals(5, answers.size())
 
-        waker.wakes.send(Wake.Event)
-        waker.wakes.send(Wake.Overflow)
+        waker.wakes.send(Wake.Look)
         runCurrent()
+        assertNull(answers.tryReceive().getOrNull())
+
+        file.writeText("a = 10").assertSuccess()
+        waker.wakes.send(Wake.Look)
+        runCurrent()
+        assertEquals(6, answers.size())
+    }
+
+    @Test
+    fun `a lookup on the timer answers only what differs`() = runTest {
+        file.writeText("a = 1").assertSuccess()
+        val answers = answers(Opener(FolderWatch.Refused))
+        assertEquals(5, answers.size())
+
+        wait(pollEvery * 3)
 
         assertNull(answers.tryReceive().getOrNull())
     }
@@ -459,32 +612,33 @@ class ChangesFallbackTest {
         val first = answers.tryReceive().getOrNull()
 
         dir.chmod(0b111_111_111).assertSuccess()
-        waker.wakes.send(Wake.Event)
+        waker.wakes.send(Wake.Look)
         runCurrent()
         assertEquals(first, answers.tryReceive().getOrNull())
 
         file.writeText("a = 10").assertSuccess()
-        waker.wakes.send(Wake.Event)
+        waker.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(6, answers.size())
         assertNull(answers.tryReceive().getOrNull())
 
         dir.chmod(0b111_101_101).assertSuccess()
-        waker.wakes.send(Wake.Event)
-        waker.wakes.send(Wake.Event)
+        waker.wakes.send(Wake.Look)
+        waker.wakes.send(Wake.Look)
         runCurrent()
         assertEquals(6, answers.size())
         assertNull(answers.tryReceive().getOrNull())
     }
 
     @Test
-    fun `a folder gone closes the watch and looks every pollEvery until its folder is back`() = runTest {
+    fun `a folder gone closes the watch and waits in the folder above until it is back`() = runTest {
         val folder = dir / "config"
         val config = folder / "app.toml"
         config.writeText("a = 1").assertSuccess()
         val first = FakeWaker()
+        val above = FakeWaker()
         val second = FakeWaker()
-        val opener = Opener(first, FolderWatch.Missing, FolderWatch.Missing, second)
+        val opener = Opener(first, FolderWatch.Missing, above, second)
         val answers = answers(opener, config)
         assertEquals(5, answers.size())
 
@@ -493,16 +647,16 @@ class ChangesFallbackTest {
         runCurrent()
         assertEquals(Err(FileError.NotFound(config)), answers.tryReceive().getOrNull())
         assertTrue(first.closed)
-        wait(pollEvery)
         assertEquals(3, opener.calls)
 
         config.writeText("a = 10").assertSuccess()
-        wait(pollEvery)
+        above.wakes.send(Wake.Changed)
+        runCurrent()
         assertEquals(6, answers.size())
         assertEquals(4, opener.calls)
 
         config.writeText("a = 100").assertSuccess()
-        second.wakes.send(Wake.Event)
+        second.wakes.send(Wake.Changed)
         runCurrent()
         assertEquals(7, answers.size())
     }
@@ -547,7 +701,7 @@ class ChangesFallbackTest {
     }
 
     @Test
-    fun `a pollEvery that is not positive is refused`() {
-        assertFailsWith<IllegalArgumentException> { val _ = file.changes(Duration.ZERO) }
+    fun `a fallback that is not positive is refused`() {
+        assertFailsWith<IllegalArgumentException> { val _ = Watch.System(Duration.ZERO) }
     }
 }

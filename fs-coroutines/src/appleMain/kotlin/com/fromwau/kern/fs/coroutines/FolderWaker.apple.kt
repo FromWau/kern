@@ -8,8 +8,6 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import kotlinx.io.files.Path
 import platform.darwin.EVFILT_VNODE
@@ -25,7 +23,10 @@ import platform.darwin.NOTE_WRITE
 import platform.darwin.kevent
 import platform.darwin.kqueue
 import platform.posix.EINTR
+import platform.posix.EMFILE
+import platform.posix.ENFILE
 import platform.posix.ENOENT
+import platform.posix.ENOTDIR
 import platform.posix.O_EVTONLY
 import platform.posix.O_NONBLOCK
 import platform.posix.errno
@@ -52,7 +53,8 @@ internal actual fun openFolderWaker(folders: Map<Path, Set<String>>): FolderWatc
     for (folder in folders.keys) {
         val folderFd = open(folder.toString(), O_EVTONLY)
         val refusal = when {
-            folderFd < 0 -> if (errno == ENOENT) FolderWatch.Missing else FolderWatch.Refused
+            // A file where a folder on the way belongs is a folder still to be made.
+            folderFd < 0 -> if (errno == ENOENT || errno == ENOTDIR) FolderWatch.Missing else FolderWatch.Refused
             !register(queue, folderFd) -> FolderWatch.Refused
             else -> null
         }
@@ -89,6 +91,9 @@ private class KqueueWaker(
 ) : FolderWaker {
     private val fileFds = IntArray(files.size) { -1 }
 
+    // A file there but not watched because the process has no descriptor left would lose its writes in place.
+    private var refused = false
+
     init {
         watchFiles()
     }
@@ -96,11 +101,14 @@ private class KqueueWaker(
     /** Watches whatever file is at each of [files] now, following a link; closing an old descriptor drops its watch. */
     private fun watchFiles() {
         files.forEachIndexed { index, file ->
-            if (fileFds[index] >= 0) platform.posix.close(fileFds[index])
-            // O_NONBLOCK, since opening a FIFO would otherwise wait for a writer.
+            // Opened before the old one closes, so a write between the two still reaches a watch. O_NONBLOCK, since
+            // opening a FIFO would otherwise wait for a writer.
             val fd = open(file.toString(), O_EVTONLY or O_NONBLOCK)
+            if (fd < 0 && (errno == EMFILE || errno == ENFILE)) refused = true
+            if (fileFds[index] >= 0) platform.posix.close(fileFds[index])
             fileFds[index] = if (fd >= 0 && !register(queue, fd)) {
                 platform.posix.close(fd)
+                refused = true
                 -1
             } else {
                 fd
@@ -109,9 +117,10 @@ private class KqueueWaker(
     }
 
     override suspend fun next(): Wake {
-        val wake = withContext(Dispatchers.IO) { waitForEvents() } ?: return Wake.Quiet
+        if (refused) return Wake.Refused
+        val wake = withContext(WatchWaits) { waitForEvents() } ?: return Wake.Quiet
         watchFiles()
-        return wake
+        return if (refused) Wake.Refused else wake
     }
 
     /** What the events of one slice say, or null when none came. */
@@ -123,11 +132,12 @@ private class KqueueWaker(
         val count = kevent(queue, null, 0, events, EVENTS_AT_ONCE, timeout.ptr)
         if (count < 0) return if (errno == EINTR) null else Wake.Refused
         if (count == 0) return null
-        val folderGone = (0 until count).any { index ->
-            val event = events[index]
-            event.ident.toInt() in folderFds && event.fflags.toInt() and FOLDER_GONE != 0
+        val ready = (0 until count).map { events[it] }
+        when {
+            ready.any { it.ident.toInt() in folderFds && it.fflags.toInt() and FOLDER_GONE != 0 } -> Wake.FolderGone
+            ready.any { it.ident.toInt() in fileFds } -> Wake.Changed
+            else -> Wake.Look
         }
-        if (folderGone) Wake.FolderGone else Wake.Event
     }
 
     override fun close() {

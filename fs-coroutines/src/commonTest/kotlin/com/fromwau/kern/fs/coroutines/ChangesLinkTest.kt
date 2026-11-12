@@ -60,7 +60,7 @@ class ChangesLinkTest {
         withContext(Dispatchers.Default) {
             coroutineScope {
                 val channel = Channel<Result<FileInfo, FileError>>(Channel.UNLIMITED)
-                val watch = launch { path.changes(eventsOnly).collect { channel.send(it) } }
+                val watch = launch { path.changes(Watch.System(eventsOnly)).collect { channel.send(it) } }
                 try {
                     Answers(channel).block()
                 } finally {

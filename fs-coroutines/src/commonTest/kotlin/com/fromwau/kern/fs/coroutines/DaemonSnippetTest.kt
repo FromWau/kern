@@ -232,7 +232,7 @@ class DaemonSnippetTest {
     ): EmptyResult<FileError> = coroutineScope {
         val settings = MutableStateFlow<String?>(null)
         val watch = launch {
-            config.textChanges(maxBytes = 1_048_576, trusted = true).collect { text ->
+            config.textChanges(maxBytes = 1_048_576, trusted = true, watch = Watch.System()).collect { text ->
                 text.onSuccess { settings.value = it }.onError { err("config not loaded: $it") }
             }
         }

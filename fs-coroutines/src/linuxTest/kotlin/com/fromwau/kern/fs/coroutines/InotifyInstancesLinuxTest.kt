@@ -52,7 +52,7 @@ class InotifyInstancesLinuxTest {
         }
 
     @Test
-    fun `a chain of 40 links over 41 folders is watched by one inotify instance`() = runBlocking {
+    fun `a chain of 40 links over 41 folders is one inotify instance on each folder and the file`() = runBlocking {
         (dir / "dotfiles" / "app.toml").writeText("a = 1").assertSuccess()
         repeat(40) { index ->
             val next = if (index == 39) "../dotfiles/app.toml" else "../f${index + 1}/app.toml"
@@ -63,12 +63,12 @@ class InotifyInstancesLinuxTest {
         val watching = CompletableDeferred<Map<String, Int>>()
 
         val collector = launch(Dispatchers.Default) {
-            (dir / "f0" / "app.toml").changes().collect { watching.complete(inotifyWatches() - before) }
+            (dir / "f0" / "app.toml").changes(Watch.System()).collect { watching.complete(inotifyWatches() - before) }
         }
         val opened = withTimeout(10.seconds) { watching.await() }
         collector.cancelAndJoin()
 
-        assertEquals(listOf(41), opened.values.toList())
+        assertEquals(listOf(42), opened.values.toList())
     }
 
     @Test

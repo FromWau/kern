@@ -12,6 +12,9 @@ import java.nio.file.Paths
 import java.nio.file.attribute.BasicFileAttributes
 import kotlin.time.Instant
 
+// Os.geteuid answers the uid_t's bits as a signed Int.
+public actual fun currentUserId(): Long? = Os.geteuid().toUInt().toLong()
+
 internal actual fun fileInfoAt(path: Path): FileInfo = fileInfoOf(path, followLinks = true)
 
 internal actual fun ownFileInfoAt(path: Path): FileInfo = fileInfoOf(path, followLinks = false)

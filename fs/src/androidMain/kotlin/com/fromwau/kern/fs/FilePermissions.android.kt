@@ -11,6 +11,13 @@ import kotlinx.io.files.Path
 internal actual fun permissionBits(path: Path): Int? =
     osCall(path) { Os.stat(path.toString()).st_mode } and PERMISSION_BITS
 
+// Os.access answers a refusal as an ErrnoException rather than false.
+internal actual fun mayExecuteAt(path: Path): Boolean = try {
+    Os.access(path.toString(), OsConstants.X_OK)
+} catch (_: ErrnoException) {
+    false
+}
+
 internal actual fun setFilePermissions(
     path: Path,
     bits: Int,

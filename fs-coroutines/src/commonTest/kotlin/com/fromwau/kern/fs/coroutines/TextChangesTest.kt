@@ -36,7 +36,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.seconds
 
-// pollTextChanges looks on virtual time here, so each test says exactly when the file is read.
+// textChanges under Watch.Poll looks on virtual time here, so each test says exactly when the file is read.
 @OptIn(ExperimentalCoroutinesApi::class)
 class TextChangesTest {
     private val dir = scratchDir()
@@ -49,7 +49,9 @@ class TextChangesTest {
     }
 
     private fun TestScope.texts(): ReceiveChannel<Result<String, FileError>> {
-        val texts = file.pollTextChanges(maxBytes = 1_024, trusted = true, every = every).produceIn(backgroundScope)
+        val texts = file
+            .textChanges(maxBytes = 1_024, trusted = true, watch = Watch.Poll(every))
+            .produceIn(backgroundScope)
         runCurrent()
         return texts
     }
@@ -181,7 +183,11 @@ class TextChangesTest {
             writeConfig("a = 1")
             val texts = Channel<Result<String, FileError>>(Channel.UNLIMITED)
             withContext(Dispatchers.Default) {
-                val watch = launch { file.textChanges(maxBytes = 1_024, trusted = true).collect { texts.send(it) } }
+                val watch = launch {
+                    file
+                        .textChanges(maxBytes = 1_024, trusted = true, watch = Watch.System())
+                        .collect { texts.send(it) }
+                }
                 assertEquals(Ok("a = 1"), withTimeout(10.seconds) { texts.receive() })
 
                 dir.chmod(0b111_111_111).assertSuccess()
@@ -215,7 +221,7 @@ class TextChangesTest {
         load: (String) -> Unit,
         println: (String) -> Unit,
     ) {
-        config.textChanges(maxBytes = 1_048_576, trusted = true).collect { text ->
+        config.textChanges(maxBytes = 1_048_576, trusted = true, watch = Watch.System()).collect { text ->
             text.onSuccess { load(it) }.onError { println("$config: $it") }
         }
     }

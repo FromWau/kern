@@ -41,3 +41,17 @@ kotlin {
         }
     }
 }
+
+val uidProcTestClass = "com.fromwau.kern.fs.CurrentUserIdProcJvmTest"
+
+val jvmTestWithoutTempFolder = tasks.register<Test>("jvmTestWithoutTempFolder") {
+    description = "Runs the uid test with java.io.tmpdir naming a folder that does not exist."
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    val jvmTest = tasks.named<Test>("jvmTest")
+    testClassesDirs = files(jvmTest.map { it.testClassesDirs })
+    classpath = files(jvmTest.map { it.classpath })
+    useJUnitPlatform()
+    filter.includeTestsMatching(uidProcTestClass)
+    systemProperty("java.io.tmpdir", layout.buildDirectory.dir("missing-tmpdir").get().asFile.path)
+}
+tasks.named("check") { dependsOn(jvmTestWithoutTempFolder) }

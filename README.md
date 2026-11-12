@@ -22,9 +22,9 @@ Pick a module from the table. The last column says what it brings along.
 | [`logger-sentry`](logger-sentry/README.md) | `SentrySink`: entries as Sentry events, breadcrumbs and logs, each from its own level | `logger`; at runtime the Sentry KMP SDK |
 | [`logger-test`](logger-test/README.md) | test sinks: `TestSink` waits for what your code logs, `RecordingSink` records each write of a sink of your own | `logger`, coroutines, kotlin-test; at runtime atomicfu |
 | [`dirs`](dirs/README.md) | where an app's config, data, state, cache and temp belong, as `Path`s | kotlinx-io, `result` |
-| [`fs`](fs/README.md) | `Path` helpers that return typed errors: `dir / "name"`, read, write by rename or in place, append, list, walk, move, delete and lock | `dirs` |
+| [`fs`](fs/README.md) | `Path` helpers that return typed errors: `dir / "name"`, read, write by rename or in place, append, list, walk, move, delete and lock; `mayExecute()` and `currentUserId()` | `dirs` |
 | [`fs-test`](fs-test/README.md) | test helpers for `fs`: `scratchDir()`, and `symlinkTo`, `hardLinkTo`, `chmod` and `mkfifo` failing with `fs`'s `FileError` | `fs`, `result-test` |
-| [`fs-coroutines`](fs-coroutines/README.md) | `awaitLock`: the `fs` file lock, waiting by suspending instead of blocking the thread; `changes()`: a flow of a file's `info()` each time it changes | `fs`, coroutines |
+| [`fs-coroutines`](fs-coroutines/README.md) | `awaitLock`: the `fs` file lock, waiting by suspending instead of blocking the thread; `changes()` and `textChanges()`: a flow of a file's `info()` or text each time it changes, by the system's watch, a lookup on a timer, or for `/proc` and `/sys` a read on a timer | `fs`, coroutines |
 | [`process`](process/README.md) | `onShutdownRequest` or `stopOnShutdownRequest`: a handler, or a flag your loop polls, for Ctrl-C, `SIGTERM` and `SIGHUP`, then the shell's 128+N exit code | `result` |
 | [`process-test`](process-test/README.md) | `FakeShutdownSource`: sends a shutdown request to your handler or stop in a test and records the exit code, without exiting | `process` |
 | [`fuzzy`](fuzzy/README.md) | `didYouMean`: the name someone most likely meant by a word that is not one, and `editDistance` | nothing |

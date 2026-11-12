@@ -133,6 +133,7 @@ The table gives the short meaning of each case. Details, below the table, has th
 | `ChangedSince(path)` | a write given `unchangedSince` found the file changed since its stamp, and wrote nothing |
 | `OutputClash(path, firstRelative: Path)` | two entries of a `mirrorTo` source go to one output |
 | `MirrorOverlap(path, dst: Path)` | `mirrorTo` was asked to mirror a folder into itself or into a folder above it |
+| `Unwatchable(path, fileSystem: PseudoFileSystem)` | a watch in `kern:fs-coroutines` was asked of a procfs or sysfs file, which no watch can follow |
 | `RestoreFailed(path, cause: IoCause, exception: Throwable?, backup: Path?, at: FailedAt?)` | a write failed and undoing it failed too, so the file is damaged |
 
 #### Details
@@ -209,6 +210,9 @@ The table gives the short meaning of each case. Details, below the table, has th
 - `FolderReplaced`: the root of the `Writer`, at its real path, was moved or deleted, or another folder or a link
   stands there now. What a build whose folder is replaced leaves is in
   [Build a folder whole](writer.md#build-a-folder-whole).
+- `Unwatchable`: the file is on procfs or sysfs, `PseudoFileSystem.Proc` or `Sys`, whose files keep their size and
+  times while their text moves. `changes()` and `textChanges()` under a `Watch` answer it once and end. Read such a
+  file with `TextWatch.Read` instead.
 - `InvalidRelativePath`: the name is no relative path below `folder`, as `relativePathProblem()` says. It is also
   what a call that makes an entry answers for a name shaped like a leftover, `LeftoverName`.
 - The `path` of `InvalidRelativePath` is `folder`. Nothing was looked up or done.

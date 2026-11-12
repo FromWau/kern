@@ -169,6 +169,7 @@ internal fun FileError.placedAs(
         is FileError.Closed -> copy(path = moved(path))
         is FileError.MirrorOverlap -> copy(path = moved(path), dst = moved(dst))
         is FileError.FolderReplaced -> this
+        is FileError.Unwatchable -> copy(path = moved(path))
         is FileError.InvalidRelativePath -> copy(folder = moved(folder))
         is FileError.PendingBackup -> copy(path = moved(path))
         is FileError.ChangedSince -> copy(path = moved(path))

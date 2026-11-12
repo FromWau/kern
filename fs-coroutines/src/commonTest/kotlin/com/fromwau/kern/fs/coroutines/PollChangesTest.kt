@@ -36,7 +36,7 @@ class PollChangesTest {
     }
 
     private fun TestScope.answers(): ReceiveChannel<Result<FileInfo, FileError>> {
-        val answers = file.pollChanges(every).produceIn(backgroundScope)
+        val answers = file.changes(Watch.Poll(every)).produceIn(backgroundScope)
         runCurrent()
         return answers
     }
@@ -96,7 +96,7 @@ class PollChangesTest {
 
     @Test
     fun `an every that is not positive is refused`() {
-        assertFailsWith<IllegalArgumentException> { val _ = file.pollChanges(Duration.ZERO) }
-        assertFailsWith<IllegalArgumentException> { val _ = file.pollChanges(-every) }
+        assertFailsWith<IllegalArgumentException> { val _ = Watch.Poll(Duration.ZERO) }
+        assertFailsWith<IllegalArgumentException> { val _ = Watch.Poll(-every) }
     }
 }

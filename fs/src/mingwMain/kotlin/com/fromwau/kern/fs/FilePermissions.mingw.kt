@@ -20,3 +20,6 @@ internal actual fun copyGroup(
 
 // A Windows folder takes its access rules from the folder it is made in.
 internal actual fun restrictToOwner(path: Path) = Unit
+
+// Windows has no execute bit: what runs is decided by the file's extension.
+internal actual fun mayExecuteAt(path: Path): Boolean = true

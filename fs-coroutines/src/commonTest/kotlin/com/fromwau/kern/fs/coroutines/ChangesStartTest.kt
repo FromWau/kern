@@ -49,7 +49,7 @@ class ChangesStartTest {
         config.writeText("a = 1").assertSuccess()
 
         runBlocking {
-            launch(start = CoroutineStart.UNDISPATCHED) { config.changes().collect { load(it) } }
+            launch(start = CoroutineStart.UNDISPATCHED) { config.changes(Watch.System()).collect { load(it) } }
             serve()
         }
 

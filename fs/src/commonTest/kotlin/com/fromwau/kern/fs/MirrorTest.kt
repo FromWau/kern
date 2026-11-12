@@ -12,14 +12,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 
+@OptIn(InternalKernApi::class)
 class MirrorTest {
     private val dir = newTempDir()
     private val links = TestLinks()
     private val root = dir / "root"
     private val dst = dir / "dst"
+
+    /** A modification time no file written by a test has, for an output that must not look current. */
+    private val longAgo = Instant.parse("2001-02-03T04:05:06Z")
 
     @AfterTest
     fun cleanUp() {
@@ -138,6 +143,7 @@ class MirrorTest {
         root.makeFolders()
         (root / "a.txt").writeRaw("new")
         (dst.makeFolders() / "a.txt").writeRaw("old")
+        setLastModified(dst / "a.txt", longAgo)
         val backup = ".a.txt.$A_WRITE_ID.bak"
         (dst / backup).writeRaw("older")
 
@@ -154,6 +160,7 @@ class MirrorTest {
         root.makeFolders()
         (root / "a.txt").writeRaw("new")
         (dst.makeFolders() / "a.txt").writeRaw("old")
+        setLastModified(dst / "a.txt", longAgo)
         (dst / "gone.txt").writeRaw("gone")
         val temp = ".a.txt.$A_WRITE_ID.tmp"
         (dst / temp).writeRaw("half")
@@ -1320,6 +1327,7 @@ class MirrorTest {
         links.make(root / "a-link", Path("sub"))
         (dst / "sub").makeFolders()
         (dst / "sub" / "s.txt").writeRaw("old")
+        setLastModified(dst / "sub" / "s.txt", longAgo)
 
         val report = root.mirrorTo(out(), symlinks = Symlinks.Inside).assertSuccess()
 

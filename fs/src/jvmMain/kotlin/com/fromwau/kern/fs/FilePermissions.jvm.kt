@@ -12,6 +12,11 @@ internal actual fun permissionBits(path: Path): Int? = posixView(path)
     ?.permissions()
     ?.sumOf { it.bit }
 
+// Files.isExecutable asks access(2) where there are posix permissions. Windows has no execute bit, so there any file
+// may run as far as kern can say, and its extension decides.
+internal actual fun mayExecuteAt(path: Path): Boolean =
+    !hasPosixView || Files.isExecutable(NioPath.of(path.toString()))
+
 internal actual fun setFilePermissions(
     path: Path,
     bits: Int,

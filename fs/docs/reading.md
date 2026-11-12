@@ -28,6 +28,8 @@ fun Path.fileSize(): Result<Long, FileError>
 fun Path.modifiedAt(): Result<Instant, FileError>
 fun Path.permissions(): Result<Permissions?, FileError>
 fun Path.info(): Result<FileInfo, FileError.LookupError>
+fun Path.mayExecute(): Result<Boolean, FileError.LookupError>
+fun currentUserId(): Long?
 fun Path.isSymlink(): Result<Boolean, FileError>
 fun Path.realPath(): Result<Path, FileError.LookupError>
 inline fun <S, E : FileError> Result<S, E>.orIfNotFound(value: () -> S): Result<S, E>
@@ -118,6 +120,19 @@ moves on every write.
 
 `changedAt` is null on Windows, and on the JVM without unix attributes. There size and time are all there is.
 
+### Find a command on PATH
+
+```kotlin
+val grim = pathFolders
+    .map { folder -> folder / "grim" }
+    .firstOrNull { it.mayExecute().getOrNull() == true }
+```
+
+`pathFolders` is `PATH` split at its `:`, each part a `Path`.
+
+`mayExecute()` asks the system, as `access` with `X_OK` does. So the group you are in, an ACL and a `noexec` mount
+count, which `permissions().anyExecute` gets wrong. A folder answers `false`, and a missing file is `NotFound`.
+
 ### Record what a read loaded
 
 ```kotlin
@@ -156,11 +171,12 @@ It reads the config at once. It reads it again each time its `info()` changes, o
 This example reads with `trusted = true`. It keeps what was loaded last while the config is missing or unsafe:
 
 ```kotlin
+import com.fromwau.kern.fs.coroutines.Watch
 import com.fromwau.kern.fs.coroutines.textChanges
 
 /** Loads [config] now and each time its text changes, for as long as the calling coroutine runs. */
 suspend fun watchConfig(config: Path, load: (String) -> Unit) {
-    config.textChanges(maxBytes = 1_048_576, trusted = true).collect { change ->
+    config.textChanges(maxBytes = 1_048_576, trusted = true, watch = Watch.System()).collect { change ->
         change.onSuccess(load).onError { failure ->
             when (failure) {
                 is FileError.NotFound -> println("$config is not there, so nothing new is loaded")
@@ -204,6 +220,19 @@ on a platform.
 - No owner comes with it, so the bits alone cannot tell whether another user may write. `info().ownedByMe` says
   whether you own it.
 - It is null on Windows, native or JVM, where who may read comes from the folder's access rules.
+- `mayExecute()` asks `access` on Linux and Apple, `Os.access` on Android and `Files.isExecutable` on the JVM, which
+  asks `access` on Linux and macOS. It judges as the real user, which differs from the effective one only in a setuid
+  program.
+- `mayExecute()` is `true` for root on any regular file with an execute bit, as the system lets root run it.
+- `mayExecute()` is `false` for anything but a regular file, a folder included, since only a file runs.
+- On Windows, native or JVM, `mayExecute()` is `true` for any regular file. Windows has no execute bit, and the
+  file's extension decides what runs.
+- `currentUserId()` is the effective uid, the user `ownedByMe` compares the owner with. It is what D-Bus `EXTERNAL`
+  authentication and a polkit `unix-user` subject ask for.
+- `currentUserId()` is `geteuid` on Linux and Apple and `Os.geteuid` on Android. The JVM asks the JDK's `UnixSystem`
+  once per process, which reads `getuid`, the same uid unless the JVM was started setuid; it is null on a JVM
+  without the `jdk.security.auth` module.
+- `currentUserId()` is null on Windows, native or JVM, where a user is a SID rather than a number.
 
 **`info()` by platform:**
 
