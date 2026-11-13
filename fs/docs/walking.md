@@ -22,7 +22,7 @@ fun Path.mirrorTo(
     approveRemovals: (plan: RemovalPlan) -> List<Removal> = { it.defaultApproved() },
     outputOf: (relative: Path) -> String = { /* its names joined by `/` */ },
     isCurrent: (source: WalkEntry.File, existing: FileInfo) -> Boolean = { source, existing ->
-        existing.size == source.size && existing.modifiedAt == source.modifiedAt
+        /* size and modification time match, and the copy was made at least 2 s after the source changed */
     },
     copy: (source: WalkEntry.File, out: Writer, name: String) -> EmptyResult<FileError> = { source, out, name ->
         out.copyFrom(source.path, name, keepAttributes = true).map { }
@@ -446,7 +446,10 @@ and types, never what a file holds.
 
 - Each folder is made in walk order, so an empty one is copied too.
 - A file is left alone when a regular file at its output is current, as `isCurrent` answers. By default that is when
-  size and modification time match.
+  size and modification time match and the copy was made at least 2 s after the source last changed.
+- A file system that keeps times in whole seconds, or FAT's 2 s, gives a same-size edit made within that step the time
+  the copy already has. So a source changed within 2 s of its copy is copied again, once, since the new copy is later.
+- Windows does not say when a copy was made, so there size and modification time alone decide.
 - `isCurrent` is never asked about a symlink or anything else at the output.
 - Every other file goes through `copy`. By default that is `Writer.copyFrom` with `keepAttributes`.
 - That copy is renamed into place, so a hard link in `dst` is cut rather than written through. The next run finds the

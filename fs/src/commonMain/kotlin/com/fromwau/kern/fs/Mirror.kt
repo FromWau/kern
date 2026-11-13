@@ -8,6 +8,7 @@ import com.fromwau.kern.result.getOrNull
 import com.fromwau.kern.result.map
 import com.fromwau.kern.result.onError
 import kotlinx.io.files.Path
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Makes [dst] hold what this folder holds: every folder and file the walk of this folder yields is made or copied into
@@ -87,7 +88,10 @@ import kotlinx.io.files.Path
  * @param isCurrent whether the regular file already at a file's output is current, so it is left alone and listed as
  *   [MirrorReport.unchanged]. It is asked only when a regular file is there, never about a symlink or anything else.
  *   By default a file is current when its size and modification time match the source's, as a copy with
- *   `keepAttributes` leaves them.
+ *   `keepAttributes` leaves them, and the copy was made at least 2 s after the source last changed. A file system that
+ *   keeps times in whole seconds, or FAT's 2 s, gives a same-size edit made within that step the time the copy has,
+ *   so such a file is copied again; once, since the new copy is made later. Windows does not say when a copy was
+ *   made, so there the size and time alone decide.
  * @param copy writes a file to the output `name` through `out`, which is [dst]. By default it is [Writer.copyFrom]
  *   with `keepAttributes`, so a hard link at the name is cut, never written through. A symlink there is removed
  *   before it is asked, as what stands in the way. What it throws ends the mirror.
@@ -106,7 +110,7 @@ public fun Path.mirrorTo(
     approveRemovals: (plan: RemovalPlan) -> List<Removal> = { it.defaultApproved() },
     outputOf: (relative: Path) -> String = { it.writerName() },
     isCurrent: (source: WalkEntry.File, existing: FileInfo) -> Boolean = { source, existing ->
-        existing.size == source.size && existing.modifiedAt == source.modifiedAt
+        existing.size == source.size && existing.modifiedAt == source.modifiedAt && !existing.mayHideEditOf(source)
     },
     copy: (source: WalkEntry.File, out: Writer, name: String) -> EmptyResult<FileError> = { source, out, name ->
         out.copyFrom(source.path, name, keepAttributes = true).map { }
@@ -749,4 +753,13 @@ private fun Writer.isCurrentAt(
 ): Boolean {
     val existing = info(name).getOrNull() ?: return false
     return isCurrent(source, existing)
+}
+
+/** How close to its source's modification time a copy may be made before a matching time stops proving it current. */
+private val COARSEST_TIME_STEP = 2.seconds
+
+/** Whether a same-size edit of [source] could keep the time this copy has, as on a file system with coarse times. */
+private fun FileInfo.mayHideEditOf(source: WalkEntry.File): Boolean {
+    val madeAt = changedAt ?: return false
+    return madeAt - source.modifiedAt < COARSEST_TIME_STEP
 }

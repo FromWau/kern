@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -25,6 +26,9 @@ class MirrorTest {
 
     /** A modification time no file written by a test has, for an output that must not look current. */
     private val longAgo = Instant.parse("2001-02-03T04:05:06Z")
+
+    /** This file, last changed long before any copy of it, so a copy matching its size and time is current. */
+    private fun Path.untouchedSince(): Path = also { setLastModified(it, longAgo) }
 
     @AfterTest
     fun cleanUp() {
@@ -54,7 +58,7 @@ class MirrorTest {
     @Test
     fun `an outputOf rename lists the source path and its output in copied and then in unchanged`() {
         root.makeFolders()
-        (root / "a.md").writeRaw("a")
+        (root / "a.md").writeRaw("a").untouchedSince()
 
         val first = root.mirrorTo(out(), outputOf = ::html).assertSuccess()
         val second = root.mirrorTo(out(), outputOf = ::html).assertSuccess()
@@ -79,8 +83,26 @@ class MirrorTest {
     }
 
     @Test
+    fun `a same-size edit with the time the copy has is copied again when the copy was made within 2 s of it`() {
+        // Whole seconds, as a file system keeping only those leaves both writes within one second.
+        val second = Instant.fromEpochSeconds(Clock.System.now().epochSeconds)
+        val source = (root.makeFolders() / "a.txt").writeRaw("a = 1")
+        setLastModified(source, second)
+        root.mirrorTo(out()).assertSuccess()
+        // Windows keeps no time of the copy's making, so there the quick check alone decides.
+        if ((dst / "a.txt").info().assertSuccess().changedAt == null) return
+        source.writeRaw("a = 2")
+        setLastModified(source, second)
+
+        val report = root.mirrorTo(out()).assertSuccess()
+
+        assertEquals(listOf(mirrored("a.txt")), report.copied)
+        assertEquals("a = 2", (dst / "a.txt").readRaw())
+    }
+
+    @Test
     fun `a source file made unreadable with its size and time unchanged is current and keeps its old output`() {
-        val asset = (root.makeFolders() / "logo.png").writeRaw("png")
+        val asset = (root.makeFolders() / "logo.png").writeRaw("png").untouchedSince()
         root.mirrorTo(out()).assertSuccess()
 
         // Skipped where a file at mode 000 can still be read, as for root, which leaves nothing to observe.
@@ -574,7 +596,7 @@ class MirrorTest {
     fun `a mirror under AsLinks leaves a link with the same target alone and lists it unchanged`() {
         root.makeFolders()
         links.make(root / "current", Path("a.txt"))
-        (root / "a.txt").writeRaw("a")
+        (root / "a.txt").writeRaw("a").untouchedSince()
         root.mirrorTo(out(), symlinks = Symlinks.AsLinks).assertSuccess()
 
         val report = root.mirrorTo(out(), symlinks = Symlinks.AsLinks).assertSuccess()
@@ -855,7 +877,7 @@ class MirrorTest {
     @Test
     fun `two entries with one output are copied once and the later one is an OutputClash on every run`() {
         root.makeFolders()
-        (root / "x.html").writeRaw("html")
+        (root / "x.html").writeRaw("html").untouchedSince()
         (root / "x.md").writeRaw("md")
         val clash = WalkFailure(root / "x.md", Path("x.md"), FileError.OutputClash(dst / "x.html", Path("x.html")))
 
