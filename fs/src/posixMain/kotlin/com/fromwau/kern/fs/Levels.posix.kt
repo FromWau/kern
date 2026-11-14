@@ -19,6 +19,7 @@ import platform.posix.O_CLOEXEC
 import platform.posix.O_DIRECTORY
 import platform.posix.O_NOFOLLOW
 import platform.posix.O_RDONLY
+import platform.posix.W_OK
 import platform.posix.close
 import platform.posix.closedir
 import platform.posix.dup
@@ -73,6 +74,10 @@ private class DescriptorLevel(
         permissions: Int?,
         newMode: Int,
     ): FileSink = openSinkAt(opening(name), append, permissions, newMode)
+
+    override fun checkWritable(name: String) {
+        if (accessAt(descriptor, name, W_OK) != 0) throw errnoFailure(about = pathOf(name))
+    }
 
     override fun createHeldFile(
         name: String,

@@ -26,6 +26,12 @@ internal interface WriteFolder {
         newMode: Int = NEW_FILE_MODE,
     ): FileSink
 
+    /** [checkWritable] of [name]. */
+    fun checkWritable(name: String)
+
+    /** [info] of what is at [name] itself, a link there described as the link. */
+    fun infoOf(name: String): FileInfo
+
     /** [createHeldFile] of [name], which [HeldFile.moveTo] renames within this folder. */
     fun createHeldFile(
         name: String,
@@ -111,6 +117,12 @@ internal class PathFolder(
         permissions: Int?,
         newMode: Int,
     ): FileSink = openFileSink(pathOf(name), append, permissions, followLinks, newMode)
+
+    override fun checkWritable(name: String) {
+        checkWritable(pathOf(name))
+    }
+
+    override fun infoOf(name: String): FileInfo = ownFileInfoAt(pathOf(name))
 
     override fun createHeldFile(
         name: String,

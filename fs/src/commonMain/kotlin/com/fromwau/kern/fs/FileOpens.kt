@@ -47,6 +47,12 @@ internal expect fun openFileSink(
     newMode: Int = NEW_FILE_MODE,
 ): FileSink
 
+/**
+ * Throws what an open of [path] for writing would throw, following a link, without opening it: closing a file opened
+ * for writing tells a watcher it was written, even when nothing was.
+ */
+internal expect fun checkWritable(path: Path)
+
 /** A sink on one file, as [openFileSink] opens it, that can also set that file's modification time and mode. */
 internal interface FileSink : RawSink {
     /** Sets the file's modification time to [time], to the precision the file system keeps. */

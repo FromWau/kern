@@ -7,9 +7,11 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.convert
+import platform.posix.AT_EACCESS
 import platform.posix.AT_FDCWD
 import platform.posix.AT_REMOVEDIR
 import platform.posix.AT_SYMLINK_NOFOLLOW
+import platform.posix.faccessat
 import platform.posix.fchownat
 import platform.posix.fstatat
 import platform.posix.mkdirat
@@ -20,6 +22,12 @@ import platform.posix.symlinkat
 import platform.posix.unlinkat
 
 internal actual val WORKING_DIRECTORY: Int = AT_FDCWD
+
+internal actual fun accessAt(
+    folder: Int,
+    name: String,
+    mode: Int,
+): Int = faccessat(folder, name, mode, AT_EACCESS)
 
 internal actual fun statusAt(
     folder: Int,

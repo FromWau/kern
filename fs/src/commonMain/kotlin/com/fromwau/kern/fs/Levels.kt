@@ -23,9 +23,6 @@ internal interface Level : WriteFolder, AutoCloseable {
     /** What is at [name] itself, a link being [FileType.Symlink], or null when nothing is. */
     fun typeOf(name: String): FileType?
 
-    /** [info] of what is at [name] itself, a link there described as the link. */
-    fun infoOf(name: String): FileInfo
-
     /** The folder at [name], never through a link; [LevelMoved] when no folder is there by now. */
     fun child(name: String): Level
 
@@ -100,8 +97,6 @@ internal class PathLevel(override val path: Path) :
     override fun key(): Any? = fileKeyOrNull(path)
 
     override fun typeOf(name: String): FileType? = ownFileTypeAt(pathOf(name))
-
-    override fun infoOf(name: String): FileInfo = ownFileInfoAt(pathOf(name))
 
     override fun child(name: String): Level {
         val folder = pathOf(name)

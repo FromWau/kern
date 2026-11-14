@@ -7,6 +7,7 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
+import platform.linux.SYS_faccessat
 import platform.linux.SYS_fchownat
 import platform.linux.SYS_mkdirat
 import platform.linux.SYS_openat
@@ -14,9 +15,11 @@ import platform.linux.SYS_readlinkat
 import platform.linux.SYS_renameat2
 import platform.linux.SYS_symlinkat
 import platform.linux.SYS_unlinkat
+import platform.posix.ENOSYS
 import platform.posix.O_CLOEXEC
 import platform.posix.O_NOFOLLOW
 import platform.posix.close
+import platform.posix.errno
 import platform.posix.fstat
 import platform.posix.stat
 import platform.posix.syscall
@@ -30,6 +33,21 @@ internal actual fun openAt(
     mode: Int,
 ): Int = memScoped {
     syscall(SYS_openat.toLong(), folder.toLong(), name.cstr.ptr, flags.toLong(), mode.toLong()).toInt()
+}
+
+// faccessat2 came with Linux 5.8, the same number on x86_64 and aarch64, and is the one that takes AT_EACCESS. An older
+// kernel has only faccessat, which asks as the real user: the same one but in a setuid program.
+private const val SYS_FACCESSAT2 = 439L
+private const val AT_EACCESS = 0x200L
+
+internal actual fun accessAt(
+    folder: Int,
+    name: String,
+    mode: Int,
+): Int = memScoped {
+    val asked = syscall(SYS_FACCESSAT2, folder.toLong(), name.cstr.ptr, mode.toLong(), AT_EACCESS).toInt()
+    if (asked == 0 || errno != ENOSYS) return@memScoped asked
+    syscall(SYS_faccessat.toLong(), folder.toLong(), name.cstr.ptr, mode.toLong()).toInt()
 }
 
 // fstat of an O_PATH open, which stays on a link: calling newfstatat directly would tie kern to one struct stat layout.

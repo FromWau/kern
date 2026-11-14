@@ -172,3 +172,8 @@ private class PathFile(
         CloseHandle(handle)
     }
 }
+
+// An open that writes nothing leaves the last write time as it was, which is all a watcher on Windows is told of.
+internal actual fun checkWritable(path: Path) {
+    openFileSink(path, append = true).close()
+}

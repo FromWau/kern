@@ -397,13 +397,14 @@ internal class WritePlan(
                 // A rename never opens the file, so without this it would replace one this process may not touch.
                 failingAt(FailedAt.LinkTarget(target)) {
                     folder.openSource(name).close()
-                    folder.openSink(name, append = true).close()
+                    folder.checkWritable(name)
                 }
             }
             // Empty until it has the file's group and permissions.
             val made = failingAt(FailedAt.Temp(temp)) {
                 folder.createHeldFile(temp.name, OWNER_READ_WRITE.takeIf { ownerOnly }, newFileMode)
             }
+            var ready = false
             val lost = made.use { copy ->
                 val groupKept = !existed || folder.copyGroup(name, temp.name)
                 var lost = if (groupKept) null else AtomicRefusal.GroupNotKept
@@ -430,15 +431,20 @@ internal class WritePlan(
                         .use(content)
                     modified?.let { copy.setModifiedTime(it) }
                     copy.sync()
-                    changed = target.changedSince(unchangedSince)
-                    if (!changed) {
-                        failingAt(FailedAt.Temp(temp)) { copy.moveTo(target) }
-                        // Read after the rename, which moves the file's changedAt on most file systems.
-                        written = failingAt(FailedAt.LinkTarget(target)) { copy.info() }
-                    }
+                    ready = true
                     null
                 } else {
                     lost
+                }
+            }
+            // Renamed once closed, as an atomic save does: a copy closed under the file's name tells whoever watches
+            // that name it was written again.
+            if (ready) {
+                changed = target.changedSince(unchangedSince)
+                if (!changed) {
+                    failingAt(FailedAt.Temp(temp)) { folder.rename(temp.name, name) }
+                    // Read after the rename, which moves the file's changedAt on most file systems.
+                    written = failingAt(FailedAt.LinkTarget(target)) { folder.infoOf(name) }
                 }
             }
             if (lost != null) {

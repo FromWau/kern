@@ -31,6 +31,7 @@ import platform.posix.O_NONBLOCK
 import platform.posix.O_RDONLY
 import platform.posix.O_RDWR
 import platform.posix.O_WRONLY
+import platform.posix.W_OK
 import platform.posix.close
 import platform.posix.errno
 import platform.posix.fcntl
@@ -398,4 +399,8 @@ private class DescriptorSink(
         closed = true
         onClose()
     }
+}
+
+internal actual fun checkWritable(path: Path) {
+    if (accessAt(WORKING_DIRECTORY, path.toString(), W_OK) != 0) throw errnoFailure(about = path)
 }

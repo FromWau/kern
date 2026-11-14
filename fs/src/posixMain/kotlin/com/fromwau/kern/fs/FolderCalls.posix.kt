@@ -21,6 +21,13 @@ internal expect fun openAt(
     mode: Int,
 ): Int
 
+/** `faccessat` of [name] in [folder] for [mode], such as `W_OK`, asked as the effective user, a link followed. */
+internal expect fun accessAt(
+    folder: Int,
+    name: String,
+    mode: Int,
+): Int
+
 /** The status of [name] itself in [folder], a link at it never followed, read into [into]. */
 internal expect fun statusAt(
     folder: Int,

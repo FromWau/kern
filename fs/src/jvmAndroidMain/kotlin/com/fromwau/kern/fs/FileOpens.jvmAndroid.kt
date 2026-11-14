@@ -13,6 +13,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
+import java.nio.file.AccessMode
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Paths
@@ -102,6 +103,11 @@ internal actual fun openFileSink(
         throw e
     }
     return PathSink(path, Channels.newOutputStream(channel).asSink())
+}
+
+internal actual fun checkWritable(path: Path) {
+    val nio = Paths.get(path.toString())
+    nio.fileSystem.provider().checkAccess(nio, AccessMode.WRITE)
 }
 
 private class PathSink(

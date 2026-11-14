@@ -28,7 +28,9 @@ class MirrorTest {
     private val longAgo = Instant.parse("2001-02-03T04:05:06Z")
 
     /** This file, last changed long before any copy of it, so a copy matching its size and time is current. */
-    private fun Path.untouchedSince(): Path = also { setLastModified(it, longAgo) }
+    private fun Path.untouchedSince() {
+        setLastModified(this, longAgo)
+    }
 
     @AfterTest
     fun cleanUp() {
@@ -102,7 +104,8 @@ class MirrorTest {
 
     @Test
     fun `a source file made unreadable with its size and time unchanged is current and keeps its old output`() {
-        val asset = (root.makeFolders() / "logo.png").writeRaw("png").untouchedSince()
+        val asset = (root.makeFolders() / "logo.png").writeRaw("png")
+        asset.untouchedSince()
         root.mirrorTo(out()).assertSuccess()
 
         // Skipped where a file at mode 000 can still be read, as for root, which leaves nothing to observe.

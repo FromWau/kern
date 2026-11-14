@@ -392,6 +392,10 @@ class FilesLinuxTest {
         assertReadOnlyRefused { it.writeText("new", WriteMode.Replace) }
 
     @Test
+    fun `a Writer write onto a read-only file is WriteFailed for Denied and leaves it intact`() =
+        assertReadOnlyRefused { file -> checkNotNull(file.parent).writer().assertSuccess().writeText(file.name, "new") }
+
+    @Test
     fun `copyTo onto a read-only file is WriteFailed for Denied and leaves it intact`() =
         assertReadOnlyRefused { target -> (dir / "source.toml").writeRaw("new").copyTo(target) }
 

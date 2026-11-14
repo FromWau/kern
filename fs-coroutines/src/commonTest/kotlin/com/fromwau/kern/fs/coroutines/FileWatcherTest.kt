@@ -76,6 +76,18 @@ class FileWatcherTest {
     }
 
     @Test
+    fun `a writeText by rename gives one answer with the new info and no repeat of the old`() {
+        file.writeText("a = 1").assertSuccess()
+
+        answering(watcher.changes) {
+            assertEquals(5, receive().assertSuccess().size)
+            file.writeText("a = 10").assertSuccess()
+            assertEquals(6, receive().assertSuccess().size)
+            assertNull(quietFor())
+        }
+    }
+
+    @Test
     fun `a watched folder's mode changing answers the same info again but not in metadata`() {
         if (dir.permissions().assertSuccess() == null) return
         file.writeText("a = 1").assertSuccess()
