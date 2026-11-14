@@ -857,6 +857,8 @@ private object UnreadableFile : HeldFile {
 
     override fun sync() = Unit
 
+    override fun keepForReading() = Unit
+
     override fun info(): FileInfo = throw IOException("not readable")
 
     override fun close() = Unit

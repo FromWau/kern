@@ -49,7 +49,8 @@ internal expect fun openFileSink(
 
 /**
  * Throws what an open of [path] for writing would throw, following a link, without opening it: closing a file opened
- * for writing tells a watcher it was written, even when nothing was.
+ * for writing tells a watcher it was written, even when nothing was. On a FUSE file system it does open it, since one
+ * mounted without `default_permissions`, as sshfs is, says yes to every such question and only an open asks its server.
  */
 internal expect fun checkWritable(path: Path)
 
@@ -115,6 +116,12 @@ internal interface HeldFile : AutoCloseable {
 
     /** Forces what was written to disk. */
     fun sync()
+
+    /**
+     * Closes the file for writing and keeps it open for reading. Closing a file opened for writing tells whoever
+     * watches its name that it was written, so this comes before a [moveTo] that gives it a watched name.
+     */
+    fun keepForReading()
 
     /** What the held file is, as [FileSource.info] reads it, from the file itself where the platform can. */
     fun info(): FileInfo

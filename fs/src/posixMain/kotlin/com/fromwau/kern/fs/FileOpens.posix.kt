@@ -268,7 +268,7 @@ internal expect fun setDescriptorPermissionBits(
  */
 private class DescriptorFile(
     private var path: Path,
-    private val descriptor: Int,
+    private var descriptor: Int,
     private val folder: Int,
 ) : HeldFile {
     private var closed = false
@@ -302,6 +302,15 @@ private class DescriptorFile(
 
     override fun sync() {
         if (fsync(descriptor) != 0) throw errnoFailure(about = path)
+    }
+
+    override fun keepForReading() {
+        val name = if (folder == WORKING_DIRECTORY) path.toString() else path.name
+        val reading = openAt(folder, name, O_RDONLY or O_NOFOLLOW or O_CLOEXEC, 0)
+        if (reading < 0) throw errnoFailure(about = path)
+        val writing = descriptor
+        descriptor = reading
+        if (close(writing) != 0) throw errnoFailure(about = path)
     }
 
     override fun info(): FileInfo = fileInfoOf(descriptor, path)
@@ -402,5 +411,15 @@ private class DescriptorSink(
 }
 
 internal actual fun checkWritable(path: Path) {
+    if (isOnFuse(WORKING_DIRECTORY, path)) return openFileSink(path, append = true).close()
     if (accessAt(WORKING_DIRECTORY, path.toString(), W_OK) != 0) throw errnoFailure(about = path)
+}
+
+internal actual fun renameOver(
+    from: Path,
+    to: Path,
+) {
+    if (renameAt(WORKING_DIRECTORY, from.toString(), WORKING_DIRECTORY, to.toString()) != 0) {
+        throw errnoFailure(about = from)
+    }
 }

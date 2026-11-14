@@ -8,6 +8,7 @@ import com.fromwau.kern.result.getOrNull
 import com.fromwau.kern.result.map
 import com.fromwau.kern.result.onError
 import kotlinx.io.files.Path
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -758,8 +759,11 @@ private fun Writer.isCurrentAt(
 /** How close to its source's modification time a copy may be made before a matching time stops proving it current. */
 private val COARSEST_TIME_STEP = 2.seconds
 
-/** Whether a same-size edit of [source] could keep the time this copy has, as on a file system with coarse times. */
+/**
+ * Whether a same-size edit of [source] could keep the time this copy has, as on a file system with coarse times. A copy
+ * made before its source's time, as for a source dated by a clock ahead of this one, tells nothing of the sort.
+ */
 private fun FileInfo.mayHideEditOf(source: WalkEntry.File): Boolean {
     val madeAt = changedAt ?: return false
-    return madeAt - source.modifiedAt < COARSEST_TIME_STEP
+    return madeAt - source.modifiedAt in Duration.ZERO..<COARSEST_TIME_STEP
 }

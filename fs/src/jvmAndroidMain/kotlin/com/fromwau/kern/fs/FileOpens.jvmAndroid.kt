@@ -107,7 +107,15 @@ internal actual fun openFileSink(
 
 internal actual fun checkWritable(path: Path) {
     val nio = Paths.get(path.toString())
+    if (isOnFuse(nio)) return openFileSink(path, append = true).close()
     nio.fileSystem.provider().checkAccess(nio, AccessMode.WRITE)
+}
+
+/** Whether [path] is on a FUSE file system, whose store type Linux reports as `fuse` or `fuse.<name>`. */
+private fun isOnFuse(path: java.nio.file.Path): Boolean = try {
+    Files.getFileStore(path).type().startsWith("fuse")
+} catch (_: Exception) {
+    false
 }
 
 private class PathSink(
@@ -153,7 +161,7 @@ internal fun creationAttributes(permissions: Int?): Array<FileAttribute<*>> = if
 
 private class ChannelFile(
     private var path: Path,
-    private val channel: FileChannel,
+    private var channel: FileChannel,
 ) : HeldFile {
     override fun moveTo(target: Path) {
         SystemFileSystem.atomicMove(path, target)
@@ -201,8 +209,18 @@ private class ChannelFile(
 
     override fun sync() = channel.force(true)
 
+    override fun keepForReading() {
+        channel.close()
+        channel = FileChannel.open(Paths.get(path.toString()), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+    }
+
     // Read by the held file's own name, the temp it was created as or the name it was moved to.
     override fun info(): FileInfo = fileInfoAt(path)
 
     override fun close() = channel.close()
 }
+
+internal actual fun renameOver(
+    from: Path,
+    to: Path,
+) = SystemFileSystem.atomicMove(from, to)

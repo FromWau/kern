@@ -29,9 +29,6 @@ internal interface WriteFolder {
     /** [checkWritable] of [name]. */
     fun checkWritable(name: String)
 
-    /** [info] of what is at [name] itself, a link there described as the link. */
-    fun infoOf(name: String): FileInfo
-
     /** [createHeldFile] of [name], which [HeldFile.moveTo] renames within this folder. */
     fun createHeldFile(
         name: String,
@@ -122,8 +119,6 @@ internal class PathFolder(
         checkWritable(pathOf(name))
     }
 
-    override fun infoOf(name: String): FileInfo = ownFileInfoAt(pathOf(name))
-
     override fun createHeldFile(
         name: String,
         permissions: Int?,
@@ -146,7 +141,7 @@ internal class PathFolder(
     override fun rename(
         from: String,
         to: String,
-    ) = SystemFileSystem.atomicMove(pathOf(from), pathOf(to))
+    ) = renameOver(pathOf(from), pathOf(to))
 
     override fun delete(name: String) = SystemFileSystem.delete(pathOf(name), mustExist = false)
 
@@ -156,3 +151,9 @@ internal class PathFolder(
 
     override fun sync(): Exception? = syncDirectory(folder ?: Path("."))
 }
+
+/** Renames [from] to [to] in one step, replacing a file at [to], throwing what the platform said. */
+internal expect fun renameOver(
+    from: Path,
+    to: Path,
+)

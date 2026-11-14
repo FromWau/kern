@@ -10,6 +10,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -394,6 +395,25 @@ class FilesLinuxTest {
     @Test
     fun `a Writer write onto a read-only file is WriteFailed for Denied and leaves it intact`() =
         assertReadOnlyRefused { file -> checkNotNull(file.parent).writer().assertSuccess().writeText(file.name, "new") }
+
+    @Test
+    fun `a rename in a folder that may not be written fails Denied naming the file`() {
+        val folder = (dir / "locked").also(::createDirectoriesRaw)
+        (folder / "a").writeRaw("a")
+        folder.setMode(S_IRUSR or S_IXUSR)
+        try {
+            // A runner that may write it anyway, such as root, leaves nothing to observe.
+            if ((folder / "probe").canOpenForWriting()) return
+
+            val failure = assertFails { PathFolder(folder).rename("a", "b") }
+
+            val error = assertIs<Exception>(failure).writeError(folder / "a")
+            assertEquals(IoCause.Denied, assertIs<FileError.WriteFailed>(error).cause)
+            assertEquals("${folder / "a"}: Permission denied", failure.message)
+        } finally {
+            folder.setMode(S_IRWXU)
+        }
+    }
 
     @Test
     fun `copyTo onto a read-only file is WriteFailed for Denied and leaves it intact`() =

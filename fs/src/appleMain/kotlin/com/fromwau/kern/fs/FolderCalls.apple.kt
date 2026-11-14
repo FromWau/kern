@@ -7,6 +7,7 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.UnsafeNumber
 import kotlinx.cinterop.convert
+import kotlinx.io.files.Path
 import platform.posix.AT_EACCESS
 import platform.posix.AT_FDCWD
 import platform.posix.AT_REMOVEDIR
@@ -22,6 +23,12 @@ import platform.posix.symlinkat
 import platform.posix.unlinkat
 
 internal actual val WORKING_DIRECTORY: Int = AT_FDCWD
+
+// Whether macFUSE answers access checks as Linux FUSE does is not verified, so Apple asks as on any file system.
+internal actual fun isOnFuse(
+    folder: Int,
+    path: Path,
+): Boolean = false
 
 internal actual fun accessAt(
     folder: Int,

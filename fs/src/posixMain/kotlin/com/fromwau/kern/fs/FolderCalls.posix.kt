@@ -5,6 +5,7 @@ package com.fromwau.kern.fs
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.io.files.Path
 import platform.posix.stat
 
 // The calls below act on a name in a folder held open as a descriptor. Each answers as the C call does: 0 or a new
@@ -27,6 +28,12 @@ internal expect fun accessAt(
     name: String,
     mode: Int,
 ): Int
+
+/** Whether [folder] is on a FUSE file system, or [path] when [folder] is [WORKING_DIRECTORY]. */
+internal expect fun isOnFuse(
+    folder: Int,
+    path: Path,
+): Boolean
 
 /** The status of [name] itself in [folder], a link at it never followed, read into [into]. */
 internal expect fun statusAt(

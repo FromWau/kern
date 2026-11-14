@@ -164,6 +164,9 @@ private class PathFile(
         syncFile(path)?.let { throw it }
     }
 
+    // A watcher on Windows is told of the writes, not of a close.
+    override fun keepForReading() = Unit
+
     override fun info(): FileInfo = handleInfo(handle, path)
 
     override fun close() {
@@ -177,3 +180,8 @@ private class PathFile(
 internal actual fun checkWritable(path: Path) {
     openFileSink(path, append = true).close()
 }
+
+internal actual fun renameOver(
+    from: Path,
+    to: Path,
+) = SystemFileSystem.atomicMove(from, to)

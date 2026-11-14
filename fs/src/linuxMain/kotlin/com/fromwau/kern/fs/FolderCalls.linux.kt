@@ -5,8 +5,11 @@ package com.fromwau.kern.fs
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.io.files.Path
 import platform.linux.SYS_faccessat
 import platform.linux.SYS_fchownat
 import platform.linux.SYS_mkdirat
@@ -15,7 +18,10 @@ import platform.linux.SYS_readlinkat
 import platform.linux.SYS_renameat2
 import platform.linux.SYS_symlinkat
 import platform.linux.SYS_unlinkat
+import platform.linux.fstatfs
+import platform.linux.statfs
 import platform.posix.ENOSYS
+import platform.posix.EPERM
 import platform.posix.O_CLOEXEC
 import platform.posix.O_NOFOLLOW
 import platform.posix.close
@@ -36,7 +42,8 @@ internal actual fun openAt(
 }
 
 // faccessat2 came with Linux 5.8, the same number on x86_64 and aarch64, and is the one that takes AT_EACCESS. An older
-// kernel has only faccessat, which asks as the real user: the same one but in a setuid program.
+// kernel has only faccessat, which asks as the real user, the effective one everywhere but in a setuid program. A
+// container's seccomp filter that predates faccessat2 refuses it with EPERM rather than ENOSYS.
 private const val SYS_FACCESSAT2 = 439L
 private const val AT_EACCESS = 0x200L
 
@@ -46,8 +53,20 @@ internal actual fun accessAt(
     mode: Int,
 ): Int = memScoped {
     val asked = syscall(SYS_FACCESSAT2, folder.toLong(), name.cstr.ptr, mode.toLong(), AT_EACCESS).toInt()
-    if (asked == 0 || errno != ENOSYS) return@memScoped asked
+    if (asked == 0 || errno != ENOSYS && errno != EPERM) return@memScoped asked
     syscall(SYS_faccessat.toLong(), folder.toLong(), name.cstr.ptr, mode.toLong()).toInt()
+}
+
+// statfs's f_type for every FUSE file system.
+private const val FUSE_SUPER_MAGIC = 0x65735546L
+
+internal actual fun isOnFuse(
+    folder: Int,
+    path: Path,
+): Boolean = memScoped {
+    val info = alloc<statfs>()
+    val looked = if (folder == WORKING_DIRECTORY) statfs(path.toString(), info.ptr) else fstatfs(folder, info.ptr)
+    looked == 0 && info.f_type == FUSE_SUPER_MAGIC
 }
 
 // fstat of an O_PATH open, which stays on a link: calling newfstatat directly would tie kern to one struct stat layout.

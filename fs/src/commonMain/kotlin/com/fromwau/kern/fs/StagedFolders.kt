@@ -7,7 +7,6 @@ import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.map
 import kotlin.time.Duration
 import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
 
 /**
  * Builds a new folder at this path in one step, so nobody ever sees it half built. [build] fills a stage folder
@@ -133,7 +132,7 @@ private fun renameReplacing(
     from: Path,
     to: Path,
 ): Exception? = try {
-    SystemFileSystem.atomicMove(from, to)
+    renameOver(from, to)
     null
 } catch (e: Exception) {
     e

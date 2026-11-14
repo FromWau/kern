@@ -76,6 +76,7 @@ private class DescriptorLevel(
     ): FileSink = openSinkAt(opening(name), append, permissions, newMode)
 
     override fun checkWritable(name: String) {
+        if (isOnFuse(descriptor, pathOf(name))) return openSink(name, append = true).close()
         if (accessAt(descriptor, name, W_OK) != 0) throw errnoFailure(about = pathOf(name))
     }
 

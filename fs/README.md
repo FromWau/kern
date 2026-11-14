@@ -245,7 +245,7 @@ fun Path.mirrorTo(
     approveRemovals: (plan: RemovalPlan) -> List<Removal> = { it.defaultApproved() },
     outputOf: (relative: Path) -> String = { /* its names joined by `/` */ },
     isCurrent: (source: WalkEntry.File, existing: FileInfo) -> Boolean = { source, existing ->
-        existing.size == source.size && existing.modifiedAt == source.modifiedAt
+        /* size and modification time match, and the copy was made at least 2 s after the source changed */
     },
     copy: (source: WalkEntry.File, out: Writer, name: String) -> EmptyResult<FileError> = { source, out, name ->
         out.copyFrom(source.path, name, keepAttributes = true).map { }

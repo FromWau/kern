@@ -13,6 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -86,20 +87,33 @@ class MirrorTest {
 
     @Test
     fun `a same-size edit with the time the copy has is copied again when the copy was made within 2 s of it`() {
-        // Whole seconds, as a file system keeping only those leaves both writes within one second.
-        val second = Instant.fromEpochSeconds(Clock.System.now().epochSeconds)
         val source = (root.makeFolders() / "a.txt").writeRaw("a = 1")
-        setLastModified(source, second)
         root.mirrorTo(out()).assertSuccess()
         // Windows keeps no time of the copy's making, so there the quick check alone decides.
         if ((dst / "a.txt").info().assertSuccess().changedAt == null) return
         source.writeRaw("a = 2")
+        // Whole seconds, as a file system keeping only those leaves an edit in the second of its copy. Set on the copy
+        // too, which makes its change time now, so the two stay within one second however slow the run.
+        val second = Instant.fromEpochSeconds(Clock.System.now().epochSeconds)
+        setLastModified(dst / "a.txt", second)
         setLastModified(source, second)
 
         val report = root.mirrorTo(out()).assertSuccess()
 
         assertEquals(listOf(mirrored("a.txt")), report.copied)
         assertEquals("a = 2", (dst / "a.txt").readRaw())
+    }
+
+    @Test
+    fun `a source dated after its copy was made is current on the next run`() {
+        val source = (root.makeFolders() / "a.txt").writeRaw("a")
+        // A clock ahead of this one, as a tar from another machine or `touch -d` leaves it.
+        setLastModified(source, Clock.System.now() + 1.hours)
+        root.mirrorTo(out()).assertSuccess()
+
+        val report = root.mirrorTo(out()).assertSuccess()
+
+        assertEquals(listOf(mirrored("a.txt")), report.unchanged)
     }
 
     @Test
