@@ -7,10 +7,11 @@ import kotlinx.io.files.Path
 
 /**
  * [env] with every value [asRoot], so a relative one reads as unset, and so does a blank one. Each value read as unset
- * that way, or by [privateFolder], is kept in [ignored], once per name, in the order it was first read.
+ * that way, or by [privateFolder] or [rootList], is kept in [ignored], once per name and value, in the order it was
+ * first read.
  */
 internal class CheckedVariables(private val env: (String) -> String?) : (String) -> String? {
-    private val rejected = LinkedHashMap<String, IgnoredVariable>()
+    private val rejected = LinkedHashMap<Pair<String, String>, IgnoredVariable>()
 
     val ignored: List<IgnoredVariable> get() = rejected.values.toList()
 
@@ -32,6 +33,20 @@ internal class CheckedVariables(private val env: (String) -> String?) : (String)
         return if (isPrivate(Path(root))) root else ignore(name, value, IgnoredBecause.NotPrivateFolder)
     }
 
+    /**
+     * The list variable [name] split at `:` into roots, each relative entry dropped and kept in [ignored] on its own
+     * and each blank one or repeat dropped silently; null when it is unset, blank, or leaves no root.
+     */
+    fun rootList(name: String): List<Path>? {
+        val value = valueOf(name) ?: return null
+        val roots = value
+            .split(':')
+            .filter { it.isNotBlank() }
+            .mapNotNull { entry -> entry.asRoot()?.let(::Path) ?: ignore(name, entry, IgnoredBecause.NotAbsolute) }
+            .distinct()
+        return roots.ifEmpty { null }
+    }
+
     /** The variable [name] as set, a blank one read as unset. */
     private fun valueOf(name: String): String? {
         val value = env(name) ?: return null
@@ -43,7 +58,8 @@ internal class CheckedVariables(private val env: (String) -> String?) : (String)
         value: String,
         reason: IgnoredBecause,
     ): Nothing? {
-        if (name !in rejected) rejected[name] = IgnoredVariable(name, value, reason)
+        val key = name to value
+        if (key !in rejected) rejected[key] = IgnoredVariable(name, value, reason)
         return null
     }
 }
@@ -75,8 +91,9 @@ internal fun String.asRoot(): String? = Path(this).takeIf { it.isAbsolute }?.toS
 /**
  * The XDG roots, the one rule every XDG layout resolves by: home from `$HOME`, else [accountHome], the account's own
  * home, asked only without it; [tempHome]; each root from its `XDG_*` variable in [env] when that is set, else under
- * home; and, when [isPrivateFolder] is given, the runtime root from `$XDG_RUNTIME_DIR` when it says only this user may
- * enter the folder it names. The variables are read in that order.
+ * home; when [isPrivateFolder] is given, the runtime root from `$XDG_RUNTIME_DIR` when it says only this user may
+ * enter the folder it names; and the system search lists from `$XDG_DATA_DIRS` and `$XDG_CONFIG_DIRS`, else the
+ * spec's defaults. The variables are read in that order.
  */
 internal fun resolveXdg(
     env: CheckedVariables,
@@ -98,6 +115,8 @@ internal fun resolveXdg(
     val stateHome = root("XDG_STATE_HOME", ".local", "state")
     val cacheHome = root("XDG_CACHE_HOME", ".cache")
     val runtimeHome = isPrivateFolder?.let { env.privateFolder("XDG_RUNTIME_DIR", it) }?.let(::Path)
+    val dataDirs = env.rootList("XDG_DATA_DIRS") ?: listOf(Path("/usr/local/share"), Path("/usr/share"))
+    val configDirs = env.rootList("XDG_CONFIG_DIRS") ?: listOf(Path("/etc/xdg"))
     return Ok(
         BaseDirs(
             home = Path(home),
@@ -107,6 +126,8 @@ internal fun resolveXdg(
             cacheHome = cacheHome,
             tempHome = temp,
             runtimeHome = runtimeHome,
+            dataDirs = dataDirs,
+            configDirs = configDirs,
         ),
     )
 }

@@ -53,6 +53,21 @@ class BaseDirsTest {
     }
 
     @Test
+    fun `forApp appends the app's folder to each system data and config root`() {
+        val system = base.copy(
+            dataDirs = listOf(Path("/usr/local/share"), Path("/usr/share")),
+            configDirs = listOf(Path("/etc/xdg")),
+        )
+
+        val dirs = system.forApp("myapp").assertSuccess()
+        val windows = system.copy(naming = AppNaming.Windows).forApp(barApp).assertSuccess()
+
+        assertEquals(listOf(Path("/usr/local/share/myapp"), Path("/usr/share/myapp")), dirs.dataDirs)
+        assertEquals(listOf(Path("/etc/xdg/myapp")), dirs.configDirs)
+        assertEquals(listOf(Path("/etc/xdg", "Foo Corp", "Bar App")), windows.configDirs)
+    }
+
+    @Test
     fun `cache sharing the state root goes in a folder of its own inside the app's state`() {
         val shared = base.copy(cacheHome = base.stateHome).forApp("myapp").assertSuccess()
 

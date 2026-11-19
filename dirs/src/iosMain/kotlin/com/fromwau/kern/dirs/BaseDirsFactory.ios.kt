@@ -13,7 +13,8 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUserDomainMask
 
 // Kept identical to macosMain's DirLayout.Native branch by hand, rather than shared through an appleMain source
-// set: one duplicate costs less than another layer in the source tree. Change both.
+// set: one duplicate costs less than another layer in the source tree. Change both. Only macOS has system lists,
+// since iOS has no folder shared between apps.
 public actual class BaseDirsFactory {
     public actual fun create(): Result<BaseDirs, DirsError> {
         val support = userDirectory(NSApplicationSupportDirectory)

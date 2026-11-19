@@ -74,10 +74,15 @@ internal fun appleBaseDir(
             stateHome = support,
             cacheHome = Path("$home/Library/Caches"),
             tempHome = tempRoot(env),
+            dataDirs = listOf(SYSTEM_SUPPORT),
+            configDirs = listOf(SYSTEM_SUPPORT),
             naming = AppNaming.Apple,
         ),
     )
 }
+
+/** macOS's Application Support for every user, which Foundation names in its local domain. */
+private val SYSTEM_SUPPORT = Path("/Library/Application Support")
 
 /**
  * Whether [path] is a folder this process's user owns that its group and others may not enter, read through any link.

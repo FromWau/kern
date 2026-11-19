@@ -25,13 +25,21 @@ import kotlin.uuid.Uuid
  * Linux, it is null; a value that was refused is listed in [ignored]. No other platform has a folder with those
  * guarantees.
  *
+ * [dataDirs] and [configDirs] are the system-wide folders to search after [dataHome] and [configHome], most important
+ * first, for files installed for every user. On Linux and macOS under [DirLayout.Xdg] they are `$XDG_DATA_DIRS` and
+ * `$XDG_CONFIG_DIRS` split at `:`, else `/usr/local/share`, `/usr/share` and `/etc/xdg`. A relative entry is listed in
+ * [ignored], a blank one is skipped, and a list with no absolute entry left counts as unset. Both are
+ * `/Library/Application Support` on macOS's own layout and `%ProgramData%` on Windows, when set. Android and iOS have
+ * no folder shared between apps, so both are empty there.
+ *
  * [naming] is how this platform names an app's folder from an [AppId], set by the factory.
  *
  * [ignored] lists each environment variable the factory read as unset because of its value, with the reason: one set
  * but blank, one set to something other than an absolute path, such as a relative `XDG_CONFIG_HOME=cfg`, or an
- * `XDG_RUNTIME_DIR` that names no private folder. An unset variable is not listed. It is always empty on Android and
- * iOS, which read none, and from a factory made with `strict = true`, which answers [DirsError.Blank],
- * [DirsError.NotAbsolute] or [DirsError.NotPrivate] instead.
+ * `XDG_RUNTIME_DIR` that names no private folder. A list variable is listed once per relative entry, with that entry
+ * as its value. An unset variable is not listed. It is always empty on Android and iOS, which read none, and from a
+ * factory made with `strict = true`, which answers [DirsError.Blank], [DirsError.NotAbsolute] or [DirsError.NotPrivate]
+ * instead.
  */
 public data class BaseDirs(
     val home: Path,
@@ -43,6 +51,8 @@ public data class BaseDirs(
     val runtimeHome: Path? = null,
     val naming: AppNaming = AppNaming.Xdg,
     val ignored: List<IgnoredVariable> = emptyList(),
+    val dataDirs: List<Path> = emptyList(),
+    val configDirs: List<Path> = emptyList(),
 ) {
     /**
      * Each root with [name] appended; on Linux, `forApp("echod")` gives `~/.config/echod` and its siblings. Where
@@ -93,6 +103,8 @@ public data class BaseDirs(
                 cache = if (cacheHome == stateHome) Path(under(stateHome), "cache") else under(cacheHome),
                 temp = Path(under(tempHome), runId.toString()),
                 runtime = runtimeHome?.let(under),
+                dataDirs = dataDirs.map(under),
+                configDirs = configDirs.map(under),
                 ignored = ignored,
             ),
         )
@@ -102,7 +114,7 @@ public data class BaseDirs(
         /**
          * Every root in a folder of its own below [root], such as a test's scratch folder: `home`, `config`, `data`,
          * `state`, `cache`, `tmp` and `run`, the last as [BaseDirs.runtimeHome]. Nothing is created, and
-         * [BaseDirs.ignored] is empty.
+         * [BaseDirs.ignored], [BaseDirs.dataDirs] and [BaseDirs.configDirs] are empty.
          *
          * ```kotlin
          * val dirs = BaseDirs.under(scratch).forApp("myapp").getOrElse { error("not one folder name: $it") }
@@ -127,8 +139,8 @@ public data class BaseDirs(
         /**
          * The roots the Linux factory resolves, read from [env] instead of this process's environment, so a test can
          * check how an app starts under any set of variables. Each variable is read as the Linux factory reads it,
-         * `strict` included. macOS under [DirLayout.Xdg] takes the same home and XDG roots, but keeps the system's temp
-         * folder and has no runtime root.
+         * `strict` included, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` among them. macOS under [DirLayout.Xdg] takes the
+         * same home and XDG roots, but keeps the system's temp folder and has no runtime root.
          *
          * ```kotlin
          * val base = BaseDirs.fromXdg(mapOf("HOME" to "/home/test"), accountHome = null).getOrElse { error("$it") }
@@ -220,6 +232,9 @@ private const val LONGEST_NAME_BYTES = 255
  *
  * [runtime] is null wherever [BaseDirs.runtimeHome] is.
  *
+ * [dataDirs] and [configDirs] are [BaseDirs.dataDirs] and [BaseDirs.configDirs] with the app's folder appended, where
+ * a package installs files for every user, such as `/usr/share/myapp`. Search them after [data] and [config].
+ *
  * [ignored] is [BaseDirs.ignored] of the roots these came from, so an app holding only these can still report a
  * variable the factory read as unset.
  */
@@ -231,6 +246,8 @@ public data class AppDirs(
     val temp: Path,
     val runtime: Path? = null,
     val ignored: List<IgnoredVariable> = emptyList(),
+    val dataDirs: List<Path> = emptyList(),
+    val configDirs: List<Path> = emptyList(),
 )
 
 /**

@@ -12,6 +12,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BaseDirsFactoryJvmTest {
+    private val xdgDataDirs = listOf(Path("/usr/local/share"), Path("/usr/share"))
+    private val xdgConfigDirs = listOf(Path("/etc/xdg"))
+
     private fun envOf(vararg variables: Pair<String, String>): (String) -> String? = mapOf(*variables)::get
 
     private fun notAbsolute(
@@ -95,6 +98,8 @@ class BaseDirsFactoryJvmTest {
             stateHome = Path("/home/me/.local/state"),
             cacheHome = Path("/home/me/.cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
             ignored = ignored,
         )
         val linuxIgnored = ignored + notAbsolute("XDG_RUNTIME_DIR", "run")
@@ -141,6 +146,8 @@ class BaseDirsFactoryJvmTest {
             stateHome = Path("/home/me/.local/state"),
             cacheHome = Path("/home/me/.cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
 
         assertEquals(Ok(expected), linuxWith(envOf("HOME" to "/home/me")) { "/home/account" })
@@ -162,6 +169,8 @@ class BaseDirsFactoryJvmTest {
             stateHome = Path("/xdg/state"),
             cacheHome = Path("/xdg/cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
 
         assertEquals(Ok(expected), linuxWith(env) { "/home/account" })
@@ -229,6 +238,8 @@ class BaseDirsFactoryJvmTest {
                 cacheHome = Path("/x/cache"),
                 tempHome = Path("/scratch/tmp"),
                 runtimeHome = Path("$private"),
+                dataDirs = xdgDataDirs,
+                configDirs = xdgConfigDirs,
             )
             assertEquals(Ok(expected), BaseDirs.fromXdg(env, accountHome = Path("/home/account"), strict = true))
         } finally {
@@ -308,6 +319,40 @@ class BaseDirsFactoryJvmTest {
     }
 
     @Test
+    fun `windows searches ProgramData for system data and config and nothing without it`() {
+        val all = mapOf("APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
+
+        val set = baseDirFor("Windows 11", (all + ("ProgramData" to "/programdata"))::get, "/profile").assertSuccess()
+        val unset = baseDirFor("Windows 11", all::get, "/profile").assertSuccess()
+        val relative = baseDirFor("Windows 11", (all + ("ProgramData" to "data"))::get, "/profile").assertSuccess()
+
+        assertEquals(listOf(Path("/programdata")), set.dataDirs)
+        assertEquals(listOf(Path("/programdata")), set.configDirs)
+        assertEquals(emptyList(), unset.dataDirs)
+        assertEquals(emptyList(), unset.configDirs)
+        assertEquals(emptyList(), relative.dataDirs)
+        assertEquals(listOf(notAbsolute("ProgramData", "data")), relative.ignored)
+    }
+
+    @Test
+    fun `macos searches the system Application Support for data and config`() {
+        val base = baseDirFor("Mac OS X", envOf(), userHome = "/Users/me").assertSuccess()
+
+        assertEquals(listOf(Path("/Library/Application Support")), base.dataDirs)
+        assertEquals(listOf(Path("/Library/Application Support")), base.configDirs)
+    }
+
+    @Test
+    fun `macos with the Xdg layout reads XDG_DATA_DIRS and XDG_CONFIG_DIRS as Linux does`() {
+        val env = envOf("XDG_DATA_DIRS" to "/opt/homebrew/share:/usr/share")
+
+        val base = baseDirFor("Mac OS X", env, userHome = "/Users/me", DirLayout.Xdg).assertSuccess()
+
+        assertEquals(listOf(Path("/opt/homebrew/share"), Path("/usr/share")), base.dataDirs)
+        assertEquals(listOf(Path("/etc/xdg")), base.configDirs)
+    }
+
+    @Test
     fun `windows names the root it could not resolve`() {
         val all = mapOf("APPDATA" to "/roaming", "LOCALAPPDATA" to "/local", "TEMP" to "/temp")
 
@@ -354,6 +399,8 @@ class BaseDirsFactoryJvmTest {
             stateHome = support,
             cacheHome = Path("/Users/me/Library/Caches"),
             tempHome = Path("/tmp"),
+            dataDirs = listOf(Path("/Library/Application Support")),
+            configDirs = listOf(Path("/Library/Application Support")),
             naming = AppNaming.Apple,
         )
 
@@ -369,6 +416,8 @@ class BaseDirsFactoryJvmTest {
             stateHome = Path("/Users/me/.local/state"),
             cacheHome = Path("/Users/me/.cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
 
         assertEquals(Ok(expected), baseDirFor("Mac OS X", envOf(), userHome = "/Users/me", DirLayout.Xdg))
@@ -502,7 +551,7 @@ class BaseDirsFactoryJvmTest {
     }
 
     @Test
-    fun `linux reads HOME then TMPDIR then the XDG variables in a fixed order`() {
+    fun `linux reads HOME then TMPDIR then the XDG variables then the XDG lists in a fixed order`() {
         val read = mutableListOf<String>()
 
         linuxWith({ name -> "/${name.lowercase()}".also { read += name } }) { null }.assertSuccess()
@@ -515,6 +564,8 @@ class BaseDirsFactoryJvmTest {
             "XDG_STATE_HOME",
             "XDG_CACHE_HOME",
             "XDG_RUNTIME_DIR",
+            "XDG_DATA_DIRS",
+            "XDG_CONFIG_DIRS",
         )
         assertEquals(expected, read)
     }

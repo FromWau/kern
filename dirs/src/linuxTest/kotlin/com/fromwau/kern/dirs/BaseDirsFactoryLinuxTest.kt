@@ -35,6 +35,9 @@ import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalForeignApi::class)
 class BaseDirsFactoryLinuxTest {
+    private val xdgDataDirs = listOf(Path("/usr/local/share"), Path("/usr/share"))
+    private val xdgConfigDirs = listOf(Path("/etc/xdg"))
+
     private val variables = listOf(
         "HOME",
         "XDG_CONFIG_HOME",
@@ -43,6 +46,8 @@ class BaseDirsFactoryLinuxTest {
         "XDG_CACHE_HOME",
         "XDG_RUNTIME_DIR",
         "TMPDIR",
+        "XDG_DATA_DIRS",
+        "XDG_CONFIG_DIRS",
     )
     private val saved = variables.associateWith { getenv(it)?.toKString() }
     private val scratch = "${getenv("TMPDIR")?.toKString() ?: "/tmp"}/kern-dirs-${Uuid.random()}".also {
@@ -81,6 +86,8 @@ class BaseDirsFactoryLinuxTest {
             stateHome = Path("/home/me/.local/state"),
             cacheHome = Path("/home/me/.cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
 
         assertEquals(Ok(expected), BaseDirsFactory().create())
@@ -148,6 +155,8 @@ class BaseDirsFactoryLinuxTest {
             cacheHome = Path("/x/cache"),
             tempHome = Path("/scratch/tmp"),
             runtimeHome = Path(private),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
         assertEquals(Ok(expected), BaseDirs.fromXdg(env, accountHome = Path("/home/account"), strict = true))
     }
@@ -236,6 +245,8 @@ class BaseDirsFactoryLinuxTest {
             stateHome = Path("/xdg/state"),
             cacheHome = Path("/xdg/cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
         )
 
         assertEquals(Ok(expected), BaseDirsFactory().create())
@@ -292,6 +303,8 @@ class BaseDirsFactoryLinuxTest {
             stateHome = Path("/home/me/.local/state"),
             cacheHome = Path("/home/me/.cache"),
             tempHome = Path("/tmp"),
+            dataDirs = xdgDataDirs,
+            configDirs = xdgConfigDirs,
             ignored = listOf(
                 IgnoredVariable("TMPDIR", "tmp", IgnoredBecause.NotAbsolute),
                 IgnoredVariable("XDG_CONFIG_HOME", "config", IgnoredBecause.NotAbsolute),

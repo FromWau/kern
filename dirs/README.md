@@ -37,6 +37,8 @@ dependencies {
 - A variable that is blank or not an absolute path counts as unset. It is listed in `ignored`, as `Blank` or
   `NotAbsolute`. An unset variable is not listed. With `strict = true` a listed one is an error instead.
 - `runtime` is null unless `$XDG_RUNTIME_DIR` names a private folder on Linux.
+- `dataDirs` and `configDirs` are the system folders to search after `data` and `config`. They are empty on Android
+  and iOS.
 - Where a lock goes is in [Locking](../fs/docs/locking.md#reference).
 
 ## Tasks
@@ -90,6 +92,24 @@ val dirs: Result<AppDirs, DirsError> = factory.create().flatMap { it.forApp("mya
 
 `BaseDirsFactory` is an `expect class` that declares no constructor. So `BaseDirsFactory()` in `commonMain` does not
 compile. Put each line in its target's own source set.
+
+### Find files installed for every user
+
+A package can install defaults for every user, such as `/usr/share/myapp/defaults.toml`. Look in the user's folder
+first, then in each system folder in order.
+
+```kotlin
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
+
+val dirs = BaseDirs.current().flatMap { it.forApp("myapp") }.getOrElse { error("no folders for myapp: $it") }
+val defaults = (listOf(dirs.config) + dirs.configDirs)
+    .map { Path(it, "defaults.toml") }
+    .firstOrNull { SystemFileSystem.exists(it) }
+```
+
+To look in a shared folder that is not the app's own, such as the `applications` folders desktop entries live in,
+start from `BaseDirs` instead: `(listOf(base.dataHome) + base.dataDirs).map { Path(it, "applications") }`.
 
 ### Report a variable it ignored
 
@@ -174,7 +194,8 @@ val fixed = AppDirs(
 ```
 
 `BaseDirs.under(scratch)` puts every root in a folder of its own below `scratch`: `home`, `config`, `data`, `state`,
-`cache`, `tmp`, and `run` as `runtimeHome`. None still points at a real folder. It creates nothing.
+`cache`, `tmp`, and `run` as `runtimeHome`. `dataDirs` and `configDirs` are empty. None still points at a real
+folder. It creates nothing.
 
 ### Test your app's startup
 
@@ -231,6 +252,8 @@ data class AppDirs(
     val temp: Path,            // this run's own scratch folder
     val runtime: Path? = null, // Linux with $XDG_RUNTIME_DIR only
     val ignored: List<IgnoredVariable> = emptyList(), // BaseDirs.ignored, carried over by forApp
+    val dataDirs: List<Path> = emptyList(),   // system folders to search after data, most important first
+    val configDirs: List<Path> = emptyList(), // system folders to search after config, most important first
 )
 ```
 
@@ -266,6 +289,28 @@ For an app named `myapp`:
 - An account home that is not an absolute path is `UnableToResolve(Home)`. One example is the `?` the JDK reports for
   an account it cannot find.
 
+### System folders
+
+`BaseDirs.dataDirs` and `configDirs` are where files installed for every user live, searched after `dataHome` and
+`configHome`. `forApp` appends the app's folder to each, as it does to every root.
+
+| Platform | dataDirs | configDirs |
+|---|---|---|
+| Linux, and macOS under `DirLayout.Xdg` | `$XDG_DATA_DIRS`, else `/usr/local/share`, `/usr/share` | `$XDG_CONFIG_DIRS`, else `/etc/xdg` |
+| macOS | `/Library/Application Support` | same as data |
+| Windows | `%ProgramData%`, else none | same as data |
+| Android, iOS | none | none |
+
+- The XDG lists are split at `:` and keep their order. Trailing separators are dropped from each entry, and a folder
+  named twice is kept at its first place only.
+- A relative entry is dropped and listed in `ignored` as `NotAbsolute`, once per entry, with the entry as its value.
+  Under `strict` the first one is the error.
+- An empty or whitespace-only entry, from `::` or a leading or trailing `:`, is dropped and not listed. Appending with
+  `XDG_DATA_DIRS="$XDG_DATA_DIRS:/opt/x/share"` while it is unset gives `:/opt/x/share`, which is no mistake.
+- A list that is blank, or leaves no absolute entry, counts as unset and gives the defaults. What it dropped is
+  still listed.
+- Android and iOS have no folder that apps share.
+
 ### Runtime
 
 `runtime` is the folder for sockets and other per-session files. It is a `Path?`: only Linux gives one, and only
@@ -294,17 +339,19 @@ Windows.
 | `USERPROFILE` | Windows native | `HOME` is read instead | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
 | `TMPDIR` | Linux; the JVM on macOS | `/tmp` | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Linux; macOS under `DirLayout.Xdg` | `~/.config`, `~/.local/share`, `~/.local/state`, `~/.cache` | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
+| `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS` | Linux; macOS under `DirLayout.Xdg` | `/usr/local/share:/usr/share`, `/etc/xdg` | as unset, and listed as `Blank` | each relative entry dropped, and listed as `NotAbsolute` with the entry as its value; none left: as unset | does not apply | blank: `Blank`; relative entry: `NotAbsolute` |
 | `XDG_RUNTIME_DIR` | Linux | `runtime` is null | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | `runtime` is null, and listed as `NotPrivateFolder` | blank: `Blank`; relative: `NotAbsolute`; missing or not private: `NotPrivate` |
 | `APPDATA` | Windows | `UnableToResolve(Config)` | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
 | `LOCALAPPDATA` | Windows | `UnableToResolve(Cache)` | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
 | `TEMP` | Windows | `UnableToResolve(Temp)` | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
+| `ProgramData` | Windows | no system folders | as unset, and listed as `Blank` | as unset, and listed as `NotAbsolute` | does not apply | blank: `Blank`; relative: `NotAbsolute` |
 
 - On Windows native, when `USERPROFILE` gives no home, an unset `HOME` is `UnableToResolve(Home)`: there is no
   account-home fallback.
 - Trailing separators are dropped, so `HOME=/home/me/` gives the same roots as `/home/me`.
 - `BaseDirs.ignored` holds each listed variable as an `IgnoredVariable(name, value, reason)`, in the order read.
 - On Linux the variables are read in this order: `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-  `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR`.
+  `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`.
 - `strict = true` is taken by the JVM, Linux, macOS and Windows native factories. The macOS native one reads
   variables only under `DirLayout.Xdg`.
 - Under `strict`, the first variable that would be listed in `ignored` is the error. That is `Blank(name, value)` or
@@ -344,12 +391,14 @@ platform name the folder its own way.
 You can also build the roots without a factory.
 
 - `BaseDirs.under(scratch)` takes a `naming` as its second argument. It is `AppNaming.Xdg` unless you pass another.
-- `BaseDirs` also takes the roots by name. `runtimeHome` and `ignored` are optional, and `naming` defaults to
-  `AppNaming.Xdg` on every platform. `forApp` works on either as on a factory's.
-- A test that moves every root into a scratch folder must move `runtimeHome` too, since it comes from
-  `$XDG_RUNTIME_DIR`.
+- `BaseDirs` also takes the roots by name. `runtimeHome`, `dataDirs`, `configDirs` and `ignored` are optional, and
+  `naming` defaults to `AppNaming.Xdg` on every platform. `forApp` works on either as on a factory's.
+- A test that moves every root of a factory's `BaseDirs` into a scratch folder must move `runtimeHome` too, since it
+  comes from `$XDG_RUNTIME_DIR`, and set `dataDirs` and `configDirs`, which name the machine's `/usr/share` and
+  `/etc/xdg` on Linux.
 - On Windows, moving state or cache alone takes cache out of the state folder into its own.
-- A test that needs no roots at all builds `AppDirs` directly. `runtime` and `ignored` are optional.
+- A test that needs no roots at all builds `AppDirs` directly. `runtime`, `dataDirs`, `configDirs` and `ignored` are
+  optional.
 
 ### Errors
 

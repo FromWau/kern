@@ -31,7 +31,10 @@ public expect class BaseDirsFactory {
     public fun create(): Result<BaseDirs, DirsError>
 }
 
-/** Windows' roots: [userHome] as the home, and the rest from `%APPDATA%`, `%LOCALAPPDATA%` and `%TEMP%`. */
+/**
+ * Windows' roots: [userHome] as the home, the rest from `%APPDATA%`, `%LOCALAPPDATA%` and `%TEMP%`, and `%ProgramData%`
+ * as the one system folder for data and config, none when it is unset.
+ */
 internal fun windowsBaseDir(
     env: (String) -> String?,
     userHome: String?,
@@ -40,6 +43,7 @@ internal fun windowsBaseDir(
     val appData = env("APPDATA") ?: return Err(DirsError.UnableToResolve(DirKind.Config))
     val localAppData = env("LOCALAPPDATA") ?: return Err(DirsError.UnableToResolve(DirKind.Cache))
     val temp = env("TEMP") ?: return Err(DirsError.UnableToResolve(DirKind.Temp))
+    val programData = listOfNotNull(env("ProgramData")?.let(::Path))
 
     return Ok(
         BaseDirs(
@@ -49,6 +53,8 @@ internal fun windowsBaseDir(
             stateHome = Path(localAppData),
             cacheHome = Path(localAppData),
             tempHome = Path(temp),
+            dataDirs = programData,
+            configDirs = programData,
             naming = AppNaming.Windows,
         ),
     )

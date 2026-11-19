@@ -7,7 +7,9 @@ import kotlinx.io.files.Path
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSHomeDirectory
+import platform.Foundation.NSLocalDomainMask
 import platform.Foundation.NSSearchPathDirectory
+import platform.Foundation.NSSearchPathDomainMask
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUserDomainMask
@@ -32,12 +34,14 @@ public actual class BaseDirsFactory(
     }
 
     // Kept identical to iosMain's create() by hand, rather than shared through an appleMain source set: one
-    // duplicate costs less than another layer in the source tree. Change both.
+    // duplicate costs less than another layer in the source tree. Change both. Only the system lists differ, since
+    // iOS has no folder shared between apps.
     private fun nativeBaseDirs(): Result<BaseDirs, DirsError> {
         val support = userDirectory(NSApplicationSupportDirectory)
             ?: return Err(DirsError.UnableToResolve(DirKind.Config))
         val caches = userDirectory(NSCachesDirectory)
             ?: return Err(DirsError.UnableToResolve(DirKind.Cache))
+        val systemSupport = listOfNotNull(searchPath(NSApplicationSupportDirectory, NSLocalDomainMask))
 
         return Ok(
             BaseDirs(
@@ -47,13 +51,20 @@ public actual class BaseDirsFactory(
                 stateHome = support,
                 cacheHome = caches,
                 tempHome = Path(NSTemporaryDirectory()),
+                dataDirs = systemSupport,
+                configDirs = systemSupport,
                 naming = AppNaming.Apple,
             ),
         )
     }
 }
 
-private fun userDirectory(directory: NSSearchPathDirectory): Path? {
-    val path = NSSearchPathForDirectoriesInDomains(directory, NSUserDomainMask, true).firstOrNull() as? String
+private fun userDirectory(directory: NSSearchPathDirectory): Path? = searchPath(directory, NSUserDomainMask)
+
+private fun searchPath(
+    directory: NSSearchPathDirectory,
+    domain: NSSearchPathDomainMask,
+): Path? {
+    val path = NSSearchPathForDirectoriesInDomains(directory, domain, true).firstOrNull() as? String
     return path?.let { Path(it) }
 }
