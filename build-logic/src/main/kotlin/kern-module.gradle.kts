@@ -1,3 +1,4 @@
+import com.android.build.api.dsl.KotlinMultiplatformAndroidLibraryTarget
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.targets.js.EnvSpec
 
@@ -6,7 +7,6 @@ import org.jetbrains.kotlin.gradle.targets.js.EnvSpec
 
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
-    id("com.android.kotlin.multiplatform.library")
     id("kern-publish")
 }
 
@@ -16,6 +16,10 @@ fun catalogVersion(alias: String): String = libs.findVersion(alias).get().requir
 
 val buildJdk = catalogVersion("jdk-build").toInt()
 val targetJdk = catalogVersion("jdk-target").toInt()
+
+// A module that needs a newer JDK API on the JVM sets `kern.jvmTarget=N` in its own gradle.properties; its JVM
+// consumers then need JDK N too, and its JVM tests run on N.
+val jvmTargetJdk = findProperty("kern.jvmTarget")?.toString()?.toInt() ?: targetJdk
 val moduleName = project.name
 
 // A module name may hold a hyphen, as `result-test` does, which neither a namespace nor a framework name may.
@@ -24,6 +28,15 @@ val frameworkName = moduleName.split('-').joinToString("") { part -> part.replac
 
 // A module whose C code needs a Mac to compile sets `kern.appleTargets=false` in its own gradle.properties.
 val appleTargets = findProperty("kern.appleTargets")?.toString()?.toBooleanStrict() ?: true
+
+// A module with no Android or Windows implementation sets `kern.androidTarget=false` or `kern.mingwTarget=false`.
+val androidTarget = findProperty("kern.androidTarget")?.toString()?.toBooleanStrict() ?: true
+val mingwTarget = findProperty("kern.mingwTarget")?.toString()?.toBooleanStrict() ?: true
+
+// Applied by hand: with the plugin present and no android target configured, AGP fails the module's configuration.
+if (androidTarget) {
+    pluginManager.apply("com.android.kotlin.multiplatform.library")
+}
 
 kotlin {
     explicitApi()
@@ -35,28 +48,33 @@ kotlin {
 
     jvmToolchain(buildJdk)
 
-    android {
-        compileSdk = catalogVersion("android-compileSdk").toInt()
-        minSdk = catalogVersion("android-minSdk").toInt()
-        namespace = "com.fromwau.kern.$namespaceName"
-        compilerOptions {
-            jvmTarget = JvmTarget.fromTarget(targetJdk.toString())
+    if (androidTarget) {
+        // The plugin is applied by hand, so Gradle generates no `android` accessor for it.
+        (this as ExtensionAware).extensions.configure<KotlinMultiplatformAndroidLibraryTarget>("android") {
+            compileSdk = catalogVersion("android-compileSdk").toInt()
+            minSdk = catalogVersion("android-minSdk").toInt()
+            namespace = "com.fromwau.kern.$namespaceName"
+            compilerOptions {
+                jvmTarget = JvmTarget.fromTarget(targetJdk.toString())
+            }
         }
     }
 
     jvm {
         compilerOptions {
             // Set explicitly: the toolchain would make it the build JDK's, which -Xjdk-release refuses.
-            jvmTarget = JvmTarget.fromTarget(targetJdk.toString())
+            jvmTarget = JvmTarget.fromTarget(jvmTargetJdk.toString())
             // Fails the build on a JDK API newer than the target, which would otherwise reach a consumer as a
             // NoSuchMethodError.
-            freeCompilerArgs.add("-Xjdk-release=$targetJdk")
+            freeCompilerArgs.add("-Xjdk-release=$jvmTargetJdk")
         }
         // The Kotlin plugin leaves this attribute unset for a multiplatform jvm() target.
-        attributes.attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, targetJdk)
+        attributes.attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, jvmTargetJdk)
     }
     linuxX64()
-    mingwX64()
+    if (mingwTarget) {
+        mingwX64()
+    }
 
     if (appleTargets) {
         listOf(
@@ -79,12 +97,12 @@ kotlin {
 }
 
 val jvmTestOnTarget = tasks.register<Test>("jvmTestOnTarget") {
-    description = "Runs the JVM tests on JDK $targetJdk, the oldest a consumer may run."
+    description = "Runs the JVM tests on JDK $jvmTargetJdk, the oldest a consumer may run."
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     val jvmTest = tasks.named<Test>("jvmTest")
     testClassesDirs = files(jvmTest.map { it.testClassesDirs })
     classpath = files(jvmTest.map { it.classpath })
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(targetJdk) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(jvmTargetJdk) }
 }
 tasks.named("check") { dependsOn(jvmTestOnTarget) }
 

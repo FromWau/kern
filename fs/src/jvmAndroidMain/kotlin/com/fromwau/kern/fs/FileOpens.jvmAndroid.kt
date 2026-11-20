@@ -15,6 +15,7 @@ import java.nio.channels.Channels
 import java.nio.channels.FileChannel
 import java.nio.file.AccessMode
 import java.nio.file.Files
+import java.nio.file.AccessDeniedException
 import java.nio.file.LinkOption
 import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
@@ -210,8 +211,30 @@ private class ChannelFile(
     override fun sync() = channel.force(true)
 
     override fun keepForReading() {
+        val reading = try {
+            openForReading()
+        } catch (_: AccessDeniedException) {
+            withOwnerRead(::openForReading)
+        }
         channel.close()
-        channel = FileChannel.open(Paths.get(path.toString()), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+        channel = reading
+    }
+
+    private fun openForReading(): FileChannel =
+        FileChannel.open(Paths.get(path.toString()), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+
+    /**
+     * Runs [open] while the file's owner may read it, then puts its mode back, for a file given a mode that lets its
+     * owner write but not read it.
+     */
+    private fun <T> withOwnerRead(open: () -> T): T {
+        val mode = permissionBits(path) ?: return open()
+        setFilePermissions(path, mode or OWNER_READ)
+        try {
+            return open()
+        } finally {
+            setFilePermissions(path, mode)
+        }
     }
 
     // Read by the held file's own name, the temp it was created as or the name it was moved to.

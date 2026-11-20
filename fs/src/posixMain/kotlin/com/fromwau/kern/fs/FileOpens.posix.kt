@@ -18,6 +18,7 @@ import kotlinx.io.RawSource
 import kotlinx.io.files.Path
 import kotlinx.io.readByteArray
 import kotlin.time.Instant
+import platform.posix.EACCES
 import platform.posix.EINTR
 import platform.posix.ENXIO
 import platform.posix.F_GETFL
@@ -305,12 +306,39 @@ private class DescriptorFile(
     }
 
     override fun keepForReading() {
-        val name = if (folder == WORKING_DIRECTORY) path.toString() else path.name
-        val reading = openAt(folder, name, O_RDONLY or O_NOFOLLOW or O_CLOEXEC, 0)
+        var reading = openForReading()
+        if (reading < 0 && errno == EACCES) reading = withOwnerRead(::openForReading)
         if (reading < 0) throw errnoFailure(about = path)
         val writing = descriptor
         descriptor = reading
         if (close(writing) != 0) throw errnoFailure(about = path)
+    }
+
+    private fun openForReading(): Int {
+        val name = if (folder == WORKING_DIRECTORY) path.toString() else path.name
+        return openAt(folder, name, O_RDONLY or O_NOFOLLOW or O_CLOEXEC, 0)
+    }
+
+    /**
+     * Runs [open] while the file's owner may read it, then puts its mode back, for a file given a mode that lets its
+     * owner write but not read it. Throws why [open] failed.
+     */
+    private fun withOwnerRead(open: () -> Int): Int {
+        val mode = memScoped {
+            val info = alloc<stat>()
+            if (fstat(descriptor, info.ptr) != 0) throw errnoFailure(about = path)
+            info.st_mode.toInt() and PERMISSION_BITS
+        }
+        if (setDescriptorPermissionBits(descriptor, mode or OWNER_READ) != 0) throw errnoFailure(about = path)
+        val opened = open()
+        val openFailure = if (opened < 0) errnoFailure(about = path) else null
+        if (setDescriptorPermissionBits(descriptor, mode) != 0) {
+            val failure = errnoFailure(about = path)
+            if (opened >= 0) close(opened)
+            throw failure
+        }
+        if (openFailure != null) throw openFailure
+        return opened
     }
 
     override fun info(): FileInfo = fileInfoOf(descriptor, path)

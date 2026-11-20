@@ -27,6 +27,9 @@ Pick a module from the table. The last column says what it brings along.
 | [`fs-coroutines`](fs-coroutines/README.md) | `awaitLock`: the `fs` file lock, waiting by suspending instead of blocking the thread; `changes()` and `textChanges()`: a flow of a file's `info()` or text each time it changes, by the system's watch, a lookup on a timer, or for `/proc` and `/sys` a read on a timer | `fs`, coroutines |
 | [`process`](process/README.md) | `onShutdownRequest` or `stopOnShutdownRequest`: a handler, or a flag your loop polls, for Ctrl-C, `SIGTERM` and `SIGHUP`, then the shell's 128+N exit code | `result` |
 | [`process-test`](process-test/README.md) | `FakeShutdownSource`: sends a shutdown request to your handler or stop in a test and records the exit code, without exiting | `process` |
+| [`exec`](exec/README.md) | `SystemStarter.start`: run a program with the argument list you give, read its stdout and stderr as it writes them, `stop` it by a signal or `detach` from it; nothing stops behind your back | `result`, kotlinx-io |
+| [`exec-coroutines`](exec-coroutines/README.md) | a child's events as a `Flow` and a suspending `awaitExit` | `exec`, coroutines |
+| [`exec-test`](exec-test/README.md) | `FakeStarter`: scripts what each command does, runs no process, and records the commands and children | `exec`; at runtime atomicfu |
 | [`fuzzy`](fuzzy/README.md) | `didYouMean`: the name someone most likely meant by a word that is not one, and `editDistance` | nothing |
 
 `fs-test`'s `scratchDir()` makes a fresh folder under `TMPDIR` when that is an absolute path. Otherwise it uses the
@@ -58,13 +61,16 @@ Every kern function that returns a value marks it as one to use. With Kotlin's r
   and wasmWasi.
 - `result` and `result-test` add those and tvOS and watchOS too.
 - `process` and `process-test` have `terminal`'s targets without macOS and iOS. Those are not built yet.
+- `exec`, `exec-coroutines` and `exec-test` build for the JVM, linuxX64 and linuxArm64 only. Android, macOS and mingw
+  are planned.
 
 Each module's README lists its own.
 
 ## Requirements
 
 - Kotlin 2.4.20 or newer.
-- The JVM and Android artifacts are Java 17 bytecode, so they need JDK 17 or newer.
+- The JVM and Android artifacts are Java 17 bytecode, so they need JDK 17 or newer; `exec`, `exec-coroutines` and
+  `exec-test` need JDK 22 or newer on the JVM.
 - Android needs `minSdk` 26 and `compileSdk` 37.
 - The native and web targets have no such requirement.
 

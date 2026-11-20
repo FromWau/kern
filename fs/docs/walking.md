@@ -448,7 +448,8 @@ and types, never what a file holds.
 - A file is left alone when a regular file at its output is current, as `isCurrent` answers. By default that is when
   size and modification time match and the copy was made at least 2 s after the source last changed.
 - A file system that keeps times in whole seconds, or FAT's 2 s, gives a same-size edit made within that step the time
-  the copy already has. So a source changed within 2 s of its copy is copied again, once, since the new copy is later.
+  the copy already has. So a source changed within 2 s of its copy is copied again, on each run until one comes 2 s
+  after the source changed.
 - Windows does not say when a copy was made, so there size and modification time alone decide.
 - `isCurrent` is never asked about a symlink or anything else at the output.
 - Every other file goes through `copy`. By default that is `Writer.copyFrom` with `keepAttributes`.

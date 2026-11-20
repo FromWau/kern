@@ -108,6 +108,32 @@ class FileWritesTest {
     }
 
     @Test
+    fun `a renamed copy given a mode that lets its owner write but not read lands with that mode`() {
+        // Such a mode comes from another user's file, which a test cannot make: a Replace onto one with mode 0066,
+        // or a copyTo keeping the attributes of one this user reads through its group. So the plan is given it.
+        val file = dir / "drop.txt"
+        val plan = WritePlan(
+            path = file,
+            folder = PathFolder(dir),
+            name = file.name,
+            content = { it.write("new".encodeToByteArray()) },
+            mode = WriteMode.Replace,
+            ownerOnly = false,
+            permissions = 0b010_000_000,
+            executable = false,
+            modified = null,
+        )
+
+        val written = plan.byRename(existed = false)
+
+        assertEquals(WriteWay.Renamed, written.assertSuccess().way)
+        if (file.bits() == null) return
+        assertEquals(0b010_000_000, file.bits())
+        setFilePermissions(file, 0b110_000_000)
+        assertEquals("new", file.readRaw())
+    }
+
+    @Test
     fun `a write without executable keeps an existing file's execute bits`() {
         val file = (dir / "run.sh").writeRaw("old")
         setFilePermissions(file, 0b111_101_101)

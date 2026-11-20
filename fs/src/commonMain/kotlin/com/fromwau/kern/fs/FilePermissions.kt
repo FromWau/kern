@@ -167,6 +167,9 @@ internal const val NEW_FILE_MODE = 0b110_110_110
 /** `0600`: a file only its owner may read and write. */
 internal const val OWNER_READ_WRITE = 0b110_000_000
 
+/** `0400`: the bit that lets a file's owner read it. */
+internal const val OWNER_READ = 0b100_000_000
+
 /** `0700`: a folder only its owner may list, enter and change. */
 internal const val OWNER_ONLY_FOLDER = 0b111_000_000
 

@@ -91,8 +91,8 @@ import kotlin.time.Duration.Companion.seconds
  *   By default a file is current when its size and modification time match the source's, as a copy with
  *   `keepAttributes` leaves them, and the copy was made at least 2 s after the source last changed. A file system that
  *   keeps times in whole seconds, or FAT's 2 s, gives a same-size edit made within that step the time the copy has,
- *   so such a file is copied again; once, since the new copy is made later. Windows does not say when a copy was
- *   made, so there the size and time alone decide.
+ *   so such a file is copied again, on each run until one comes 2 s after the source changed. Windows does not say
+ *   when a copy was made, so there the size and time alone decide.
  * @param copy writes a file to the output `name` through `out`, which is [dst]. By default it is [Writer.copyFrom]
  *   with `keepAttributes`, so a hard link at the name is cut, never written through. A symlink there is removed
  *   before it is asked, as what stands in the way. What it throws ends the mirror.

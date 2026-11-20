@@ -1,0 +1,266 @@
+package = com.fromwau.kern.exec.spawn
+---
+// glibc declares pipe2 and environ only with _GNU_SOURCE.
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+// The headers Kotlin/Native builds against predate pidfds and close_range; these values are the same on every Linux
+// architecture.
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+#ifndef P_PIDFD
+#define P_PIDFD 3
+#endif
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
+#endif
+
+// The step of a start that failed; kern_exec_spawn returns it negated.
+#define KERN_EXEC_STEP_START 1
+#define KERN_EXEC_STEP_CHDIR 2
+#define KERN_EXEC_STEP_EXEC 3
+
+static char **kern_exec_environment(void) {
+    return environ;
+}
+
+// A pipe whose both ends close on exec, the read end non-blocking when asked. Returns 0 or errno.
+static int kern_exec_pipe(int fds[2], int nonblocking_read) {
+    if (pipe2(fds, O_CLOEXEC) != 0) return errno;
+    if (nonblocking_read && fcntl(fds[0], F_SETFL, O_NONBLOCK) != 0) {
+        int failure = errno;
+        close(fds[0]);
+        close(fds[1]);
+        return failure;
+    }
+    return 0;
+}
+
+static int kern_exec_eventfd(void) {
+    return eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+}
+
+static void kern_exec_wake(int fd) {
+    eventfd_write(fd, 1);
+}
+
+static void kern_exec_take_wake(int fd) {
+    eventfd_t count;
+    eventfd_read(fd, &count);
+}
+
+// The bytes waiting in a pipe, or -1.
+static int kern_exec_pending(int fd) {
+    int count = 0;
+    return ioctl(fd, FIONREAD, &count) == 0 ? count : -1;
+}
+
+static int kern_exec_pidfd_open(int pid) {
+    return (int) syscall(SYS_pidfd_open, pid, 0);
+}
+
+// The kernel's dirent of getdents64, which glibc declares only from 2.30 on.
+struct kern_exec_dirent {
+    uint64_t ino;
+    int64_t off;
+    unsigned short reclen;
+    unsigned char type;
+    char name[];
+};
+
+// Marks every descriptor from first on close-on-exec, for kernels without CLOSE_RANGE_CLOEXEC. Async-signal-safe:
+// it lists /proc/self/fd with raw getdents64, since counting up to the open-file limit takes minutes where a container
+// sets it near 2^30, and counts only where /proc is not mounted.
+static void kern_exec_cloexec_from(int first, long fd_limit) {
+    int folder = open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (folder < 0) {
+        for (long fd = first; fd < fd_limit; fd++) fcntl((int) fd, F_SETFD, FD_CLOEXEC);
+        return;
+    }
+    char buffer[4096] __attribute__((aligned(8)));
+    for (;;) {
+        long size = syscall(SYS_getdents64, folder, buffer, sizeof buffer);
+        if (size <= 0) break;
+        for (long at = 0; at < size;) {
+            struct kern_exec_dirent *entry = (struct kern_exec_dirent *) (buffer + at);
+            at += entry->reclen;
+            int fd = 0;
+            const char *digit = entry->name;
+            if (*digit == 0) continue;
+            for (; *digit >= '0' && *digit <= '9'; digit++) fd = fd * 10 + (*digit - '0');
+            if (*digit == 0 && fd >= first) fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
+    }
+    close(folder);
+}
+
+// Runs between fork and exec, so only async-signal-safe calls. Reports the failing step and errno on report_fd.
+static void kern_exec_child(const char *path, char *const argv[], char *const envp[], const char *cwd,
+                            int stdin_fd, int stdout_fd, int stderr_fd, int report_fd, long fd_limit,
+                            int new_session) {
+    int step = KERN_EXEC_STEP_START;
+    // Copies above 2 first: a dup2 onto its own source does nothing and would leave that fd close-on-exec.
+    int report = fcntl(report_fd, F_DUPFD_CLOEXEC, 3);
+    if (report < 0) {
+        // report_fd is close-on-exec too, only maybe below 3; nothing is moved onto it before this exit.
+        int message[2] = { step, errno };
+        while (write(report_fd, message, sizeof message) < 0 && errno == EINTR) {}
+        _exit(127);
+    }
+    int sources[3] = {
+        fcntl(stdin_fd, F_DUPFD_CLOEXEC, 3),
+        fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3),
+        fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3),
+    };
+    for (int i = 0; i < 3; i++) {
+        if (sources[i] < 0) goto failed;
+    }
+    // A new session's leader leads its process group too, and may not call setpgid.
+    if (new_session ? setsid() < 0 : setpgid(0, 0) != 0) goto failed;
+    if (cwd != 0) {
+        step = KERN_EXEC_STEP_CHDIR;
+        if (chdir(cwd) != 0) goto failed;
+        step = KERN_EXEC_STEP_START;
+    }
+    for (int i = 0; i < 3; i++) {
+        while (dup2(sources[i], i) < 0) {
+            if (errno != EINTR) goto failed;
+        }
+    }
+    // Every descriptor opened without close-on-exec would reach the program; CLOSE_RANGE_CLOEXEC needs Linux 5.11.
+    if (syscall(SYS_close_range, 3, ~0U, CLOSE_RANGE_CLOEXEC) != 0) kern_exec_cloexec_from(3, fd_limit);
+    struct sigaction default_action;
+    default_action.sa_handler = SIG_DFL;
+    default_action.sa_flags = 0;
+    sigemptyset(&default_action.sa_mask);
+    if (sigaction(SIGPIPE, &default_action, 0) != 0) goto failed;
+    sigset_t none;
+    sigemptyset(&none);
+    if (sigprocmask(SIG_SETMASK, &none, 0) != 0) goto failed;
+    step = KERN_EXEC_STEP_EXEC;
+    execve(path, argv, envp);
+failed:;
+    int message[2] = { step, errno };
+    while (write(report, message, sizeof message) < 0 && errno == EINTR) {}
+    _exit(127);
+}
+
+// Starts path in a child of its own process group, or of its own session when new_session is set, in cwd unless null,
+// with the three fds as its stdin, stdout and stderr. Returns the child's pid once path runs, or the negated
+// KERN_EXEC_STEP that failed with errno in error_out, in which case no child is left behind.
+static int kern_exec_spawn(const char *path, char *const argv[], char *const envp[], const char *cwd,
+                           int stdin_fd, int stdout_fd, int stderr_fd, int new_session, int *error_out) {
+    // Taken before the fork: sysconf is not async-signal-safe.
+    long fd_limit = sysconf(_SC_OPEN_MAX);
+    if (fd_limit < 0) fd_limit = 1024;
+    int report[2];
+    if (pipe2(report, O_CLOEXEC) != 0) {
+        *error_out = errno;
+        return -KERN_EXEC_STEP_START;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        *error_out = errno;
+        close(report[0]);
+        close(report[1]);
+        return -KERN_EXEC_STEP_START;
+    }
+    if (pid == 0) {
+        kern_exec_child(path, argv, envp, cwd, stdin_fd, stdout_fd, stderr_fd, report[1], fd_limit, new_session);
+    }
+    close(report[1]);
+
+    // The report pipe closes on a successful exec, so an empty read means the program runs.
+    int message[2];
+    size_t received = 0;
+    while (received < sizeof message) {
+        ssize_t count = read(report[0], (char *) message + received, sizeof message - received);
+        if (count > 0) received += (size_t) count;
+        else if (count < 0 && errno == EINTR) continue;
+        else break;
+    }
+    close(report[0]);
+    if (received == 0) return pid;
+    while (waitpid(pid, 0, 0) < 0 && errno == EINTR) {}
+    if (received < sizeof message) {
+        *error_out = EIO;
+        return -KERN_EXEC_STEP_START;
+    }
+    *error_out = message[1];
+    return -message[0];
+}
+
+// Waits for the child to end, by pidfd when there is one, else by pid, and reaps it unless keep is set. Returns 0 with
+// exactly one of exit_status and signal set to its value and the other to -1, or errno.
+static int kern_exec_wait(int pidfd, int pid, int keep, int *exit_status, int *signal) {
+    siginfo_t info;
+    int options = keep ? WEXITED | WNOWAIT : WEXITED;
+    for (;;) {
+        int by_pidfd = pidfd >= 0;
+        int waited = by_pidfd ? waitid(P_PIDFD, (id_t) pidfd, &info, options)
+                              : waitid(P_PID, (id_t) pid, &info, options);
+        if (waited == 0) break;
+        // Linux 5.3 opens pidfds but can wait on one only from 5.4 on.
+        if (by_pidfd && errno == EINVAL) pidfd = -1;
+        else if (errno != EINTR) return errno;
+    }
+    int exited = info.si_code == CLD_EXITED;
+    *exit_status = exited ? info.si_status : -1;
+    *signal = exited ? -1 : info.si_status;
+    return 0;
+}
+
+// Writes all of bytes to fd and closes it. A reader that went away ends the write without a SIGPIPE reaching this
+// process: SIGPIPE is blocked on this thread and one it raised is taken back. Returns 0 or the errno of a failure.
+static int kern_exec_write_all(int fd, const void *data, size_t size) {
+    const char *bytes = data;
+    sigset_t pipe_only, previous;
+    sigemptyset(&pipe_only);
+    sigaddset(&pipe_only, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipe_only, &previous);
+    int failure = 0;
+    size_t written = 0;
+    while (written < size) {
+        ssize_t count = write(fd, bytes + written, size - written);
+        if (count >= 0) written += (size_t) count;
+        else if (errno != EINTR) {
+            failure = errno;
+            break;
+        }
+    }
+    close(fd);
+    if (failure == EPIPE) {
+        struct timespec now = { 0, 0 };
+        sigtimedwait(&pipe_only, 0, &now);
+        failure = 0;
+    }
+    pthread_sigmask(SIG_SETMASK, &previous, 0);
+    return failure;
+}
+
+// Runs run(argument) on a new detached thread. Returns 0 or the error of pthread_create.
+static int kern_exec_start_thread(void *(*run)(void *), void *argument) {
+    pthread_attr_t attributes;
+    int failure = pthread_attr_init(&attributes);
+    if (failure != 0) return failure;
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    failure = pthread_create(&thread, &attributes, run, argument);
+    pthread_attr_destroy(&attributes);
+    return failure;
+}
