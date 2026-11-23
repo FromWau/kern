@@ -1,13 +1,15 @@
 package com.fromwau.kern.fs
 
 import kotlinx.io.files.Path
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Paths
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
-import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.UserPrincipal
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Instant
 import java.nio.file.Path as NioPath
 
@@ -64,22 +66,12 @@ internal fun fileInfoWith(
     path: Path,
     views: AttributeViews,
     vararg options: LinkOption,
+    me: CurrentUser = CurrentUser.here,
 ): FileInfo {
     val file = Paths.get(path.toString())
     return when (views) {
-        AttributeViews.Unix -> unixInfo(file, options)
-        AttributeViews.Posix -> {
-            val posix = Files.readAttributes(file, PosixFileAttributes::class.java, *options)
-            FileInfo(
-                type = posix.type(),
-                size = posix.size(),
-                modifiedAt = posix.lastModifiedTime().toKotlinInstant(),
-                changedAt = null,
-                permissions = Permissions(posix.permissions().sumOf { it.bit }),
-                ownedByMe = ownedByCurrentUser(file, posix.owner()),
-                links = null,
-            )
-        }
+        AttributeViews.Unix -> unixInfo(file, options, me)
+        AttributeViews.Posix -> posixInfo(file, options, me)
         AttributeViews.Basic -> {
             val basic = Files.readAttributes(file, BasicFileAttributes::class.java, *options)
             FileInfo(
@@ -95,11 +87,19 @@ internal fun fileInfoWith(
     }
 }
 
+// Named rather than `unix:*`, which also resolves the owner's and group's names: a user database lookup per file.
+internal fun unixAttributes(
+    file: NioPath,
+    options: Array<out LinkOption>,
+): Map<String, Any?> = Files.readAttributes(file, "unix:mode,size,lastModifiedTime,ctime,uid,nlink", *options)
+
 private fun unixInfo(
     file: NioPath,
     options: Array<out LinkOption>,
+    me: CurrentUser,
 ): FileInfo {
-    val unix = Files.readAttributes(file, "unix:*", *options)
+    // Only through unixAttributes: the name-lookup guard in FileInfoJvmTest checks its keys, not this call.
+    val unix = unixAttributes(file, options)
     val mode = unix.getValue("mode") as Int
     return FileInfo(
         type = fileTypeOfMode(mode),
@@ -107,24 +107,94 @@ private fun unixInfo(
         modifiedAt = (unix.getValue("lastModifiedTime") as FileTime).toKotlinInstant(),
         changedAt = (unix.getValue("ctime") as FileTime).toKotlinInstant(),
         permissions = Permissions(mode and PERMISSION_BITS),
-        ownedByMe = currentUid?.let { unix["uid"] == it } ?: ownedByCurrentUser(file, Files.getOwner(file, *options)),
+        ownedByMe = me.ownsUnix(file, options, unix.getValue("uid") as Int),
         links = unix.getValue("nlink") as Int,
     )
 }
 
-private fun BasicFileAttributes.type(): FileType = when {
-    isRegularFile -> FileType.Regular
-    isDirectory -> FileType.Directory
-    isSymbolicLink -> FileType.Symlink
+private fun BasicFileAttributes.type(): FileType = fileType(isRegularFile, isDirectory, isSymbolicLink)
+
+private fun fileType(
+    regular: Boolean,
+    directory: Boolean,
+    symlink: Boolean,
+): FileType = when {
+    regular -> FileType.Regular
+    directory -> FileType.Directory
+    symlink -> FileType.Symlink
     else -> FileType.Other
 }
 
-/** Whether [owner] is the user this process runs as, by name, or null when that user cannot be looked up. */
-private fun ownedByCurrentUser(
+// Named rather than `posix:*`, which also resolves the group's name: a user database lookup per file.
+internal fun posixAttributes(
     file: NioPath,
-    owner: UserPrincipal,
-): Boolean? = try {
-    owner == file.fileSystem.userPrincipalLookupService.lookupPrincipalByName(System.getProperty("user.name"))
+    options: Array<out LinkOption>,
+): Map<String, Any?> = Files.readAttributes(
+    file,
+    "posix:permissions,owner,size,lastModifiedTime,isRegularFile,isDirectory,isSymbolicLink",
+    *options,
+)
+
+private fun posixInfo(
+    file: NioPath,
+    options: Array<out LinkOption>,
+    me: CurrentUser,
+): FileInfo {
+    // Only through posixAttributes: the name-lookup guard in FileInfoJvmTest checks its keys, not this call.
+    val posix = posixAttributes(file, options)
+    @Suppress("UNCHECKED_CAST")
+    val permissions = posix.getValue("permissions") as Set<PosixFilePermission>
+    return FileInfo(
+        type = fileType(
+            regular = posix.getValue("isRegularFile") as Boolean,
+            directory = posix.getValue("isDirectory") as Boolean,
+            symlink = posix.getValue("isSymbolicLink") as Boolean,
+        ),
+        size = posix.getValue("size") as Long,
+        modifiedAt = (posix.getValue("lastModifiedTime") as FileTime).toKotlinInstant(),
+        changedAt = null,
+        permissions = Permissions(permissions.sumOf { it.bit }),
+        ownedByMe = me.owns(posix.getValue("owner") as UserPrincipal),
+        links = null,
+    )
+}
+
+/** The user this process runs as, to tell whether it owns a file, looking each user up by name once. */
+internal class CurrentUser(
+    private val uid: Int?,
+    lookUp: () -> UserPrincipal?,
+    private val ownerOf: (NioPath, Array<out LinkOption>) -> Map<String, Any?> = { file, options ->
+        Files.readAttributes(file, "unix:uid,owner", *options)
+    },
+) {
+    private val principal by lazy(lookUp)
+    private val ownsByUid = ConcurrentHashMap<Int, Boolean>()
+
+    /** Whether [owner] is this user, or null when this user cannot be looked up. */
+    fun owns(owner: UserPrincipal): Boolean? = principal?.let { owner == it }
+
+    /** Whether [file], whose owner's uid is [fileUid], is this user's, or null when this user cannot be looked up. */
+    fun ownsUnix(
+        file: NioPath,
+        options: Array<out LinkOption>,
+        fileUid: Int,
+    ): Boolean? {
+        if (uid != null) return fileUid == uid
+        ownsByUid[fileUid]?.let { return it }
+        // Keyed by this read's uid, not fileUid, so a file chowned in between cannot store a wrong answer.
+        val read = ownerOf(file, options)
+        val owns = owns(read.getValue("owner") as UserPrincipal) ?: return null
+        ownsByUid[read.getValue("uid") as Int] = owns
+        return owns
+    }
+
+    companion object {
+        val here = CurrentUser(currentUid, lookUp = ::lookUpCurrentUser)
+    }
+}
+
+private fun lookUpCurrentUser(): UserPrincipal? = try {
+    FileSystems.getDefault().userPrincipalLookupService.lookupPrincipalByName(System.getProperty("user.name"))
 } catch (_: Exception) {
     null
 }
