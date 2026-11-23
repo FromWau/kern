@@ -586,6 +586,16 @@ class WalkTest {
     }
 
     @Test
+    fun `under AsLinks an excluded path holding a NUL is InvalidName though a link is at the name before it`() {
+        (dir / "a").linkTo(Path("missing"))
+        val excluded = Path(dir, "a${NUL}b")
+
+        val walked = dir.walkTopDown(Symlinks.AsLinks, exclude = setOf(excluded))
+
+        assertIs<FileError.InvalidName>(walked.errorOrNull())
+    }
+
+    @Test
     fun `under Inside an excluded link excludes the folder it leads to`() {
         val walked = walkWithCurrentExcluded(Symlinks.Inside)
 
@@ -681,6 +691,71 @@ class WalkTest {
             WalkEntry.Skipped(dir / "c.tmp", Path("c.tmp"), WalkSkip.Excluded),
         )
         assertEquals(expected.map { Ok(it) }, walked)
+    }
+
+    /** Walks [dir] holding `x`, `sub/x` and `sub/y` with `sub/x` excluded, in [symlinks] mode. */
+    private fun walkExcludedFileInASubfolder(symlinks: Symlinks) {
+        val namesake = (dir / "x").writeRaw("x")
+        createDirectoriesRaw(dir / "sub")
+        val excluded = (dir / "sub" / "x").writeRaw("x")
+        val kept = (dir / "sub" / "y").writeRaw("y")
+
+        val walked = dir
+            .walkTopDown(symlinks, exclude = setOf(excluded))
+            .assertSuccess()
+            .toList()
+
+        val expected = listOf(
+            walkedFile(namesake, Path("x"), size = 1, viaLink = false),
+            WalkEntry.Folder(dir / "sub", Path("sub")),
+            WalkEntry.Skipped(excluded, Path("sub") / "x", WalkSkip.Excluded),
+            walkedFile(kept, Path("sub") / "y", size = 1, viaLink = false),
+        )
+        assertEquals(expected.map { Ok(it) }, walked)
+    }
+
+    @Test
+    fun `under Inside an excluded file in a subfolder is Excluded and a namesake above it is not`() {
+        walkExcludedFileInASubfolder(Symlinks.Inside)
+    }
+
+    @Test
+    fun `under Anywhere an excluded file in a subfolder is Excluded and a namesake above it is not`() {
+        walkExcludedFileInASubfolder(Symlinks.Anywhere)
+    }
+
+    @Test
+    fun `under AsLinks an excluded file in a subfolder is Excluded and a namesake above it is not`() {
+        walkExcludedFileInASubfolder(Symlinks.AsLinks)
+    }
+
+    @Test
+    fun `under NoLinks an excluded file in a subfolder is Excluded and a namesake above it is not`() {
+        walkExcludedFileInASubfolder(Symlinks.NoLinks)
+    }
+
+    @Test
+    fun `under Anywhere an excluded file in a folder outside the root entered through a link is Excluded`() {
+        val outside = newTempDir()
+        try {
+            val excluded = (outside / "x").writeRaw("x")
+            (outside / "y").writeRaw("y")
+            val link = (dir / "l").linkTo(outside)
+
+            val walked = dir
+                .walkTopDown(Symlinks.Anywhere, exclude = setOf(excluded))
+                .assertSuccess()
+                .toList()
+
+            val expected = listOf(
+                WalkEntry.Folder(link, Path("l")),
+                WalkEntry.Skipped(link / "x", Path("l") / "x", WalkSkip.Excluded),
+                walkedFile(link / "y", Path("l") / "y", size = 1, viaLink = false),
+            )
+            assertEquals(expected.map { Ok(it) }, walked)
+        } finally {
+            outside.deleteTree()
+        }
     }
 
     @Test

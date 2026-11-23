@@ -180,10 +180,11 @@ internal class CurrentUser(
         fileUid: Int,
     ): Boolean? {
         if (uid != null) return fileUid == uid
+        val me = principal ?: return null
         ownsByUid[fileUid]?.let { return it }
         // Keyed by this read's uid, not fileUid, so a file chowned in between cannot store a wrong answer.
         val read = ownerOf(file, options)
-        val owns = owns(read.getValue("owner") as UserPrincipal) ?: return null
+        val owns = read.getValue("owner") as UserPrincipal == me
         ownsByUid[read.getValue("uid") as Int] = owns
         return owns
     }

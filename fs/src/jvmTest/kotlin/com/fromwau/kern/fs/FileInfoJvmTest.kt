@@ -269,6 +269,26 @@ class FileInfoJvmTest {
         assertEquals(2, ownerReads.size, "owners read for $ownerReads")
     }
 
+    @Test
+    fun `without the uid or the user this process runs as no file's owner is read`() {
+        assumeTrue(hasUnixView, "this file system has no unix attributes")
+        val files = listOf("a.txt", "b.txt").map { (dir / it).writeRaw("abc") }
+        val ownerReads = mutableListOf<NioPath>()
+        val me = CurrentUser(
+            uid = null,
+            lookUp = { null },
+            ownerOf = { file, options ->
+                ownerReads.add(file)
+                Files.readAttributes(file, "unix:uid,owner", *options)
+            },
+        )
+
+        val owned = files.map { fileInfoWith(it, AttributeViews.Unix, me = me).ownedByMe }
+
+        assertEquals(listOf(null, null), owned)
+        assertEquals(emptyList(), ownerReads)
+    }
+
     private fun ownUser(): UserPrincipal =
         FileSystems.getDefault().userPrincipalLookupService.lookupPrincipalByName(System.getProperty("user.name"))
 

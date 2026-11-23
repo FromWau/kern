@@ -309,6 +309,11 @@ You do not need this part on a first read. Come back when a walk or a mirror doe
 - The walk holds one entry per link waiting.
 - A waiting link may change before its turn, for example be pointed at a file or removed. It is yielded as what it is
   then. That happens at that later point of the walk, not among its folder's entries.
+- A folder swapped for a link before the walk lists it is not listed. It is yielded as what that link is in the mode,
+  a `Link` or a `Skipped`, after the trees of the folders before it, or waits as a link where links are followed.
+  `enter` may then be asked about it twice.
+- A followed link pointed elsewhere before its folder is listed is judged again the same way. Under `Inside`, a folder
+  below such a link that leads outside the root by then is `Skipped(LeadsOutside)`.
 - A failure's `path` is spelled from the root you passed. For a folder the walk reached only through a link, it is
   spelled under the link the walk took.
 - A failure's `relative` says where in the tree it was met: `out/broken.txt` for `out -> ../shared` under `Anywhere`.
@@ -350,7 +355,7 @@ You do not need this part on a first read. Come back when a walk or a mirror doe
 | `AlreadyEntered(firstRelative)` | a link to a folder already walked under `firstRelative`, null for the root |
 | `Excluded` | a file or folder `exclude` names, or anything below such a folder |
 | `Refused` | a folder `enter` refused |
-| `LeadsOutside` | a link `Inside` did not follow |
+| `LeadsOutside` | a link `Inside` did not follow, or a folder below a followed link pointed outside before listing |
 | `Link` | any link under `NoLinks` |
 
 - A link to a folder above is `AlreadyEntered`.

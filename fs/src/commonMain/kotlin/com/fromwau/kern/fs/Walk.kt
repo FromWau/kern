@@ -54,6 +54,12 @@ import kotlinx.io.files.Path
  * then, at that later point of the walk rather than among its folder's entries. The walk holds one entry per link
  * waiting.
  *
+ * A folder swapped for a link after the walk met it and before it is listed is not listed: it is yielded as what that
+ * link is in this mode, a [WalkEntry.Link] or a [WalkEntry.Skipped], after the subtrees of the folders before it, or,
+ * where links are followed, waits as such a link, and [enter] may then be asked about it twice. A followed link pointed
+ * elsewhere before its folder is listed is judged again the same way, and under [Symlinks.Inside] a folder below one
+ * that leads outside the root by then is skipped as [WalkSkip.LeadsOutside].
+ *
  * @param exclude folders and files the walk leaves out, however they are reached: a folder below the root whose real
  *   path is one of them or below one is yielded as [WalkSkip.Excluded] and never read, and [enter] is not asked about
  *   it. A file whose real path is one of them, and a symlink to a file in one of them or below one, is yielded as
@@ -77,19 +83,28 @@ public fun Path.walkTopDown(
     symlinks: Symlinks = Symlinks.Inside,
     exclude: Set<Path> = emptySet(),
     enter: (WalkEntry.Folder) -> Boolean = { true },
+): Result<Sequence<Result<WalkEntry, WalkFailure>>, FileError> =
+    walkTopDownWith(SystemLookups, symlinks, exclude, enter)
+
+/** [walkTopDown], with each entry looked at through [lookups]. */
+internal fun Path.walkTopDownWith(
+    lookups: WalkLookups,
+    symlinks: Symlinks = Symlinks.Inside,
+    exclude: Set<Path> = emptySet(),
+    enter: (WalkEntry.Folder) -> Boolean = { true },
 ): Result<Sequence<Result<WalkEntry, WalkFailure>>, FileError> {
-    val found = when (val looked = info()) {
+    val found = when (val looked = lookups.info(this)) {
         is Result.Success -> looked.value
         is Result.Error -> return looked
     }
-    val excluded = when (val resolved = exclude.realPaths(linksByPlace = !symlinks.followsLinks())) {
+    val excluded = when (val resolved = exclude.realPaths(lookups, linksByPlace = !symlinks.followsLinks())) {
         is Result.Success -> resolved.value
         is Result.Error -> return resolved
     }
-    val rules = WalkRules(symlinks, excluded, enter)
+    val rules = WalkRules(symlinks, excluded, enter, lookups)
     return when (found.type) {
-        FileType.Regular -> Ok(sequenceOf(Ok(fileEntry(Path(name), found))))
-        FileType.Directory -> list().map { entries -> walkFrom(this, entries, rules) }
+        FileType.Regular -> Ok(sequenceOf(Ok(fileEntry(Path(name), found, viaLink = lookups.isLink(this)))))
+        FileType.Directory -> lookups.list(this).map { entries -> walkFrom(this, entries, rules) }
         else -> Err(FileError.NotRegularFile(this, found.type))
     }
 }
@@ -98,10 +113,15 @@ public fun Path.walkTopDown(
  * The real path of each of these that something is at, or the first error resolving one gave otherwise. With
  * [linksByPlace], a symlink stands for its own place, the real path of its folder joined with its name.
  */
-private fun Set<Path>.realPaths(linksByPlace: Boolean): Result<Set<Path>, FileError> {
+private fun Set<Path>.realPaths(
+    lookups: WalkLookups,
+    linksByPlace: Boolean,
+): Result<Set<Path>, FileError> {
     val real = mutableSetOf<Path>()
     for (path in this) {
-        val resolved = if (linksByPlace && path.isSymlink() == Ok(true)) path.ownPlace() else path.realPath()
+        // Refused first, so a native lookup never reads a path holding a NUL as the shorter one before it.
+        val byPlace = linksByPlace && path.refusedPath() == null && lookups.isLink(path)
+        val resolved = if (byPlace) lookups.ownPlace(path) else lookups.realPath(path)
         when (resolved) {
             is Result.Success -> real += resolved.value
             is Result.Error -> if (resolved.error !is FileError.NotFound) return resolved
@@ -110,52 +130,93 @@ private fun Set<Path>.realPaths(linksByPlace: Boolean): Result<Set<Path>, FileEr
     return Ok(real)
 }
 
-/** Where this symlink itself is: the real path of the folder it is in, joined with its name. */
-private fun Path.ownPlace(): Result<Path, FileError> = folderOrDot().realPath().map { Path(it, name) }
+/** Where the symlink [link] itself is: the real path of the folder it is in, joined with its name. */
+private fun WalkLookups.ownPlace(link: Path): Result<Path, FileError> =
+    realPath(link.folderOrDot()).map { Path(it, link.name) }
 
 /** Whether a walk in this mode follows a link, rather than passing it over or yielding it as one. */
 private fun Symlinks.followsLinks(): Boolean = this == Symlinks.Inside || this == Symlinks.Anywhere
 
-/** What a walk was asked to do with links, which folders it was told to leave out and which to [enter]. */
+/** The lookups a walk makes of each entry it lists, which a test can count or make a change between. */
+internal interface WalkLookups {
+    /** Whether [path] is itself a symlink, as [isSymlink] answers. */
+    fun isLink(path: Path): Boolean
+
+    /** What [path] leads to, as [Path.info] reads it. */
+    fun info(path: Path): Result<FileInfo, FileError.LookupError>
+
+    /** What is at [path] itself, as [Path.info] reads it but describing a symlink there as the link. */
+    fun ownInfo(path: Path): Result<FileInfo, FileError.LookupError>
+
+    /** What the symlink [path] holds, as [readLink] reads it, throwing why it cannot be read. */
+    fun linkTarget(path: Path): Path
+
+    /** One spelling of [path], as [oneName] gives it. */
+    fun oneName(path: Path): Path
+
+    /** The real path of [path], as [Path.realPath] answers it. */
+    fun realPath(path: Path): Result<Path, FileError.LookupError>
+
+    /** The entries of the folder [path], as [Path.list] gives them. */
+    fun list(path: Path): Result<List<Path>, FileError>
+}
+
+/** The lookups of the file system itself. */
+internal object SystemLookups : WalkLookups {
+    override fun isLink(path: Path): Boolean = isSymlink(path)
+
+    override fun info(path: Path): Result<FileInfo, FileError.LookupError> = path.info()
+
+    override fun ownInfo(path: Path): Result<FileInfo, FileError.LookupError> {
+        path.refusedPath()?.let { return it }
+        return try {
+            Ok(ownFileInfoAt(path))
+        } catch (e: Exception) {
+            path.inaccessibleUnlessGone(e)
+        }
+    }
+
+    override fun linkTarget(path: Path): Path = readLink(path)
+
+    override fun oneName(path: Path): Path = path.oneName()
+
+    override fun realPath(path: Path): Result<Path, FileError.LookupError> = path.realPath()
+
+    override fun list(path: Path): Result<List<Path>, FileError> = path.list()
+}
+
+/**
+ * What a walk was asked to do with links, which folders it was told to leave out and which to [enter], and the
+ * [lookups] it makes of each entry.
+ */
 private class WalkRules(
     val symlinks: Symlinks,
     val excluded: Set<Path>,
     val enter: (WalkEntry.Folder) -> Boolean,
+    val lookups: WalkLookups,
 ) {
-    /** Why the walk does not enter [folder], whose real path is [real] when already known, or null when it does. */
+    /** Why the walk does not enter [folder], whose real path is [real], or null when it does. */
     fun refusal(
         folder: WalkEntry.Folder,
-        real: Path? = null,
+        real: Lazy<Path>,
     ): WalkSkip? = when {
-        excludesFolder(real ?: folder.path.oneName()) -> WalkSkip.Excluded
+        excludesFolder(real) -> WalkSkip.Excluded
         !enter(folder) -> WalkSkip.Refused
         else -> null
     }
 
     /** Whether the folder whose real path is [real] is one in [excluded] or below one. */
-    fun excludesFolder(real: Path): Boolean = excluded.isNotEmpty() && isExcluded(real)
+    fun excludesFolder(real: Lazy<Path>): Boolean = excluded.isNotEmpty() && isExcluded(real.value)
 
-    private val excludedNames = excluded.mapTo(mutableSetOf()) { it.name }
+    /** The names of the paths in [excluded], which a file that is no link must have to be one of them. */
+    val excludedNames = excluded.mapTo(mutableSetOf()) { it.name }
 
-    /**
-     * Whether [file], a regular file the walk reached, is one in [excluded], or a symlink to one there or to one in a
-     * folder in [excluded] or below one.
-     */
-    fun excludesFile(file: Path): Boolean {
-        // Asked first, so a walk with nothing excluded never looks at what a file is.
-        if (excluded.isEmpty()) return false
-        if (isSymlink(file)) return isExcluded(file.oneName())
-        // By name first, so a file no excluded path could be is never resolved.
-        return file.name in excludedNames && file.oneName() in excluded
-    }
+    /** Whether the symlink [link] is in [excluded] by its own place, or below one, for a walk that follows no link. */
+    fun excludesLinkAt(link: Path): Boolean =
+        excluded.isNotEmpty() && isExcluded(lookups.ownPlace(link).getOrNull() ?: link)
 
-    /** Whether [entry] is a symlink in [excluded] by its own place, or below one, for a walk that follows no link. */
-    fun excludesLinkAt(entry: Path): Boolean {
-        if (excluded.isEmpty() || symlinks.followsLinks() || !isSymlink(entry)) return false
-        return isExcluded(entry.ownPlace().getOrNull() ?: entry)
-    }
-
-    private fun isExcluded(real: Path): Boolean = excluded.any { real.isAtOrBelow(it) }
+    /** Whether [real] is a path in [excluded] or below one. */
+    fun isExcluded(real: Path): Boolean = excluded.any { real.isAtOrBelow(it) }
 }
 
 /** One entry [walkTopDown] reached, at [path]: a folder root joined with [relative], or a file root itself. */
@@ -248,8 +309,9 @@ public sealed interface WalkSkip {
     public data object Refused : WalkSkip
 
     /**
-     * A symlink, to a folder or a file, that [Symlinks.Inside] passes over, since it leads outside the root; or, in a
-     * [mirrorTo] report, a link [Symlinks.AsLinks] yielded that was not made, since its target leads out by its names.
+     * A symlink, to a folder or a file, that [Symlinks.Inside] passes over, since it leads outside the root, or a
+     * folder below a followed link that was pointed outside the root before the folder was listed; or, in a [mirrorTo]
+     * report, a link [Symlinks.AsLinks] yielded that was not made, since its target leads out by its names.
      */
     public data object LeadsOutside : WalkSkip
 
@@ -265,7 +327,7 @@ private fun walkFrom(
 ): Sequence<Result<WalkEntry, WalkFailure>> {
     var callTimeEntries: List<Path>? = rootEntries
     return Sequence {
-        val listed = callTimeEntries?.let { Ok(it) } ?: root.list()
+        val listed = callTimeEntries?.let { Ok(it) } ?: rules.lookups.list(root)
         callTimeEntries = null
         entriesUnder(root, listed, rules).iterator()
     }
@@ -276,21 +338,22 @@ private fun entriesUnder(
     rootListed: Result<List<Path>, FileError>,
     rules: WalkRules,
 ): Sequence<Result<WalkEntry, WalkFailure>> = sequence {
-    val pending = ArrayDeque<WalkEntry.Folder>()
+    val lookups = rules.lookups
+    val pending = ArrayDeque<Judged>()
     // Each link to a folder, in the order met, taken once no real folder is left, so a folder is walked under its own
     // path before any link reaches it.
     val linkedFolders = ArrayDeque<WalkEntry.Folder>()
     val symlinks = rules.symlinks
-    val realRoot = if (symlinks.followsLinks()) root.oneName() else null
+    val realRoot = if (symlinks.followsLinks()) lookups.oneName(root) else null
     // Where each folder walked so far really is, and the relative path it was walked under, null for the root, so one
     // reached again through a link is recognised. Only a followed link can reach a folder twice.
     val entered = realRoot?.let { mutableMapOf<Path, Path?>(it to null) }
     val linksStayIn = realRoot.takeIf { symlinks == Symlinks.Inside }
     // The folder being walked, null for the root, which is never yielded.
-    var current: WalkEntry.Folder? = null
+    var current: Judged? = null
     var listed: Result<List<Path>, FileError>? = rootListed
     while (listed != null) {
-        val folder = current
+        val folder = current?.entry
         when {
             // A folder below the root gone since its lookup is passed over; the root's own error stays the walk's.
             folder != null && listed is Result.Error && listed.error is FileError.NotFound ->
@@ -301,11 +364,12 @@ private fun entriesUnder(
             }
             listed is Result.Success -> {
                 if (folder != null) yield(Ok(folder))
-                val subdirectories = mutableListOf<WalkEntry.Folder>()
+                val throughLink = current?.throughLink ?: false
+                val subdirectories = mutableListOf<Judged>()
                 for (child in listed.value) {
                     val childRelative = folder?.let { it.relative / child.name } ?: Path(child.name)
                     when (val step = child.walkStep(childRelative, entered, linksStayIn, rules)) {
-                        is WalkStep.Folder -> subdirectories += step.entry
+                        is WalkStep.Folder -> subdirectories += step.judged(throughLink)
                         is WalkStep.LinkedFolder -> linkedFolders += step.entry
                         is WalkStep.Yielded -> yield(step.yielded(child, childRelative))
                     }
@@ -313,35 +377,80 @@ private fun entriesUnder(
                 pending.addAll(0, subdirectories)
             }
         }
-        current = pending.removeFirstOrNull()
+        current = null
+        listed = null
         while (current == null) {
+            val next = pending.removeFirstOrNull()
+            if (next != null) {
+                // Asked before the listing too, so a link put in its place is never opened, and after it, so one put
+                // there while it was listed is never listed through.
+                if (next.isAsJudged(lookups)) {
+                    val listing = lookups.list(next.entry.path)
+                    if (next.isAsJudged(lookups)) {
+                        current = next
+                        listed = listing
+                        continue
+                    }
+                }
+                next.real?.let { entered?.remove(it) }
+                val path = next.entry.path
+                // Reached through a link retargeted outside since it was judged, which no look at this folder tells.
+                if (next.throughLink && linksStayIn != null && !lookups.oneName(path).isAtOrBelow(linksStayIn)) {
+                    yield(Ok(WalkEntry.Skipped(path, next.entry.relative, WalkSkip.LeadsOutside)))
+                    continue
+                }
+                when (val step = path.walkStep(next.entry.relative, entered, linksStayIn, rules)) {
+                    is WalkStep.Folder -> pending.addFirst(step.judged(next.throughLink))
+                    is WalkStep.LinkedFolder -> linkedFolders += step.entry
+                    is WalkStep.Yielded -> yield(step.yielded(path, next.entry.relative))
+                }
+                continue
+            }
             val link = linkedFolders.removeFirstOrNull() ?: break
             when (val step = link.path.walkStep(link.relative, entered, linksStayIn, rules, deferLinks = false)) {
-                is WalkStep.Folder -> current = step.entry
+                // Checked by where it resolves, since a link, it or one above it, was followed to reach it.
+                is WalkStep.Folder -> pending.addFirst(step.judged(throughLink = true))
                 is WalkStep.LinkedFolder -> error("a link to a folder is judged when the walk comes back to it")
                 is WalkStep.Yielded -> yield(step.yielded(link.path, link.relative))
             }
         }
-        listed = current?.path?.list() ?: break
     }
 }
+
+/**
+ * A folder the walk judged it enters, [real] being where it resolved to when links are followed, waiting for its
+ * listing. With [throughLink], its path passes through a followed link, so it is listed only while it still resolves
+ * to [real]; otherwise only while it is still no link.
+ */
+private class Judged(
+    val entry: WalkEntry.Folder,
+    val real: Path?,
+    val throughLink: Boolean,
+) {
+    fun isAsJudged(lookups: WalkLookups): Boolean =
+        if (throughLink) lookups.oneName(entry.path) == real else !lookups.isLink(entry.path)
+}
+
+/** This step's folder, waiting for its listing, [throughLink] when the folder it was listed in is reached so. */
+private fun WalkStep.Folder.judged(throughLink: Boolean): Judged = Judged(entry, real, throughLink || viaLink)
 
 /** What the walk yields for this step at [path], [relative] below the root. */
 private fun WalkStep.Yielded.yielded(
     path: Path,
     relative: Path,
 ): Result<WalkEntry, WalkFailure> = when (this) {
-    is WalkStep.File -> Ok(path.fileEntry(relative, info))
+    is WalkStep.File -> Ok(path.fileEntry(relative, info, viaLink))
     is WalkStep.Link -> Ok(WalkEntry.Link(path, relative, target))
     is WalkStep.Failed -> Err(WalkFailure(path, relative, error))
     is WalkStep.Skip -> Ok(WalkEntry.Skipped(path, relative, why))
 }
 
-/** The file at this path, [relative] below the root, as [info] read it. */
+/** The file at this path, [relative] below the root, as [info] read it, [viaLink] when a symlink led to it. */
 private fun Path.fileEntry(
     relative: Path,
     info: FileInfo,
-): WalkEntry.File = WalkEntry.File(this, relative, info.size, info.modifiedAt, viaLink = isSymlink(this))
+    viaLink: Boolean,
+): WalkEntry.File = WalkEntry.File(this, relative, info.size, info.modifiedAt, viaLink)
 
 private fun FileError.isLoop(): Boolean = this is FileError.Inaccessible && cause == IoCause.Loop
 
@@ -350,11 +459,16 @@ private sealed interface WalkStep {
     /** A step that enters no folder, yielded where the walk met it. */
     sealed interface Yielded : WalkStep
 
-    data class File(val info: FileInfo) : Yielded
+    data class File(val info: FileInfo, val viaLink: Boolean) : Yielded
 
     data class Link(val target: Path) : Yielded
 
-    data class Folder(val entry: WalkEntry.Folder) : WalkStep
+    /** A folder to enter, [real] being where it resolved to when that was asked, [viaLink] when it is a link. */
+    data class Folder(
+        val entry: WalkEntry.Folder,
+        val real: Path?,
+        val viaLink: Boolean,
+    ) : WalkStep
 
     /** A link to a folder, which the walk takes once no real folder is left. */
     data class LinkedFolder(val entry: WalkEntry.Folder) : WalkStep
@@ -370,6 +484,11 @@ private sealed interface WalkStep {
  * when they are not. With [linksStayIn], a symlink is followed only to a place in that folder or below it. With
  * [deferLinks], a link to a folder that [WalkRules.excludesFolder] keeps is a [WalkStep.LinkedFolder], judged when
  * the walk comes back to it.
+ *
+ * What the entry is and whether it is a symlink come from one lookup of the entry itself, and its real path is asked
+ * once and reused. A folder that is no link is asked again whether it is one once resolved, and a file that is no link
+ * but has the name of an excluded path is resolved and then looked at again, as [looked] with that real path as
+ * [resolved], since a link put in the place of either after the first look would have been resolved instead.
  */
 private fun Path.walkStep(
     relative: Path,
@@ -377,47 +496,149 @@ private fun Path.walkStep(
     linksStayIn: Path?,
     rules: WalkRules,
     deferLinks: Boolean = true,
+    looked: Look = firstLook(rules),
+    resolved: Path? = null,
 ): WalkStep {
-    if (rules.excludesLinkAt(this)) return WalkStep.Skip(WalkSkip.Excluded)
-    if (rules.symlinks == Symlinks.NoLinks && isSymlink(this)) return WalkStep.Skip(WalkSkip.Link)
-    if (rules.symlinks == Symlinks.AsLinks && isSymlink(this)) {
-        when (val read = readSymlink()) {
-            is Result.Success -> return WalkStep.Link(read.value)
-            is Result.Error -> when (read.error) {
-                is FileError.NotFound -> return WalkStep.Skip(WalkSkip.Gone)
-                // No longer a link since it was listed, so it is looked at below as what it is now.
-                is FileError.NotASymlink -> Unit
-                else -> return WalkStep.Failed(read.error)
-            }
-        }
+    val lookups = rules.lookups
+    val (found, isLink, linkReal) = when (looked) {
+        is Look.Found -> looked
+        is Look.Done -> return looked.step
     }
-    val found = when (val looked = info()) {
-        is Result.Success -> looked.value
-        is Result.Error -> return when {
-            // Its parent was just listed, so only the entry's own chain of links can go round.
-            looked.error.isLoop() && isSymlink(this) -> WalkStep.Skip(WalkSkip.LinkLoop)
-            looked.error !is FileError.NotFound -> WalkStep.Failed(looked.error)
-            // Still there as a link, so it is the link's target that is missing.
-            isSymlink(this) -> WalkStep.Skip(WalkSkip.DanglingLink)
-            else -> WalkStep.Skip(WalkSkip.Gone)
-        }
-    }
-    if (linksStayIn != null && isSymlink(this) && !oneName().isAtOrBelow(linksStayIn)) {
+    val real = lazy(LazyThreadSafetyMode.NONE) { linkReal ?: lookups.oneName(this) }
+    if (linksStayIn != null && isLink && !real.value.isAtOrBelow(linksStayIn)) {
         return WalkStep.Skip(WalkSkip.LeadsOutside)
     }
     if (found.type == FileType.Regular) {
-        return if (rules.excludesFile(this)) WalkStep.Skip(WalkSkip.Excluded) else WalkStep.File(found)
+        val excluded = when {
+            // Asked first, so a walk with nothing excluded never resolves a file.
+            rules.excluded.isEmpty() -> false
+            isLink -> rules.isExcluded(real.value)
+            // By name first, so a file no excluded path could be is never resolved.
+            name !in rules.excludedNames -> false
+            else -> {
+                val place = resolved ?: real.value
+                // Where the mode follows links, a link put here since the look is excluded by that same real path.
+                val settled = resolved != null || (rules.symlinks.followsLinks() && place in rules.excluded)
+                if (!settled) {
+                    val again = firstLook(rules)
+                    return walkStep(relative, entered, linksStayIn, rules, deferLinks, again, resolved = place)
+                }
+                place in rules.excluded
+            }
+        }
+        return if (excluded) WalkStep.Skip(WalkSkip.Excluded) else WalkStep.File(found, viaLink = isLink)
     }
     if (found.type != FileType.Directory) return WalkStep.Skip(WalkSkip.NotFileOrFolder(found.type))
     val folder = WalkEntry.Folder(this, relative)
-    if (entered == null) return rules.refusal(folder)?.let { WalkStep.Skip(it) } ?: WalkStep.Folder(folder)
-    val real = oneName()
-    if (deferLinks && isSymlink(this)) {
+    val realFolder = if (isLink || entered != null || rules.excluded.isNotEmpty()) real.value else null
+    // Resolved after the look, so a folder swapped for a link since was resolved through it: looked at again as a link.
+    if (realFolder != null && !isLink && lookups.isLink(this)) {
+        return walkStep(relative, entered, linksStayIn, rules, deferLinks)
+    }
+    if (entered == null) {
+        return rules.refusal(folder, real)?.let { WalkStep.Skip(it) } ?: WalkStep.Folder(folder, real = null, isLink)
+    }
+    checkNotNull(realFolder)
+    if (deferLinks && isLink) {
         return if (rules.excludesFolder(real)) WalkStep.Skip(WalkSkip.Excluded) else WalkStep.LinkedFolder(folder)
     }
-    if (real in entered) return WalkStep.Skip(WalkSkip.AlreadyEntered(firstRelative = entered[real]))
+    if (realFolder in entered) return WalkStep.Skip(WalkSkip.AlreadyEntered(firstRelative = entered[realFolder]))
     rules.refusal(folder, real)?.let { return WalkStep.Skip(it) }
     // Recorded only once entered, so a folder refused above is still walked under the next path that reaches it.
-    entered[real] = relative
-    return WalkStep.Folder(folder)
+    entered[realFolder] = relative
+    return WalkStep.Folder(folder, realFolder, isLink)
+}
+
+/**
+ * A walk's look at this entry, from a lookup of the entry itself first, so what it is and whether it is a link come
+ * from one answer: where links are followed, a symlink is then followed, and passed over or read as one otherwise.
+ */
+private fun Path.firstLook(rules: WalkRules): Look =
+    if (rules.symlinks.followsLinks()) followingLook(rules.lookups) else ownLook(rules)
+
+/**
+ * The look at this entry of a walk that follows links: what it is itself, and when it is a link, where it resolves to
+ * and what is there, read at that real path so both describe one target.
+ */
+private fun Path.followingLook(lookups: WalkLookups): Look {
+    val own = when (val looked = lookups.ownInfo(this)) {
+        is Result.Success -> looked.value
+        is Result.Error -> return Look.Done(looked.error.failedLookupStep())
+    }
+    if (own.type != FileType.Symlink) return Look.Found(own, isLink = false)
+    // A link's real path is never its own, so the same path back says it could not be resolved.
+    val real = lookups.oneName(this).takeIf { it != this }
+    val led = lookups.info(real ?: this)
+    // A link both before and after the lookup of what it leads to, or else what was read may be a file put there.
+    if (!lookups.isLink(this)) return followingLook(lookups)
+    return when (led) {
+        // A link that could not be resolved but leads somewhere now is resolved again where its real path is needed.
+        is Result.Success -> Look.Found(led.value, isLink = true, real)
+        is Result.Error -> Look.Done(led.error.failedFollowStep())
+    }
+}
+
+/**
+ * What a walk's first look at an entry found, whether it is a symlink, and the real path a link resolved to, or the
+ * step that look already decides.
+ */
+private sealed interface Look {
+    data class Found(
+        val info: FileInfo,
+        val isLink: Boolean,
+        val real: Path? = null,
+    ) : Look
+
+    data class Done(val step: WalkStep) : Look
+}
+
+/**
+ * The look at this entry of a walk that follows no link, from one lookup of the entry itself: a symlink is passed over
+ * or read as one, and anything else is what that lookup found.
+ */
+private fun Path.ownLook(rules: WalkRules): Look {
+    val lookups = rules.lookups
+    val own = when (val looked = lookups.ownInfo(this)) {
+        is Result.Success -> looked.value
+        is Result.Error -> return Look.Done(looked.error.failedLookupStep())
+    }
+    if (own.type != FileType.Symlink) return Look.Found(own, isLink = false)
+    if (rules.excludesLinkAt(this)) return Look.Done(WalkStep.Skip(WalkSkip.Excluded))
+    if (rules.symlinks == Symlinks.NoLinks) return Look.Done(WalkStep.Skip(WalkSkip.Link))
+    val target = try {
+        lookups.linkTarget(this)
+    } catch (e: Exception) {
+        return lookAfterFailedRead(e, lookups)
+    }
+    return Look.Done(WalkStep.Link(target))
+}
+
+/**
+ * The look at this entry, a symlink whose read just failed with [failure]: only looking again tells a link that went
+ * away, or was replaced, from one that cannot be read. The look is of the entry itself, so a link put back since is
+ * never followed.
+ */
+private fun Path.lookAfterFailedRead(
+    failure: Exception,
+    lookups: WalkLookups,
+): Look {
+    val now = when (val looked = lookups.ownInfo(this)) {
+        is Result.Success -> looked.value
+        is Result.Error -> return Look.Done(looked.error.failedLookupStep())
+    }
+    if (now.type == FileType.Symlink) return Look.Done(WalkStep.Failed(inaccessible(this, failure)))
+    return Look.Found(now, isLink = false)
+}
+
+/** What a walk does with an entry whose lookup failed with this: one nothing is at any more is [WalkSkip.Gone]. */
+private fun FileError.failedLookupStep(): WalkStep =
+    if (this is FileError.NotFound) WalkStep.Skip(WalkSkip.Gone) else WalkStep.Failed(this)
+
+/** What a walk does with an entry still a symlink after the lookup of what it leads to failed with this. */
+private fun FileError.LookupError.failedFollowStep(): WalkStep = when {
+    // Its parent was just listed, so only the entry's own chain of links can go round.
+    isLoop() -> WalkStep.Skip(WalkSkip.LinkLoop)
+    // Still there as a link, so it is the link's target that is missing.
+    this is FileError.NotFound -> WalkStep.Skip(WalkSkip.DanglingLink)
+    else -> WalkStep.Failed(this)
 }
