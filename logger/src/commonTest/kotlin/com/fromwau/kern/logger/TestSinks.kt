@@ -166,6 +166,15 @@ internal suspend fun eventually(timeout: Duration = 5.seconds, condition: () -> 
     }
 }
 
+/**
+ * Waits until what was logged is written, and with it each failure report that logging caused: a sink failing on its
+ * worker queues the report for the others after a flush already took what it waits for, so a second flush waits for it.
+ */
+internal suspend fun Logger.awaitFlushedWithReports() {
+    val _ = awaitFlushed()
+    val _ = awaitFlushed()
+}
+
 /** Waits [duration] of real time. */
 internal suspend fun realDelay(duration: Duration) {
     withContext(Dispatchers.Default) { delay(duration) }

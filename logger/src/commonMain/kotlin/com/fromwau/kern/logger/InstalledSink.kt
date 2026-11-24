@@ -314,6 +314,9 @@ public class InstalledSink internal constructor(
         mutableConfig.value = config
     }
 
+    /** Runs on a close that gives up on the queue right after it wakes the worker, so a test can let the worker run. */
+    internal var afterAbandonWake: () -> Unit = {}
+
     /** What the close that ended the sink's removal failed with, once it is [SinkState.Closed]. */
     @Volatile
     internal var retiredWith: SinkError? = null
@@ -487,21 +490,22 @@ public class InstalledSink internal constructor(
      */
     private inline fun abandonQueued(settleOrGiveUp: (target: Long) -> Unit): Int {
         val target = accepted.load()
-        val before = lock.withLock {
-            abandoning++
-            abandons++
-            val before = droppedByClose
-            retryWaiting?.takeUnless { retryClaimed }?.let { batch ->
-                retryClaimed = true
-                loseAll(batch, byClose = true)
-            }
-            before
-        }
-        wakeUp()
+        val before = lock.withLock { droppedByClose }
+        // Emptied before the worker is woken or its retry claimed, so it cannot take an entry this close gives up on.
         while (true) {
             val entry = queue.tryReceive().getOrNull() ?: break
             loseAll(listOf(entry), byClose = true)
         }
+        lock.withLock {
+            abandoning++
+            abandons++
+            retryWaiting?.takeUnless { retryClaimed }?.let { batch ->
+                retryClaimed = true
+                loseAll(batch, byClose = true)
+            }
+        }
+        wakeUp()
+        afterAbandonWake()
         try {
             if (!isSettled(target)) settleOrGiveUp(target)
         } finally {

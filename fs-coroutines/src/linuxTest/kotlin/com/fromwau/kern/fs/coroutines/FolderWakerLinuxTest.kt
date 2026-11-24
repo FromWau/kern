@@ -9,24 +9,24 @@ import com.fromwau.kern.fs.test.hardLinkTo
 import com.fromwau.kern.fs.test.scratchDir
 import com.fromwau.kern.fs.writeText
 import com.fromwau.kern.result.assertSuccess
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.files.SystemFileSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.measureTime
 
 class FolderWakerLinuxTest {
     @Test
@@ -107,18 +107,31 @@ class FolderWakerLinuxTest {
     }
 
     @Test
-    fun `waits on more than 64 watches leave Dispatchers IO free`() = runBlocking {
+    fun `a wait goes on while every Dispatchers IO thread is taken`() = runBlocking {
         val dir = scratchDir()
+        val started = Channel<Unit>(Channel.UNLIMITED)
+        val release = CompletableDeferred<Unit>()
+        // Each holds its thread until released, as blocking work on Dispatchers.IO does.
+        val holders = List(IO_THREADS) { _ ->
+            launch(Dispatchers.IO) {
+                started.send(Unit)
+                runBlocking { release.await() }
+            }
+        }
         try {
+            withTimeout(10.seconds) { repeat(IO_THREADS) { _ -> started.receive() } }
             val waker = assertIs<FolderWaker>(openFolderWaker(mapOf(dir to setOf("app.toml"))))
             waker.use {
-                val waits = List(70) { _ -> launch(Dispatchers.Default) { while (true) { val _ = it.next() } } }
-                delay(100.milliseconds)
-                val took = measureTime { withContext(Dispatchers.IO) {} }
-                waits.forEach { wait -> wait.cancelAndJoin() }
-                assertTrue(took < 50.milliseconds, "a task on Dispatchers.IO waited $took")
+                // Not cancelled on a timeout: a wait that never got a thread could not finish its cancellation either.
+                val wait = async { it.next() }
+                val woke = withTimeoutOrNull(10.seconds) { wait.await() }
+                release.complete(Unit)
+                wait.join()
+                val _ = assertNotNull(woke, "a wait got no thread while Dispatchers.IO was full")
             }
         } finally {
+            release.complete(Unit)
+            holders.joinAll()
             dir.deleteRecursively().assertSuccess()
         }
     }
@@ -170,5 +183,10 @@ class FolderWakerLinuxTest {
             val wake = next()
             if (wake != Wake.Quiet) return wake
         }
+    }
+
+    private companion object {
+        // What kotlinx.coroutines gives Dispatchers.IO on Kotlin/Native.
+        const val IO_THREADS = 64
     }
 }

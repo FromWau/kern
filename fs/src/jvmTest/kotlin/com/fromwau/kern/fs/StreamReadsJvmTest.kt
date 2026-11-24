@@ -93,10 +93,11 @@ class StreamReadsJvmTest {
     }
 
     @Test
-    fun `a FIFO read with streams and a negative maxBytes is TooLarge by the bytes that came`() {
+    fun `a FIFO read with streams and a negative maxBytes is TooLarge even when nothing comes`() {
         makeFifo()
 
-        val read = readWhileWriting(ByteArray(2)) { fifo.readBytes(maxBytes = -5, streams = true) }
+        // The read gives up before reading, so a byte written after it closes would fail the writer with a broken pipe.
+        val read = readWhileWriting(ByteArray(0)) { fifo.readBytes(maxBytes = -5, streams = true) }
 
         assertEquals(Err(FileError.TooLarge(fifo, -5, 0)), read)
     }

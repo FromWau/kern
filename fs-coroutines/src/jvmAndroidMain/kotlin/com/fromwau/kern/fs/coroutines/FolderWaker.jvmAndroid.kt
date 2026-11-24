@@ -4,6 +4,8 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.io.files.Path
 import java.io.File
 import java.nio.file.FileSystems
+import java.nio.file.NoSuchFileException
+import java.nio.file.NotDirectoryException
 import java.nio.file.Paths
 import java.nio.file.StandardWatchEventKinds.ENTRY_CREATE
 import java.nio.file.StandardWatchEventKinds.ENTRY_DELETE
@@ -39,10 +41,15 @@ internal actual fun openFolderWaker(folders: Map<Path, Set<String>>): FolderWatc
             watched[key] = watched[key].orEmpty() + names
         }
         WatchServiceWaker(service, watched)
-    } catch (_: Exception) {
+    } catch (e: Exception) {
         service.close()
-        // A file where a folder on the way belongs is a folder still to be made, as one not there is.
-        if (folders.keys.any { !File(it.toString()).isDirectory }) FolderWatch.Missing else FolderWatch.Refused
+        when {
+            // Told by the failure itself, as a later look would take a folder made again meanwhile for a refusal.
+            e is NoSuchFileException || e is NotDirectoryException -> FolderWatch.Missing
+            // A file where a folder on the way belongs is a folder still to be made, as one not there is.
+            folders.keys.any { !File(it.toString()).isDirectory } -> FolderWatch.Missing
+            else -> FolderWatch.Refused
+        }
     }
 }
 

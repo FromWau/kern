@@ -74,6 +74,42 @@ class ThreadedTest {
     }
 
     @Test
+    fun `an entry queued when close gives up is dropped by it even when the worker wakes first`() = runTest {
+        val woken = CompletableDeferred<Unit>()
+        val writing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val sink = Recorder(
+            name = "stuck",
+            onFailure = SinkFailure.Retry(backoff = 10.seconds),
+            failWith = { _, _ ->
+                // The worker's first write once the close woke it, if it got anything to write, outlasts the close.
+                if (woken.isCompleted && writing.complete(Unit)) {
+                    val _ = runBlockingOrNull { withTimeoutOrNull(1.seconds) { release.await() } }
+                }
+                refused
+            },
+        )
+        val installed = logger.addOrFail(sink)
+        // Lets the woken worker take whatever is still queued before the close goes on.
+        installed.afterAbandonWake = {
+            woken.complete(Unit)
+            val _ = runBlockingOrNull { withTimeoutOrNull(1.seconds) { writing.await() } }
+        }
+        try {
+            logger.tag("app").i { "first" }
+            eventually { installed.health.value.failingSince != null }
+            logger.tag("app").i { "second" }
+
+            val closed = logger.awaitClosed(300.milliseconds)
+
+            assertEquals(installed.closeFailed(SinkError.TimedOut(pending = 2)), closed)
+            assertEquals(2, installed.health.value.dropped)
+        } finally {
+            release.complete(Unit)
+        }
+    }
+
+    @Test
     fun `flush from inside a sink's write reports that sink at once and waits for the others`() = runTest {
         val (flushed, took, self) = callFromInsideWrite { logger.flush(5.seconds) }
 

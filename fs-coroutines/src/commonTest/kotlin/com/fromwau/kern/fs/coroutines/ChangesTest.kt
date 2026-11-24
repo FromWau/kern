@@ -56,7 +56,7 @@ class ChangesTest {
         /** The next answer, failing the test when none comes in time. */
         suspend fun next(): Result<FileInfo, FileError> = withTimeout(10.seconds) { channel.receive() }
 
-        /** Waits for an answer [matching], skipping those before it. */
+        /** Waits for an answer [matching], skipping those before it, such as an info a lookup racing a delete saw. */
         suspend fun until(matching: (Result<FileInfo, FileError>) -> Boolean) {
             val _ = withTimeout(10.seconds) { channel.receiveAsFlow().first(matching) }
         }
@@ -178,7 +178,7 @@ class ChangesTest {
         watching {
             assertEquals(5, next().size())
             file.delete().assertSuccess()
-            assertEquals(Err(FileError.NotFound(file)), next())
+            until { it == Err(FileError.NotFound(file)) }
             file.writeText("a = 10").assertSuccess()
             assertEquals(6, next().size())
         }
@@ -232,7 +232,7 @@ class ChangesTest {
         watching(config) {
             assertEquals(5, next().size())
             folder.deleteRecursively().assertSuccess()
-            assertEquals(Err(FileError.NotFound(config)), next())
+            until { it == Err(FileError.NotFound(config)) }
             config.writeText("a = 10").assertSuccess()
             assertEquals(6, next().size())
             config.writeText("a = 100").assertSuccess()

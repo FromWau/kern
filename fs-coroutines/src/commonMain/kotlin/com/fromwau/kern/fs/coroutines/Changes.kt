@@ -34,9 +34,10 @@ import kotlin.time.Duration
  * `start = CoroutineStart.UNDISPATCHED`, it collects the first answer before `launch` returns. After it, an answer
  * comes whenever it differs from the last one: another [FileInfo], an error where there was info or the reverse, or
  * another error. An error never ends the flow, so a deleted file is one [FileError.NotFound], and a file made there
- * again is info once more. Changes close together may come as one answer. A write that leaves the info as it was, as
- * a same-size write within one tick of a file system that keeps whole seconds does, gives no answer here; to act on
- * every write, collect a [FileWatcher].
+ * again is info once more; a lookup racing the delete may answer one last info, with no links left, before it.
+ * Changes close together may come as one answer. A write that leaves the info as it was, as a same-size write within
+ * one tick of a file system that keeps whole seconds does, gives no answer here; to act on every write, collect a
+ * [FileWatcher].
  *
  * Under [Watch.System] the operating system says when the file changed: inotify on Linux, also on the JVM from Java 22
  * on, kqueue on Apple, `ReadDirectoryChangesW` on Windows, and `WatchService` on Android and other JVMs. With inotify

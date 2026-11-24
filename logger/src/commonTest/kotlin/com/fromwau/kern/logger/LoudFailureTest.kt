@@ -34,7 +34,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(LogSink("throws") { _, _ -> throw thrown })
 
         logger.tag("app").i { "lost" }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         val report = other.received.single { it.tag == INTERNAL_TAG }
         assertEquals(LogLevel.ERROR, report.level)
@@ -62,7 +62,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(LogSink("throws", onFailure = noBackoff) { _, _ -> error("always") })
 
         repeat(5) { logger.tag("app").i { "lost $it" } }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         assertEquals(1, other.received.count { it.tag == INTERNAL_TAG })
         assertEquals(1, reports.size, "$reports")
@@ -100,7 +100,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(BatchRecorder(onBatch = { throw thrown }))
 
         logger.tag("app").i { "lost" }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         val report = other.received.single { it.tag == INTERNAL_TAG }
         assertContains(report.message, "sink \"batches\"")
@@ -161,7 +161,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(renderingSink())
 
         logger.tag("app").i("value" to ToStringThrows) { "saved" }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         val report = other.received.single { it.tag == INTERNAL_TAG }
         assertEquals(LogLevel.ERROR, report.level)
@@ -178,7 +178,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(renderingSink())
 
         repeat(3) { logger.tag("app").i("value" to ToStringThrows) { "saved $it" } }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         assertEquals(1, other.received.count { it.tag == INTERNAL_TAG })
         assertEquals(1, reports.size, "$reports")
@@ -191,7 +191,7 @@ class LoudFailureTest {
         val _ = logger.addOrFail(renderingSink())
 
         logger.tag("app").e(ErrorToStringThrows) { "saving failed" }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         val report = other.received.single { it.tag == INTERNAL_TAG }
         assertContains(report.message, "error")
@@ -206,7 +206,7 @@ class LoudFailureTest {
         val hostile = MessageThrows()
 
         logger.tag("app").e(hostile) { "saving failed" }
-        val _ = logger.awaitFlushed()
+        logger.awaitFlushedWithReports()
 
         val report = other.received.single { it.tag == INTERNAL_TAG }
         assertContains(report.message, "throwable")

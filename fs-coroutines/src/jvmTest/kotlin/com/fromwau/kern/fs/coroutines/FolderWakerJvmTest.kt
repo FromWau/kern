@@ -12,6 +12,9 @@ import com.fromwau.kern.result.assertSuccess
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.files.SystemFileSystem
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -39,6 +42,31 @@ class FolderWakerJvmTest {
             assertEquals(expected, openFolderWaker(mapOf(dir / "missing" to setOf("app.toml"))))
         } finally {
             SystemFileSystem.delete(dir)
+        }
+    }
+
+    @Test
+    fun `a folder made and removed while its watch opens is never Refused`() {
+        if (System.getProperty("os.name").startsWith("Mac")) return
+        val dir = scratchDir()
+        val folder = File((dir / "config").toString())
+        val stop = AtomicBoolean(false)
+        val toggler = thread {
+            while (!stop.get()) {
+                val _ = folder.mkdir()
+                val _ = folder.delete()
+            }
+        }
+        try {
+            repeat(2_000) { _ ->
+                val watch = openFolderWaker(mapOf(dir / "config" to setOf("app.toml")))
+                (watch as? FolderWaker)?.close()
+                assertNotEquals(FolderWatch.Refused, watch)
+            }
+        } finally {
+            stop.set(true)
+            toggler.join()
+            dir.deleteRecursively().assertSuccess()
         }
     }
 
