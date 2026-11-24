@@ -329,18 +329,6 @@ Prefer `assertError { }` when the check alone is enough.
 - **Timeouts.** A `withTimeout` that runs out inside `result { }` ends the block with its exception. Wrap it in
   `suspendCatching` that names `TimeoutCancellationException` to make it an error.
 
-## Coming from Arrow
-
-| Arrow                                | here                                                   |
-|--------------------------------------|--------------------------------------------------------|
-| `Either<E, A>`, `Left`, `Right`      | `Result<A, E>`, `Err`, `Ok`: the value type comes first |
-| `either { }`, `bind()`               | `result { }`, `bind()`                                 |
-| `raise(e)`, `ensure(cond) { e }`     | `Err(e).bind()`, `if (!cond) Err(e).bind()`            |
-| `Either.catch { }`                   | `catching(type) { }`, `suspendCatching(type) { }`      |
-| `zipOrAccumulate`, `mapOrAccumulate` | `zipAll`, `mapResultAll`, `resultAll { }`              |
-| `recover`, `mapLeft`                 | `orElse`, `mapError`                                   |
-| `parMap`                             | `parMapResult` in `result-coroutines`                  |
-
 ## License
 
 [Apache-2.0](../LICENSE).

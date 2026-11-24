@@ -8,6 +8,7 @@ import com.fromwau.kern.result.isSuccess
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.getUnhandledExceptionHook
 import kotlin.native.setUnhandledExceptionHook
 import kotlin.system.exitProcess
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -58,11 +59,19 @@ fun shutdownChildMain(args: Array<String>) {
             handlerOutlastingMain { throw Unprintable() }
             exitProcess(3)
         }
-        "main throws" -> mainThrowsWhileTheHandlerRuns(exitCode = null)
-        "main throws exit 0" -> mainThrowsWhileTheHandlerRuns(exitCode = 0)
-        "app hook, main throws exit 0" -> {
+        "main throws" -> {
+            handlerOutlastingMain { say("handler finished") }
+            say("main throws")
+            error("main failed")
+        }
+        // A kern module reports a bug of its own it can hand to no caller as kern:exec-coroutines does.
+        "app hook, kern bug during the handler" -> {
             setUnhandledExceptionHook { say("app hook saw ${it.message}") }
-            mainThrowsWhileTheHandlerRuns(exitCode = 0)
+            install {
+                val bug = IllegalStateException("a reader bug")
+                getUnhandledExceptionHook()?.invoke(bug) ?: bug.printStackTrace()
+                say("handler finished")
+            }
         }
         "main throws with no request" -> {
             install {}
@@ -147,12 +156,6 @@ fun shutdownChildMain(args: Array<String>) {
     }
     say("ready")
     while (true) pause()
-}
-
-private fun mainThrowsWhileTheHandlerRuns(exitCode: Int?): Nothing {
-    handlerOutlastingMain(exitCode) { say("handler finished") }
-    say("main throws")
-    error("main failed")
 }
 
 /** Installs a handler that runs [finish] only once main has started exiting, and returns once a request started it. */

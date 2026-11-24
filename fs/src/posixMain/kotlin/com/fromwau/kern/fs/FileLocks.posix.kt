@@ -79,7 +79,7 @@ internal fun tryOsLockAt(
         val info = alloc<stat>()
         if (fstat(descriptor, info.ptr) == 0) info.key() else null
     }
-    return OsLock.Held(key) { close(descriptor) }
+    return OsLock.Held(key) { if (close(descriptor) != 0) throw errnoFailure(about = lockFile) }
 }
 
 @OptIn(ExperimentalForeignApi::class)

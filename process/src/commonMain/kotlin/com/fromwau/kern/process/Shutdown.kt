@@ -64,14 +64,11 @@ private val installation = Installation(::installShutdownHandler, ::installShutd
  * @param handler runs once, for the first request, on a thread of its own (on Node, on its event loop) rather than
  *   inside a signal handler. When it returns, the process exits with [exitCode], or the request's code without one,
  *   running shutdown hooks on the JVM and `atexit` handlers natively. A throw from this block is not caught: it is
- *   reported as an uncaught exception, and the process exits with the request's code. If `main` returns, throws or
- *   exits meanwhile, the process still waits for [handler] and exits with its code, on the JVM, Linux and
- *   androidNative.
- *   On Linux and androidNative, set your own `setUnhandledExceptionHook` before this call: kern passes every uncaught
- *   exception on to it, also during shutdown, and then lets [handler] finish. A hook set after this call replaces
- *   kern's, and `main` throwing then ends the process at once. Do not call `exitProcess` in [handler]: natively that
- *   hangs when `main` has returned or is exiting, and on the JVM, when `main` is exiting at the same time, that call
- *   leaves `main`'s code.
+ *   reported as an uncaught exception, and the process exits with the request's code. If `main` returns or exits
+ *   meanwhile, the process still waits for [handler] and exits with its code, on the JVM, Linux and androidNative. On
+ *   the JVM it also waits when `main` throws; natively a throw escaping `main` ends the process as Kotlin/Native
+ *   does, at once. Do not call `exitProcess` in [handler]: natively that hangs when `main` has returned or is exiting,
+ *   and on the JVM, when `main` is exiting at the same time, that call leaves `main`'s code.
  * @return success once installed, or why nothing was installed. Only a successful call makes later calls answer
  *   [ShutdownError.AlreadyInstalled].
  * @throws IllegalArgumentException when [exitCode] is outside 0..255, before anything is installed.
@@ -96,8 +93,9 @@ public fun onShutdownRequest(
  * Under Node requests arrive on the event loop, so a loop that never yields never sees one: poll from asynchronous
  * code there.
  *
- * The process then ends when `main` returns or anything exits, crashes included, with [exitCode], or the first
- * request's [ShutdownRequest.exitCode] without one. Before a request it ends as it would without this call. A second
+ * The process then ends when `main` returns or anything exits, with [exitCode], or the first request's
+ * [ShutdownRequest.exitCode] without one. On the JVM a crash counts as an exit; natively a throw escaping `main` ends
+ * the process as Kotlin/Native does, at once. Before a request it ends as it would without this call. A second
  * request ends the process at once with its own code. Requests ignored at startup stay ignored, as for
  * [onShutdownRequest].
  *

@@ -64,10 +64,10 @@ costs a level check. If the message block throws anything, an `Error` included, 
 `<message threw IllegalStateException>` in its place, and an exception the call passed stays the entry's, unchanged. The
 throw itself is reported as the next paragraph says.
 
-Logging is the one place kern catches what your code throws: a logger should never crash an app, and should keep
-logging up to the crash. It catches loudly. A message block, a sink's `write` or `close`, a field's `toString()` or a
-throwable's `message` that throws is written with its stack trace to standard error and to every other sink, as an
-`ERROR` entry tagged `kern.logger`. `configure` is setup, not logging, and catches nothing.
+The logger is the exception to kern's rule of letting what your code throws reach you: a logger should never crash an
+app, and should keep logging up to the crash. It catches loudly. A message block, a sink's `write` or `close`, a
+field's `toString()` or a throwable's `message` that throws is written with its stack trace to standard error and to
+every other sink, as an `ERROR` entry tagged `kern.logger`. `configure` is setup, not logging, and catches nothing.
 
 A log call never suspends and never throws, from any thread. It never waits for a sink to write. It may wait briefly for
 a lock while it queues the entry, and while a hold is on.

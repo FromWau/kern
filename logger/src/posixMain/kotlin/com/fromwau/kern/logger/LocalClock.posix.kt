@@ -25,6 +25,7 @@ internal actual fun systemLocalClock(): LocalClock {
         val offsetSeconds = memScoped {
             val seconds = alloc<time_tVar>().apply { value = instant.epochSeconds.convert() }
             val parts = alloc<tm>()
+            // Fails only for a year a tm cannot hold; a zone the C library cannot read it already takes as UTC.
             if (localtime_r(seconds.ptr, parts.ptr) == null) 0 else parts.tm_gmtoff.toInt()
         }
         UtcOffset(seconds = offsetSeconds)

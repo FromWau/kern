@@ -4,6 +4,7 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.assertSuccess
+import com.fromwau.kern.result.getOrNull
 import com.fromwau.kern.result.map
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -12,6 +13,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 
 /**
  * What a walk makes of an entry that changes between two of its lookups, which is what the entry was before the change
@@ -102,27 +104,19 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under AsLinks a link swapped for a file once the walk saw it as a link is yielded as that file`() {
+    fun `under AsLinks a link swapped for a file once the walk saw it as a link is Changed`() {
         val link = (dir / "a").linkTo(Path("missing"))
         lookups.afterFirst(link) { link.becomeFile("xy") }
 
-        val walked = walk(Symlinks.AsLinks)
-
-        assertEquals(listOf(Ok(walkedFile(link, Path("a"), size = 2, viaLink = false))), walked)
+        assertEquals(changedAt(link), walk(Symlinks.AsLinks))
     }
 
     @Test
-    fun `under AsLinks a link swapped for a folder once the walk saw it as a link is entered as that folder`() {
+    fun `under AsLinks a link swapped for a folder once the walk saw it as a link is Changed and never entered`() {
         val link = (dir / "a").linkTo(Path("missing"))
         lookups.afterFirst(link) { link.becomeFolderHolding("x") }
 
-        val walked = walk(Symlinks.AsLinks)
-
-        val expected = listOf(
-            WalkEntry.Folder(link, Path("a")),
-            walkedFile(link / "x", Path("a/x"), size = 1, viaLink = false),
-        )
-        assertEquals(expected.map { Ok(it) }, walked)
+        assertEquals(changedAt(link), walk(Symlinks.AsLinks))
     }
 
     @Test
@@ -134,13 +128,11 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under AsLinks a link swapped for a file just before its target is read is yielded as that file`() {
+    fun `under AsLinks a link swapped for a file just before its target is read is Changed`() {
         val link = (dir / "a").linkTo(Path("missing"))
         lookups.before(Lookup.LinkTarget, link) { link.becomeFile("xy") }
 
-        val walked = walk(Symlinks.AsLinks)
-
-        assertEquals(listOf(Ok(walkedFile(link, Path("a"), size = 2, viaLink = false))), walked)
+        assertEquals(changedAt(link), walk(Symlinks.AsLinks))
     }
 
     @Test
@@ -183,11 +175,10 @@ class WalkLookupsTest {
             }
         }
 
-        // The file is gone by now, so its time is left out.
-        val walked = at(link, walk(Symlinks.AsLinks, through = through)).timeless()
+        val walked = at(link, walk(Symlinks.AsLinks, through = through))
 
         val allowed = listOf(
-            listOf(Ok(WalkEntry.File(link, Path("a"), size = 2, modifiedAt = Instant.DISTANT_PAST, viaLink = false))),
+            changedAt(link),
             listOf(Ok(WalkEntry.Link(link, Path("a"), Path("missing")))),
             listOf(Ok(WalkEntry.Link(link, Path("a"), dir / "elsewhere"))),
         )
@@ -226,46 +217,44 @@ class WalkLookupsTest {
 
     private fun excludedAt(path: Path) = listOf(Ok(WalkEntry.Skipped(path, Path(path.name), WalkSkip.Excluded)))
 
+    private fun changedAt(path: Path) = listOf(Ok(WalkEntry.Skipped(path, Path(path.name), WalkSkip.Changed)))
+
     @Test
-    fun `under AsLinks an excluded file swapped for a link once the walk looked at it is excluded`() {
-        assertEquals(excludedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.AsLinks))
+    fun `under AsLinks an excluded file swapped for a link once the walk looked at it is Changed`() {
+        assertEquals(changedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.AsLinks))
     }
 
     @Test
-    fun `under NoLinks an excluded file swapped for a link once the walk looked at it is excluded`() {
-        assertEquals(excludedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.NoLinks))
+    fun `under NoLinks an excluded file swapped for a link once the walk looked at it is Changed`() {
+        assertEquals(changedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.NoLinks))
     }
 
     @Test
-    fun `under AsLinks an excluded file swapped for a dangling link once the walk looked at it is excluded`() {
-        assertEquals(excludedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.AsLinks, target = Path("missing")))
+    fun `under AsLinks an excluded file swapped for a dangling link once the walk looked at it is Changed`() {
+        assertEquals(changedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.AsLinks, target = Path("missing")))
     }
 
     @Test
-    fun `under NoLinks an excluded file swapped for a dangling link once the walk looked at it is excluded`() {
-        assertEquals(excludedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.NoLinks, target = Path("missing")))
+    fun `under NoLinks an excluded file swapped for a dangling link once the walk looked at it is Changed`() {
+        assertEquals(changedAt(dir / "a"), excludedFileSwappedForALink(Symlinks.NoLinks, target = Path("missing")))
     }
 
     @Test
-    fun `under Inside an excluded file swapped for a link once seen as no link is excluded or the link`() {
+    fun `under Inside an excluded file swapped for a link once seen as no link is excluded or Changed`() {
         val walked = excludedFileSwappedForALink(Symlinks.Inside)
 
-        val file = dir / "a"
-        val asLink = listOf(Ok(walkedFile(file, Path("a"), size = 3, viaLink = true)))
-        assertOneOf(listOf(excludedAt(file), asLink), walked)
+        assertOneOf(listOf(excludedAt(dir / "a"), changedAt(dir / "a")), walked)
     }
 
     @Test
-    fun `under Anywhere an excluded file swapped for a link once seen as no link is excluded or the link`() {
+    fun `under Anywhere an excluded file swapped for a link once seen as no link is excluded or Changed`() {
         val walked = excludedFileSwappedForALink(Symlinks.Anywhere)
 
-        val file = dir / "a"
-        val asLink = listOf(Ok(walkedFile(file, Path("a"), size = 3, viaLink = true)))
-        assertOneOf(listOf(excludedAt(file), asLink), walked)
+        assertOneOf(listOf(excludedAt(dir / "a"), changedAt(dir / "a")), walked)
     }
 
     @Test
-    fun `under AsLinks a file swapped for a link to an excluded namesake once looked at is the file or the link`() {
+    fun `under AsLinks a file swapped for a link to an excluded namesake once looked at is the file or Changed`() {
         createDirectoriesRaw(dir / "c")
         val excluded = (dir / "c" / "a").writeRaw("abc")
         val file = (dir / "a").writeRaw("x")
@@ -275,8 +264,7 @@ class WalkLookupsTest {
         val walked = at(file, walk(Symlinks.AsLinks, exclude = setOf(excluded))).timeless()
 
         val before = WalkEntry.File(file, Path("a"), size = 1, modifiedAt = Instant.DISTANT_PAST, viaLink = false)
-        val after = WalkEntry.Link(file, Path("a"), Path("c/a"))
-        assertOneOf(listOf(listOf(Ok(before)), listOf(Ok(after))), walked)
+        assertOneOf(listOf(listOf(Ok(before)), changedAt(file)), walked)
     }
 
     /**
@@ -326,27 +314,31 @@ class WalkLookupsTest {
     private fun bSkippedAs(why: WalkSkip) = listOf(Ok(WalkEntry.Skipped(dir / "b", Path("b"), why)))
 
     @Test
-    fun `under Inside a folder swapped for a link before it is listed is the empty folder or a link already entered`() {
-        val after = bSkippedAs(WalkSkip.AlreadyEntered(Path("g")))
-        assertOneOf(listOf(emptyFolderB, after), folderSwappedForALinkBeforeItIsListed(Symlinks.Inside))
+    fun `under Inside a folder swapped for a link before it is listed is the empty folder or Changed`() {
+        val walked = folderSwappedForALinkBeforeItIsListed(Symlinks.Inside)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     @Test
-    fun `under Anywhere a folder swapped for a link before it is listed is the empty folder or a link already entered`() {
-        val after = bSkippedAs(WalkSkip.AlreadyEntered(Path("g")))
-        assertOneOf(listOf(emptyFolderB, after), folderSwappedForALinkBeforeItIsListed(Symlinks.Anywhere))
+    fun `under Anywhere a folder swapped for a link before it is listed is the empty folder or Changed`() {
+        val walked = folderSwappedForALinkBeforeItIsListed(Symlinks.Anywhere)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     @Test
-    fun `under AsLinks a folder swapped for a link before it is listed is the empty folder or the link`() {
-        val after = listOf(Ok(WalkEntry.Link(dir / "b", Path("b"), Path("g"))))
-        assertOneOf(listOf(emptyFolderB, after), folderSwappedForALinkBeforeItIsListed(Symlinks.AsLinks))
+    fun `under AsLinks a folder swapped for a link before it is listed is the empty folder or Changed`() {
+        val walked = folderSwappedForALinkBeforeItIsListed(Symlinks.AsLinks)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     @Test
-    fun `under NoLinks a folder swapped for a link before it is listed is the empty folder or a passed over link`() {
-        val after = bSkippedAs(WalkSkip.Link)
-        assertOneOf(listOf(emptyFolderB, after), folderSwappedForALinkBeforeItIsListed(Symlinks.NoLinks))
+    fun `under NoLinks a folder swapped for a link before it is listed is the empty folder or Changed`() {
+        val walked = folderSwappedForALinkBeforeItIsListed(Symlinks.NoLinks)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     /**
@@ -362,46 +354,40 @@ class WalkLookupsTest {
         return walk(symlinks)
     }
 
-    /** The empty folder `b` then `c`, or `c` then `b` as a link to it. */
-    private fun bAsFolderOrLinkToC(): List<List<Result<WalkEntry, WalkFailure>>> {
+    /** The empty folder `b`, or `b` as Changed, then `c`. */
+    private fun bAsFolderOrChangedThenC(): List<List<Result<WalkEntry, WalkFailure>>> {
         val c = listOf(
             Ok(WalkEntry.Folder(dir / "c", Path("c"))),
             Ok(walkedFile(dir / "c" / "y", Path("c/y"), size = 1, viaLink = false)),
         )
-        return listOf(emptyFolderB + c, c + bSkippedAs(WalkSkip.AlreadyEntered(Path("c"))))
+        return listOf(emptyFolderB + c, bSkippedAs(WalkSkip.Changed) + c)
     }
 
     @Test
-    fun `under Inside a folder swapped for a link to a later sibling once looked at is the folder or that link`() {
+    fun `under Inside a folder swapped for a link to a later sibling once looked at is the folder or Changed`() {
         val walked = folderSwappedForALinkToALaterSibling(Symlinks.Inside)
 
-        assertOneOf(bAsFolderOrLinkToC(), walked)
+        assertOneOf(bAsFolderOrChangedThenC(), walked)
     }
 
     @Test
-    fun `under Anywhere a folder swapped for a link to a later sibling once looked at is the folder or that link`() {
+    fun `under Anywhere a folder swapped for a link to a later sibling once looked at is the folder or Changed`() {
         val walked = folderSwappedForALinkToALaterSibling(Symlinks.Anywhere)
 
-        assertOneOf(bAsFolderOrLinkToC(), walked)
+        assertOneOf(bAsFolderOrChangedThenC(), walked)
     }
 
     @Test
-    fun `under Anywhere a folder resolved through a link and a link again before its listing is walked there`() {
+    fun `under Anywhere a folder resolved through a link and a link again before its listing is Changed`() {
         (outside / "z").writeRaw("z")
         val folder = dir / "b"
         createDirectoriesRaw(folder)
-        // Resolved through the link, looked at again as the folder, then the link for good.
+        // Resolved through the link, the folder again when asked whether it is a link, then the link for good.
         lookups.after(Lookup.OwnInfo, folder) { folder.becomeLink(outside) }
         lookups.after(Lookup.OneName, folder) { folder.becomeEmptyFolder() }
         lookups.after(Lookup.IsLink, folder) { folder.becomeLink(outside) }
 
-        val walked = walk(Symlinks.Anywhere)
-
-        val expected = listOf(
-            WalkEntry.Folder(folder, Path("b")),
-            walkedFile(folder / "z", Path("b/z"), size = 1, viaLink = false),
-        )
-        assertEquals(expected.map { Ok(it) }, walked)
+        assertEquals(changedAt(folder), walk(Symlinks.Anywhere))
     }
 
     @Test
@@ -462,15 +448,17 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under AsLinks a folder swapped for a link to an excluded folder once looked at is the folder or the link`() {
-        val asLink = listOf(Ok(WalkEntry.Link(dir / "b", Path("b"), Path("g"))))
-        assertOneOf(listOf(emptyFolderB, asLink), folderSwappedForALinkToAnExcludedFolder(Symlinks.AsLinks))
+    fun `under AsLinks a folder swapped for a link to an excluded folder once looked at is the folder or Changed`() {
+        val walked = folderSwappedForALinkToAnExcludedFolder(Symlinks.AsLinks)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     @Test
-    fun `under NoLinks a folder swapped for a link to an excluded folder once looked at is the folder or the link`() {
-        val asLink = bSkippedAs(WalkSkip.Link)
-        assertOneOf(listOf(emptyFolderB, asLink), folderSwappedForALinkToAnExcludedFolder(Symlinks.NoLinks))
+    fun `under NoLinks a folder swapped for a link to an excluded folder once looked at is the folder or Changed`() {
+        val walked = folderSwappedForALinkToAnExcludedFolder(Symlinks.NoLinks)
+
+        assertOneOf(listOf(emptyFolderB, bSkippedAs(WalkSkip.Changed)), walked)
     }
 
     /**
@@ -498,7 +486,7 @@ class WalkLookupsTest {
             Ok(WalkEntry.Folder(dir / "a", Path("a"))),
             Ok(WalkEntry.File(dir / "a" / "y", Path("a/y"), 1, Instant.DISTANT_PAST, viaLink = false)),
         ),
-        listOf(Ok(WalkEntry.Skipped(dir / "a", Path("a"), WalkSkip.LeadsOutside))),
+        changedAt(dir / "a"),
     )
 
     @Test
@@ -529,13 +517,13 @@ class WalkLookupsTest {
                 // The folder is reached through the retargeted link by now, so its file's time is left out.
                 Ok(WalkEntry.File(link / "s" / "w", Path("a/s/w"), 1, Instant.DISTANT_PAST, viaLink = false)),
             ),
-            listOf(Ok(WalkEntry.Skipped(link / "s", Path("a/s"), WalkSkip.LeadsOutside))),
+            listOf(Ok(WalkEntry.Skipped(link / "s", Path("a/s"), WalkSkip.Changed))),
         )
         assertOneOf(allowed, walked.timeless())
     }
 
     @Test
-    fun `under Inside a dangling link swapped for a file once followed is the dangling link or the file`() {
+    fun `under Inside a dangling link swapped for a file once followed is the dangling link or Changed`() {
         val link = (dir / "a").linkTo(Path("missing"))
         lookups.after(Lookup.Info, link) { link.becomeFile("xy") }
 
@@ -543,13 +531,13 @@ class WalkLookupsTest {
 
         val allowed = listOf(
             listOf(Ok(WalkEntry.Skipped(link, Path("a"), WalkSkip.DanglingLink))),
-            listOf(Ok(walkedFile(link, Path("a"), size = 2, viaLink = false))),
+            changedAt(link),
         )
         assertOneOf(allowed, walked)
     }
 
     @Test
-    fun `under Inside a link that goes round swapped for a file once followed is a loop or the file`() {
+    fun `under Inside a link that goes round swapped for a file once followed is a loop or Changed`() {
         val link = (dir / "a").linkTo(Path("a"))
         lookups.after(Lookup.Info, link) { link.becomeFile("xy") }
 
@@ -557,19 +545,19 @@ class WalkLookupsTest {
 
         val allowed = listOf(
             listOf(Ok(WalkEntry.Skipped(link, Path("a"), WalkSkip.LinkLoop))),
-            listOf(Ok(walkedFile(link, Path("a"), size = 2, viaLink = false))),
+            changedAt(link),
         )
         assertOneOf(allowed, walked)
     }
 
     @Test
-    fun `under Inside a link that goes round removed once the walk resolved it is a loop or Gone`() {
+    fun `under Inside a link that goes round removed once the walk resolved it is a loop or Changed`() {
         val link = (dir / "a").linkTo(Path("a"))
         lookups.after(Lookup.OneName, link) { deleteLink(link)?.let { throw it } }
 
         val walked = at(link, walk(Symlinks.Inside))
 
-        val allowed = listOf(WalkSkip.LinkLoop, WalkSkip.Gone).map { why ->
+        val allowed = listOf(WalkSkip.LinkLoop, WalkSkip.Changed).map { why ->
             listOf(Ok(WalkEntry.Skipped(link, Path("a"), why)))
         }
         assertOneOf(allowed, walked)
@@ -595,6 +583,66 @@ class WalkLookupsTest {
     @Test
     fun `under NoLinks a folder swapped for a link once looked at is never listed through it`() {
         assertFolderSwappedForALinkIsNeverListed(Symlinks.NoLinks)
+    }
+
+    @Test
+    fun `under Inside from a relative root a folder below a followed link removed before its listing is Changed`() {
+        createDirectoriesRaw(dir / "d" / "s")
+        val root = dir.fromWorkingDirectoryRelatively()
+        val link = root / "a"
+        createLink(link, Path("d"))?.let { throw it }
+        lookups.after(Lookup.OneName, link / "s") { (dir / "d" / "s").deleteTree() }
+
+        val walk = root.walkTopDownWith(lookups, Symlinks.Inside, enter = { it.relative != Path("d") })
+
+        val changed = listOf(Ok(WalkEntry.Skipped(link / "s", Path("a/s"), WalkSkip.Changed)))
+        assertEquals(changed, walk.assertSuccess().filter { it.getOrNull()?.relative == Path("a/s") }.toList())
+    }
+
+    /** This absolute path spelled from the working directory, climbing to the root with `..` first. */
+    private fun Path.fromWorkingDirectoryRelatively(): Path {
+        val workingDirectory = SystemFileSystem.resolve(Path("."))
+        val up = generateSequence(workingDirectory) { it.parent }.count() - 1
+        val names = generateSequence(this) { it.parent }.toList().dropLast(1).reversed().map { it.name }
+        return Path(List(up) { ".." }.joinToString("/"), *names.toTypedArray())
+    }
+
+    /**
+     * What a walk in [symlinks] mode yields at the folder `a/b`, once `a` is swapped for a link to a folder outside
+     * the root that holds a `b` of its own, after the walk looked at `a/b`.
+     */
+    private fun folderBelowAFolderSwappedForALink(symlinks: Symlinks): List<Result<WalkEntry, WalkFailure>> {
+        val above = dir / "a"
+        val folder = above / "b"
+        createDirectoriesRaw(folder)
+        createDirectoriesRaw(outside / "b")
+        (outside / "b" / "z").writeRaw("z")
+        lookups.after(Lookup.OwnInfo, folder) {
+            above.deleteTree()
+            createLink(above, outside)?.let { throw it }
+        }
+
+        val walked = at(folder, walk(symlinks))
+
+        assertTrue(Lookup.List !in lookups.of(folder), "listed through the link: ${lookups.of(folder)}")
+        return walked
+    }
+
+    private val bBelowAChanged = listOf(Ok(WalkEntry.Skipped(dir / "a" / "b", Path("a/b"), WalkSkip.Changed)))
+
+    @Test
+    fun `under AsLinks a folder whose folder above is swapped for a link before it is listed is Changed`() {
+        assertEquals(bBelowAChanged, folderBelowAFolderSwappedForALink(Symlinks.AsLinks))
+    }
+
+    @Test
+    fun `under NoLinks a folder whose folder above is swapped for a link before it is listed is Changed`() {
+        assertEquals(bBelowAChanged, folderBelowAFolderSwappedForALink(Symlinks.NoLinks))
+    }
+
+    @Test
+    fun `under Inside a folder whose folder above is swapped for a link outside before it is listed is Changed`() {
+        assertEquals(bBelowAChanged, folderBelowAFolderSwappedForALink(Symlinks.Inside))
     }
 
     /** These steps with each file's time left out, for a test whose file is gone by the time it asserts. */
@@ -638,17 +686,17 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under Inside a link to a file swapped for a file once looked at is the link's file or the file`() {
+    fun `under Inside a link to a file swapped for a file once looked at is the link's file or Changed`() {
         val walked = linkSwappedForAFileOnceLookedAt(Symlinks.Inside)
 
-        assertOneOf(listOf(fileA(size = 3, viaLink = true), fileA(size = 2, viaLink = false)), walked)
+        assertOneOf(listOf(fileA(size = 3, viaLink = true), changedAt(dir / "a")), walked)
     }
 
     @Test
-    fun `under Anywhere a link to a file swapped for a file once looked at is the link's file or the file`() {
+    fun `under Anywhere a link to a file swapped for a file once looked at is the link's file or Changed`() {
         val walked = linkSwappedForAFileOnceLookedAt(Symlinks.Anywhere)
 
-        assertOneOf(listOf(fileA(size = 3, viaLink = true), fileA(size = 2, viaLink = false)), walked)
+        assertOneOf(listOf(fileA(size = 3, viaLink = true), changedAt(dir / "a")), walked)
     }
 
     /**
@@ -674,19 +722,17 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under Inside a namesake swapped for a link and back is a file as it was or the link's file`() {
+    fun `under Inside a namesake swapped for a link and back is a file as it was or Changed`() {
         val walked = namesakeSwappedForALinkAndBack(Symlinks.Inside)
 
-        val allowed = listOf(1L to false, 3L to true, 2L to false).map { (size, viaLink) -> fileA(size, viaLink) }
-        assertOneOf(allowed, walked)
+        assertOneOf(listOf(fileA(size = 1, viaLink = false), changedAt(dir / "a")), walked)
     }
 
     @Test
-    fun `under Anywhere a namesake swapped for a link and back is a file as it was or the link's file`() {
+    fun `under Anywhere a namesake swapped for a link and back is a file as it was or Changed`() {
         val walked = namesakeSwappedForALinkAndBack(Symlinks.Anywhere)
 
-        val allowed = listOf(1L to false, 3L to true, 2L to false).map { (size, viaLink) -> fileA(size, viaLink) }
-        assertOneOf(allowed, walked)
+        assertOneOf(listOf(fileA(size = 1, viaLink = false), changedAt(dir / "a")), walked)
     }
 
     /**
@@ -698,7 +744,7 @@ class WalkLookupsTest {
 
         override fun realPath(path: Path) = SystemLookups.realPath(path).map { it.respelled() }
 
-        private fun Path.respelled() = parent?.let { Path(it.toString().uppercase(), name) } ?: this
+        private fun Path.respelled() = Path(toString().replaceFirst("/", "/./"))
     }
 
     /** What the walk yields at `sub/x`, excluded, in [symlinks] mode, with each real path [respelling] spells. */
@@ -793,7 +839,7 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under Inside a link to a folder swapped for a folder once the walk saw it as a link is walked once as it`() {
+    fun `under Inside a link to a folder swapped for a folder once the walk saw it as a link is Changed at its turn`() {
         createDirectoriesRaw(dir / "b")
         (dir / "b" / "y").writeRaw("y")
         val link = (dir / "a").linkTo(Path("b"))
@@ -801,19 +847,15 @@ class WalkLookupsTest {
 
         val walked = walk(Symlinks.Inside)
 
-        val a = listOf(
-            WalkEntry.Folder(link, Path("a")),
-            walkedFile(link / "x", Path("a/x"), size = 1, viaLink = false),
-        )
         val b = listOf(
             WalkEntry.Folder(dir / "b", Path("b")),
             walkedFile(dir / "b" / "y", Path("b/y"), size = 1, viaLink = false),
         )
-        assertOneOf(listOf((a + b).map { Ok(it) }, (b + a).map { Ok(it) }), walked)
+        assertEquals(b.map { Ok(it) } + changedAt(link), walked)
     }
 
     @Test
-    fun `under Inside a link to a folder swapped for a file before its turn is yielded as that file at its turn`() {
+    fun `under Inside a link to a folder swapped for a file before its turn is Changed at its turn`() {
         createDirectoriesRaw(dir / "b")
         (dir / "b" / "y").writeRaw("y")
         val link = (dir / "a").linkTo(Path("b"))
@@ -824,7 +866,7 @@ class WalkLookupsTest {
         link.becomeFile("xy")
         val next = walk.next()
 
-        assertEquals(Ok(walkedFile(link, Path("a"), size = 2, viaLink = false)), next)
+        assertEquals(changedAt(link).single(), next)
         assertEquals(false, walk.hasNext())
     }
 
@@ -858,16 +900,30 @@ class WalkLookupsTest {
         return mapOf("." to lookups.of(dir)) + entries
     }
 
-    /** A folder no link is asked whether it is one when resolved, and before and after its listing. */
-    private val folderAskedAgain =
-        listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink, Lookup.IsLink, Lookup.List, Lookup.IsLink)
+    /**
+     * Before and after its listing, a folder is resolved again and asked whether it is still no link; a walk that
+     * follows no link resolves the root's folder again too, once for each of its folders.
+     */
+    private val askedAroundTheListing =
+        listOf(Lookup.OneName, Lookup.IsLink, Lookup.List, Lookup.OneName, Lookup.IsLink)
+
+    /** A folder no link is asked whether it is one when resolved, and again around its listing. */
+    private val folderAskedAgain = listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink) + askedAroundTheListing
+
+    /**
+     * The root of a walk that follows no link, resolved once, then again before and after each of its [folders] is
+     * listed, [between] those.
+     */
+    private fun rootFollowingNoLink(
+        folders: Int,
+        between: List<Lookup> = emptyList(),
+    ) = listOf(Lookup.Info, Lookup.List, Lookup.OneName) + between + List(2 * folders) { Lookup.OneName }
 
     @Test
     fun `under AsLinks each entry is looked at once and a link's target read once`() {
         val expected = mapOf(
-            "." to listOf(Lookup.Info, Lookup.List),
-            // Asked again before and after it is listed, whether it is still no link.
-            "real" to listOf(Lookup.OwnInfo, Lookup.IsLink, Lookup.List, Lookup.IsLink),
+            "." to rootFollowingNoLink(folders = 2),
+            "real" to listOf(Lookup.OwnInfo) + askedAroundTheListing,
             "real/x" to listOf(Lookup.OwnInfo),
             "x" to listOf(Lookup.OwnInfo),
             "file" to listOf(Lookup.OwnInfo, Lookup.LinkTarget),
@@ -877,14 +933,14 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under AsLinks with something excluded a file named as an excluded one is resolved and looked at again`() {
+    fun `under AsLinks with something excluded a file named as an excluded one is resolved and asked if a link`() {
         val expected = mapOf(
-            // Where each link is, against the links in exclude.
-            "." to listOf(Lookup.Info, Lookup.List, Lookup.RealPath, Lookup.RealPath),
+            // Where each link is, against the links in exclude, and `skip`, excluded, never listed.
+            "." to rootFollowingNoLink(folders = 1, between = listOf(Lookup.RealPath, Lookup.RealPath)),
             "real" to folderAskedAgain,
             // Asked whether it is a link, which exclude names by its own place.
-            "real/x" to listOf(Lookup.IsLink, Lookup.RealPath, Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
-            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
+            "real/x" to listOf(Lookup.IsLink, Lookup.RealPath, Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
+            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
             "file" to listOf(Lookup.OwnInfo, Lookup.LinkTarget),
             "folder" to listOf(Lookup.OwnInfo, Lookup.LinkTarget),
         )
@@ -892,13 +948,13 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under NoLinks with something excluded a file named as an excluded one is resolved and looked at again`() {
+    fun `under NoLinks with something excluded a file named as an excluded one is resolved and asked if a link`() {
         val expected = mapOf(
-            "." to listOf(Lookup.Info, Lookup.List, Lookup.RealPath, Lookup.RealPath),
+            "." to rootFollowingNoLink(folders = 1, between = listOf(Lookup.RealPath, Lookup.RealPath)),
             "real" to folderAskedAgain,
             // Asked whether it is a link, which exclude names by its own place.
-            "real/x" to listOf(Lookup.IsLink, Lookup.RealPath, Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
-            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
+            "real/x" to listOf(Lookup.IsLink, Lookup.RealPath, Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
+            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
             "file" to listOf(Lookup.OwnInfo),
             "folder" to listOf(Lookup.OwnInfo),
         )
@@ -915,13 +971,13 @@ class WalkLookupsTest {
     private val realFolderAndItsLink = listOf(Lookup.Info) + folderAskedAgain + Lookup.Info
 
     @Test
-    fun `under Inside with something excluded an excluded file is resolved once and a namesake looked at again`() {
+    fun `under Inside with something excluded an excluded file is resolved once and a namesake asked if a link`() {
         val expected = mapOf(
             "." to listOf(Lookup.Info, Lookup.List, Lookup.OneName),
             "real" to realFolderAndItsLink,
             // Read at its real path for `file`.
             "real/x" to listOf(Lookup.RealPath, Lookup.Info, Lookup.OwnInfo, Lookup.OneName),
-            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
+            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
             "file" to linkFollowed,
             "folder" to linkFollowed + linkFollowed,
         )
@@ -929,12 +985,12 @@ class WalkLookupsTest {
     }
 
     @Test
-    fun `under Anywhere with something excluded an excluded file is resolved once and a namesake looked at again`() {
+    fun `under Anywhere with something excluded an excluded file is resolved once and a namesake asked if a link`() {
         val expected = mapOf(
             "." to listOf(Lookup.Info, Lookup.List, Lookup.OneName),
             "real" to realFolderAndItsLink,
             "real/x" to listOf(Lookup.RealPath, Lookup.Info, Lookup.OwnInfo, Lookup.OneName),
-            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.OwnInfo),
+            "x" to listOf(Lookup.OwnInfo, Lookup.OneName, Lookup.IsLink),
             "file" to linkFollowed,
             "folder" to linkFollowed + linkFollowed,
         )
@@ -944,8 +1000,8 @@ class WalkLookupsTest {
     @Test
     fun `under NoLinks each entry is looked at once`() {
         val expected = mapOf(
-            "." to listOf(Lookup.Info, Lookup.List),
-            "real" to listOf(Lookup.OwnInfo, Lookup.IsLink, Lookup.List, Lookup.IsLink),
+            "." to rootFollowingNoLink(folders = 2),
+            "real" to listOf(Lookup.OwnInfo) + askedAroundTheListing,
             "real/x" to listOf(Lookup.OwnInfo),
             "x" to listOf(Lookup.OwnInfo),
             "file" to listOf(Lookup.OwnInfo),

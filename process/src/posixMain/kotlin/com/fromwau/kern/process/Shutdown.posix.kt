@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class)
 
 package com.fromwau.kern.process
 
@@ -13,9 +13,6 @@ import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.map
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.experimental.ExperimentalNativeApi
-import kotlin.native.ReportUnhandledExceptionHook
-import kotlin.native.setUnhandledExceptionHook
 import kotlin.system.exitProcess
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.staticCFunction
@@ -28,7 +25,6 @@ import platform.posix.SIGINT
 import platform.posix.SIGTERM
 
 private val handler = AtomicReference<((ShutdownRequest) -> Int)?>(null)
-private val previousUnhandledExceptionHook = AtomicReference<ReportUnhandledExceptionHook?>(null)
 
 internal actual fun installShutdownHandler(onRequest: (ShutdownRequest) -> Int): EmptyResult<ShutdownError> {
     handler.store(onRequest)
@@ -43,12 +39,9 @@ private object SignalStop : ShutdownStop {
     override val request: ShutdownRequest? get() = requestFor(kern_process_request_signal())
 }
 
-/** Maps the C install's errno to its result, chaining kern's crash hook once installed. */
+/** Maps the C install's errno to its result. */
 private fun installed(failure: Int): EmptyResult<ShutdownError> = when (failure) {
-    0 -> {
-        previousUnhandledExceptionHook.store(setUnhandledExceptionHook(::onUnhandledException))
-        Ok(Unit)
-    }
+    0 -> Ok(Unit)
     EMFILE, ENFILE, EAGAIN, ENOMEM -> Err(ShutdownError.OutOfResources)
     else -> Err(ShutdownError.System(failure))
 }
@@ -72,22 +65,4 @@ private fun onSignal(signal: Int) {
     }
     // An exit that is already waiting for the handler ends the process itself.
     if (kern_process_handler_returned(exitCode) == 0) exitProcess(exitCode)
-}
-
-/** The app's own hook, the one kern's replaced, or a print without one. */
-internal actual fun reportUncaught(e: Throwable) {
-    val previous = previousUnhandledExceptionHook.load()
-    if (previous != null) previous(e) else printUncaught(e)
-}
-
-/** An exception escaping `main` after a request ends the process as an exit would: once a handler is done. */
-private fun onUnhandledException(e: Throwable) {
-    val previous = previousUnhandledExceptionHook.load()
-    if (kern_process_request_signal() != 0) {
-        reportUncaught(e)
-        // The atexit wait replaces this code with the handler's.
-        exitProcess(1)
-    }
-    // Once a hook returns, Kotlin reports the exception and aborts as it does without one.
-    previous?.invoke(e)
 }

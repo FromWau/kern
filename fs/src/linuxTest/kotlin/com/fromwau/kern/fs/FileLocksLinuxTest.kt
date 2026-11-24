@@ -3,6 +3,7 @@
 package com.fromwau.kern.fs
 
 import com.fromwau.kern.result.Err
+import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.assertError
 import com.fromwau.kern.result.assertSuccess
 import kotlinx.cinterop.ByteVar
@@ -18,6 +19,7 @@ import kotlin.test.assertEquals
 import platform.posix.FD_CLOEXEC
 import platform.posix.F_GETFD
 import platform.posix.PATH_MAX
+import platform.posix.close
 import platform.posix.fcntl
 import platform.posix.getpid
 import platform.posix.readlink
@@ -62,6 +64,25 @@ class FileLocksLinuxTest {
 
             assertEquals(listOf(FD_CLOEXEC), flags.map { it and FD_CLOEXEC })
         }
+    }
+
+    @Test
+    fun `a release the OS refuses after the block returned goes to onReleaseFailed and the call answers the value`() {
+        val reported = mutableListOf<Path>()
+        val before = FileLocks.onReleaseFailed
+        FileLocks.onReleaseFailed = { file, _ -> reported += file }
+        val answer = try {
+            lockFile.withLock {
+                // Closed behind the lock's back, so its own close fails with EBADF.
+                close(descriptorsOn(lockFile.canonicalPath().assertSuccess()).single())
+                "ran"
+            }
+        } finally {
+            FileLocks.onReleaseFailed = before
+        }
+
+        assertEquals(Ok("ran"), answer)
+        assertEquals(listOf(lockFile), reported)
     }
 
     /** The descriptors this process has open on [file], as `/proc/self/fd` lists them. */

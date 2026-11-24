@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class, ExperimentalNativeApi::class)
+@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class)
 
 package com.fromwau.kern.process
 
@@ -9,8 +9,6 @@ import com.fromwau.kern.result.Result
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.experimental.ExperimentalNativeApi
-import kotlin.native.getUnhandledExceptionHook
 import kotlin.system.exitProcess
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.staticCFunction
@@ -60,12 +58,6 @@ private fun onControlEvent(event: DWORD): WINBOOL {
         request.exitCode
     }
     exitProcess(exitCode)
-}
-
-/** The app's unhandled exception hook, which kern sets none of here, or a print without one. */
-internal actual fun reportUncaught(e: Throwable) {
-    val hook = getUnhandledExceptionHook()
-    if (hook != null) hook(e) else printUncaught(e)
 }
 
 /**

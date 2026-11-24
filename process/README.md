@@ -106,8 +106,9 @@ fun main() {
 - It shares `onShutdownRequest`'s one install per process, its errors and its 0..255 rule.
 - A second request ends the process at once, as for a handler.
 
-**A crash counts as an exit too**, on the JVM, Linux and androidNative, so with `exitCode = 0` a cleanup that crashes
-exits 0. Leave `exitCode` null if a crash must not look like success. Windows native does not count a crash as an exit.
+**A crash counts as an exit too** on the JVM, so with `exitCode = 0` a cleanup that crashes exits 0. Leave `exitCode`
+null if a crash must not look like success. Natively a throw escaping `main` ends the process as Kotlin/Native does, at
+once.
 
 ### Details per platform
 
@@ -129,7 +130,7 @@ exits 0. Leave `exitCode` null if a crash must not look like success. Windows na
 **Linux, androidNative:**
 
 - `atexit` handlers you registered after the call run first.
-- An exception escaping `main` goes through kern's unhandled-exception hook, as with a handler.
+- An exception escaping `main` ends the process as Kotlin/Native does, at once, without the stop's code.
 
 **Node:**
 
@@ -190,35 +191,16 @@ warning. Give your drain a deadline shorter than theirs.
   holds the lock it needs.
 - On the JVM, an `exitProcess` in the handler while `main` is exiting at the same time leaves `main`'s code.
 
-**Main may return, throw or exit while the handler runs.** On the JVM, Linux and androidNative the process then still
-waits for the handler. It exits with the handler's code, whether `main` returned, threw, or a thread called
-`exitProcess`. An exception that escapes `main` prints its stack trace first.
+**Main may return or exit while the handler runs.** On the JVM, Linux and androidNative the process then still waits
+for the handler. It exits with the handler's code, whether `main` returned or a thread called `exitProcess`. On the
+JVM this holds when `main` throws too, after its stack trace is printed. Natively a throw escaping `main` ends the
+process as Kotlin/Native does, at once.
 
 - Natively, `atexit` handlers you registered before calling `onShutdownRequest` do not run in that case. Those
   registered after it run before the wait.
 - On the JVM such an exit starts your shutdown hooks at once, alongside the handler. JVM hooks always run concurrently.
   A hook still running when the handler finishes is cut off.
 - Windows native does not wait yet.
-
-**On Linux and androidNative, an exception escaping `main`** goes through an unhandled-exception hook kern installs.
-Windows native does not handle this yet. To report crashes yourself, set your own hook before calling
-`onShutdownRequest`:
-
-```kotlin
-import kotlin.experimental.ExperimentalNativeApi
-import kotlin.native.setUnhandledExceptionHook
-
-@OptIn(ExperimentalNativeApi::class)
-fun reportCrashes() {
-    setUnhandledExceptionHook { e -> println("crashed: $e") }
-}
-```
-
-- Kern passes every uncaught exception on to it, also during shutdown.
-- Your hook runs first. Then a running handler finishes, and the process exits with the handler's code, or with a
-  stop's code.
-- Without a hook of yours, kern prints the stack trace instead.
-- A hook set after `onShutdownRequest` replaces kern's. An exception escaping `main` then ends the process at once.
 
 **A main thread reading standard input**, as `readlnOrNull()` does, keeps a native program from exiting after your
 handler returns. It waits until that read returns, because the C library's exit waits for that stream. A second

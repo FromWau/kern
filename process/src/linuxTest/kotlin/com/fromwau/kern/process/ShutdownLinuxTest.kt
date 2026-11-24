@@ -115,38 +115,24 @@ class ShutdownLinuxTest {
     }
 
     @Test
-    fun mainThrowingWhileTheHandlerRunsExits143OnceTheHandlerIsDone() {
+    fun mainThrowingWhileTheHandlerRunsAbortsAsKotlinDoesWithoutWaitingForTheHandler() {
         val child = NativeChild.start("main throws")
         child.signal(SIGTERM)
 
         val exit = child.finish()
-        assertEquals(143, exit.code, exit.toString())
-        assertEquals(listOf("main throws", "handler finished"), exit.lines.drop(1), exit.toString())
+        assertEquals(-SIGABRT, exit.code, exit.toString())
+        assertEquals(listOf("main throws"), exit.lines.drop(1), exit.toString())
         assertTrue("IllegalStateException: main failed" in exit.stderr, exit.toString())
     }
 
     @Test
-    fun mainThrowingWhileTheHandlerRunsExitsWithAnExitCodeGivenAtInstall() {
-        val child = NativeChild.start("main throws exit 0")
+    fun aKernBugReportedWhileTheHandlerRunsReachesTheAppsHookAndTheHandlerFinishes() {
+        val child = NativeChild.start("app hook, kern bug during the handler")
         child.signal(SIGTERM)
 
         val exit = child.finish()
-        assertEquals(0, exit.code, exit.toString())
-        assertEquals(listOf("main throws", "handler finished"), exit.lines.drop(1), exit.toString())
-    }
-
-    @Test
-    fun anUnhandledExceptionHookSetBeforeInstallingRunsWhenMainThrowsWhileTheHandlerRuns() {
-        val child = NativeChild.start("app hook, main throws exit 0")
-        child.signal(SIGTERM)
-
-        val exit = child.finish()
-        assertEquals(0, exit.code, exit.toString())
-        assertEquals(
-            listOf("main throws", "app hook saw main failed", "handler finished"),
-            exit.lines.drop(1),
-            exit.toString(),
-        )
+        assertEquals(143, exit.code, exit.toString())
+        assertEquals(listOf("app hook saw a reader bug", "handler finished"), exit.lines.drop(1), exit.toString())
     }
 
     @Test
@@ -310,12 +296,12 @@ class ShutdownLinuxTest {
     }
 
     @Test
-    fun mainThrowingAfterAStopPrintsTheExceptionAndExitsWithTheRequestsCode() {
+    fun mainThrowingAfterAStopAbortsAsKotlinDoes() {
         val child = NativeChild.start("stop, main throws")
         child.signal(SIGTERM)
 
         val exit = child.finish()
-        assertEquals(143, exit.code, exit.toString())
+        assertEquals(-SIGABRT, exit.code, exit.toString())
         assertTrue("IllegalStateException: main failed" in exit.stderr, exit.toString())
     }
 

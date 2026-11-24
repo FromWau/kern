@@ -307,13 +307,13 @@ You do not need this part on a first read. Come back when a walk or a mirror doe
 - A link to a folder not walked yet, such as one outside the root under `Anywhere`, is walked under its own name at
   that point. The links to folders met below it join the end.
 - The walk holds one entry per link waiting.
-- A waiting link may change before its turn, for example be pointed at a file or removed. It is yielded as what it is
-  then. That happens at that later point of the walk, not among its folder's entries.
-- A folder swapped for a link before the walk lists it is not listed. It is yielded as what that link is in the mode,
-  a `Link` or a `Skipped`, after the trees of the folders before it, or waits as a link where links are followed.
-  `enter` may then be asked about it twice.
-- A followed link pointed elsewhere before its folder is listed is judged again the same way. Under `Inside`, a folder
-  below such a link that leads outside the root by then is `Skipped(LeadsOutside)`.
+- The walk looks at each entry once and never again. An entry that changes while the walk looks at it is
+  `Skipped(Changed)`. Walk again, or watch the folder, to see what it became.
+- A waiting link may change before its turn, for example be pointed at a file or removed. It is `Skipped(Changed)`
+  then, at that later point of the walk, not among its folder's entries.
+- A folder is never listed through a link the walk did not follow. A folder swapped for a link before the walk lists
+  it, a followed link pointed elsewhere by then, and a folder whose folder above was swapped for a link are each
+  `Skipped(Changed)`.
 - A failure's `path` is spelled from the root you passed. For a folder the walk reached only through a link, it is
   spelled under the link the walk took.
 - A failure's `relative` says where in the tree it was met: `out/broken.txt` for `out -> ../shared` under `Anywhere`.
@@ -355,8 +355,9 @@ You do not need this part on a first read. Come back when a walk or a mirror doe
 | `AlreadyEntered(firstRelative)` | a link to a folder already walked under `firstRelative`, null for the root |
 | `Excluded` | a file or folder `exclude` names, or anything below such a folder |
 | `Refused` | a folder `enter` refused |
-| `LeadsOutside` | a link `Inside` did not follow, or a folder below a followed link pointed outside before listing |
+| `LeadsOutside` | a link `Inside` did not follow |
 | `Link` | any link under `NoLinks` |
+| `Changed` | an entry that changed while the walk looked at it |
 
 - A link to a folder above is `AlreadyEntered`.
 - `Excluded` also covers a link to a file in an excluded folder. Under `AsLinks` and `NoLinks`, it covers a link

@@ -66,9 +66,22 @@ internal fun Path.readSymlinkWith(read: (Path) -> Path): Result<Path, FileError>
     return try {
         Ok(read(this))
     } catch (e: Exception) {
-        // Only looking again tells a link that went away, or was replaced, from one that cannot be read.
-        if (isSymlink(this)) Err(inaccessible(this, e)) else notASymlink()
+        afterFailedLinkRead(e).flatMap { Err(FileError.NotASymlink(this, it.type)) }
     }
+}
+
+/**
+ * What is at this path itself, looked at with [ownInfo] after reading it as a symlink failed with [failure]: only that
+ * look tells a link that went away, or was replaced, from one that cannot be read. A link still there is
+ * [FileError.Inaccessible] for [failure].
+ */
+internal fun Path.afterFailedLinkRead(
+    failure: Exception,
+    ownInfo: (Path) -> Result<FileInfo, FileError.LookupError> = SystemLookups::ownInfo,
+): Result<FileInfo, FileError.LookupError> {
+    val now = ownInfo(this)
+    if (now is Result.Success && now.value.type == FileType.Symlink) return Err(inaccessible(this, failure))
+    return now
 }
 
 /** What is at this path, which is no symlink, as [FileError.NotASymlink], or why it cannot be looked up. */

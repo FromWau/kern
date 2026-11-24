@@ -49,7 +49,9 @@ internal actual fun tryOsLock(
         if (LockFileEx(handle, flags, 0u, WHOLE_FILE, WHOLE_FILE, request.ptr) != 0) 0u else GetLastError()
     }
     if (code == 0u) {
-        return OsLock.Held(key = handle.fileKey()) { CloseHandle(handle) }
+        return OsLock.Held(key = handle.fileKey()) {
+            if (CloseHandle(handle) == 0) throw windowsFailure(GetLastError(), lockFile)
+        }
     }
     CloseHandle(handle)
     return if (code == ERROR_LOCK_VIOLATION.convert<UInt>()) {
