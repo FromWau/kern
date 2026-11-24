@@ -1,5 +1,5 @@
 [versions]
-kernVersion = "0.6.5"
+kernVersion = "0.7.0"
 
 agp = "9.5.1"
 android-compileSdk = "37"
