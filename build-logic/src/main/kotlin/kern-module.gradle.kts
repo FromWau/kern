@@ -106,6 +106,9 @@ val jvmTestOnTarget = tasks.register<Test>("jvmTestOnTarget") {
 }
 tasks.named("check") { dependsOn(jvmTestOnTarget) }
 
+// Tests reach native code through the FFM API, which the JDK warns about on every run unless it is enabled.
+tasks.withType<Test>().configureEach { jvmArgs("--enable-native-access=ALL-UNNAMED") }
+
 // The Kotlin plugin adds its own repositories for Node.js, Yarn and Binaryen, which settings.gradle.kts forbids and
 // declares itself instead.
 // Every EnvSpec loses its download URL, so D8, Wasmtime and Swc need their repository added to settings before use.

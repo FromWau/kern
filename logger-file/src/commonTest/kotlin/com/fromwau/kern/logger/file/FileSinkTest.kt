@@ -11,6 +11,7 @@ import com.fromwau.kern.fs.openAppend
 import com.fromwau.kern.fs.writer
 import com.fromwau.kern.logger.CloseError
 import com.fromwau.kern.logger.FlushError
+import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.Flushed
 import com.fromwau.kern.logger.Pending
 import com.fromwau.kern.logger.LogFormat
@@ -18,6 +19,7 @@ import com.fromwau.kern.logger.SinkConfig
 import com.fromwau.kern.logger.SinkError
 import com.fromwau.kern.logger.SinkFailure
 import com.fromwau.kern.logger.Timestamp
+import com.fromwau.kern.logger.withRenderingReportsTo
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
@@ -548,15 +550,21 @@ class FileSinkTest {
     }
 
     @Test
+    @OptIn(InternalKernApi::class)
     fun `an entry whose throwable cannot describe itself is still written`() {
         val file = tempPath("hostile.log")
         val sink = FileSink(file)
 
-        val written = sink.write(entry.copy(throwable = HostileException()), SinkConfig())
+        val reports = mutableListOf<String>()
+
+        val written = withRenderingReportsTo({ reports += it }) {
+            sink.write(entry.copy(throwable = HostileException()), SinkConfig())
+        }
         val _ = sink.close()
 
         assertEquals(Ok(Unit), written)
         assertContains(file.readRaw(), "hello")
+        assertContains(reports.single(), "could not render the entry's throwable: its stack trace threw")
     }
 
     @Test

@@ -93,7 +93,7 @@ class OwnBugTest {
     fun `a throw while reading still closes the child's descriptors and reaps it`() {
         val before = openPipes()
         val child = probing(throwingOnceAt(FfmStep.Read)) { SystemStarter.start(sh("echo hi")).assertSuccess() }
-        runCatching { child.drain() }
+        val _ = runCatching { child.drain() }
         awaitThrower()
 
         assertEquals(before, openPipes())
@@ -109,7 +109,7 @@ class OwnBugTest {
             throwing(it)
         }
         val child = probing(probe) { SystemStarter.start(Command(listOf("/bin/true"))).assertSuccess() }
-        runCatching { child.drain() }
+        val _ = runCatching { child.drain() }
         awaitThrower()
 
         assertEquals(emptyList(), steps.dropWhile { it != FfmStep.Reaped }.filter { it == FfmStep.Wait })
@@ -251,13 +251,13 @@ class OwnBugTest {
             throwing(it)
         }
         val child = probing(probe) { SystemStarter.start(Command(listOf("/bin/true"))).assertSuccess() }
-        runCatching { child.drain() }
+        val _ = runCatching { child.drain() }
         awaitThrower()
 
         try {
             assertEquals(listOf(0L, 0L), opened.map { it.length() })
         } finally {
-            opened.forEach { runCatching { it.close() } }
+            opened.forEach { val _ = runCatching { it.close() } }
         }
     }
 
@@ -268,8 +268,8 @@ class OwnBugTest {
         try {
             assertSame(bug, assertFails { child.stop(Signal.Kill) })
         } finally {
-            child.stop(Signal.Kill)
-            child.drain()
+            val _ = child.stop(Signal.Kill)
+            val _ = child.drain()
         }
     }
 
@@ -344,7 +344,7 @@ object StartWithoutThreads {
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS),
         )
         // Load everything a start needs while threads can still start.
-        SystemStarter.start(Command(listOf("/bin/true"))).assertSuccess().drain()
+        val _ = SystemStarter.start(Command(listOf("/bin/true"))).assertSuccess().drain()
         Arena.ofConfined().use { arena ->
             val limit = arena.allocate(16)
             limit.set(JAVA_LONG, 0, 0L)

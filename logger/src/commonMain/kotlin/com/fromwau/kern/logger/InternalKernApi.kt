@@ -1,5 +1,6 @@
 package com.fromwau.kern.logger
 
+import kotlin.concurrent.Volatile
 import kotlin.time.Instant
 
 /** Marks what kern's own sink modules use from the logger's core. It may change in any release. */
@@ -32,7 +33,25 @@ public fun reportDroppedBySink(count: Long, from: Instant, to: Instant) {
 public fun reportRenderingThrew(what: String, thrown: Throwable) {
     val writer = currentWriter
     if (writer != null) return writer.renderingThrew(what, thrown)
-    reportToStandardErrorOrDrop("$INTERNAL_TAG: could not render $what\n${thrown.stackTraceOrPlaceholder()}")
+    unownedRenderingReport("$INTERNAL_TAG: could not render $what\n${thrown.stackTraceOrPlaceholder()}")
+}
+
+@Volatile
+private var unownedRenderingReport: (String) -> Unit = ::reportToStandardErrorOrDrop
+
+/**
+ * For kern's own tests: runs [block] with what [reportRenderingThrew] writes outside a sink's write or close sent to
+ * [report], not standard error.
+ */
+@InternalKernApi
+public fun <T> withRenderingReportsTo(report: (String) -> Unit, block: () -> T): T {
+    val previous = unownedRenderingReport
+    unownedRenderingReport = report
+    try {
+        return block()
+    } finally {
+        unownedRenderingReport = previous
+    }
 }
 
 /**

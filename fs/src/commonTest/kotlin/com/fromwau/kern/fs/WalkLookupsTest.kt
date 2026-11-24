@@ -148,7 +148,7 @@ class WalkLookupsTest {
         val link = (dir / "a").linkTo(Path("missing"))
         lookups.before(Lookup.LinkTarget, link) { link.becomeFile("xy") }
 
-        walk(Symlinks.AsLinks)
+        val _ = walk(Symlinks.AsLinks)
 
         assertEquals(listOf(Lookup.OwnInfo, Lookup.LinkTarget, Lookup.OwnInfo), lookups.of(link))
     }
@@ -570,7 +570,7 @@ class WalkLookupsTest {
         createDirectoriesRaw(dir / "g")
         lookups.after(Lookup.OwnInfo, folder) { folder.becomeLink(Path("g")) }
 
-        walk(symlinks)
+        val _ = walk(symlinks)
 
         assertTrue(Lookup.List !in lookups.of(folder), "listed through the link: ${lookups.of(folder)}")
     }
@@ -894,7 +894,7 @@ class WalkLookupsTest {
         (dir / "folder").linkTo(Path("real"))
         createDirectoriesRaw(dir / "skip")
 
-        walk(symlinks, exclude = if (excluding) setOf(dir / "skip", dir / "real" / "x") else emptySet())
+        val _ = walk(symlinks, exclude = if (excluding) setOf(dir / "skip", dir / "real" / "x") else emptySet())
 
         val entries = listOf("real", "real/x", "x", "file", "folder").associateWith { lookups.of(dir / it) }
         return mapOf("." to lookups.of(dir)) + entries

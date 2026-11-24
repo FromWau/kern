@@ -90,11 +90,16 @@ class RenderingTest {
     fun `a throwable whose message and toString throw is still rendered`() {
         val hostile = entry.copy(throwable = HostileException())
 
-        val text = hostile.toTextLine(TimeZone.UTC.asLocalClock())
-        val json = hostile.toJsonLine()
+        val (lines, reports) = renderingReports {
+            hostile.toTextLine(TimeZone.UTC.asLocalClock()) to hostile.toJsonLine()
+        }
 
-        assertContains(text, "scan complete")
-        assertContains(json, "scan complete")
+        assertContains(lines.first, "scan complete")
+        assertContains(lines.second, "scan complete")
+        assertEquals(
+            listOf(STACK_TRACE_THREW, STACK_TRACE_THREW),
+            reports.map { it.lineSequence().first() },
+        )
     }
 
     @Test
@@ -173,14 +178,20 @@ class RenderingTest {
             ),
         )
 
+        val (lines, reports) = renderingReports {
+            hostile.toTextLine(TimeZone.UTC.asLocalClock()) to hostile.toJsonLine()
+        }
+
         val expected = "scan complete value=<toString() threw IllegalStateException> " +
             "iterator=<toString() threw IllegalStateException> " +
             "modified=<toString() threw ConcurrentModificationException>"
-        assertContains(hostile.toTextLine(TimeZone.UTC.asLocalClock()), expected)
-        assertContains(
-            hostile.toJsonLine(),
-            "\"modified\":\"<toString() threw ConcurrentModificationException>\"",
-        )
+        assertContains(lines.first, expected)
+        assertContains(lines.second, "\"modified\":\"<toString() threw ConcurrentModificationException>\"")
+        val threw = listOf("value", "iterator", "modified").map { key ->
+            "kern.logger: could not render field \"$key\": its toString() threw"
+        }
+        assertEquals(threw + threw, reports.map { it.lineSequence().first() })
+        assertContains(reports.last(), "ConcurrentModificationException")
     }
 
     @Test
@@ -239,6 +250,15 @@ class RenderingTest {
         assertContains(line, " WTF     Scanner - ")
         assertContains(entry.copy(level = LogLevel.WTF).toJsonLine(), "\"level\":\"WTF\"")
     }
+}
+
+private const val STACK_TRACE_THREW = "kern.logger: could not render the entry's throwable: its stack trace threw"
+
+/** [block]'s result, and each report of a throw while it rendered, which would otherwise go to standard error. */
+@OptIn(InternalKernApi::class)
+private fun <T> renderingReports(block: () -> T): Pair<T, List<String>> {
+    val reports = mutableListOf<String>()
+    return withRenderingReportsTo({ reports += it }, block) to reports
 }
 
 private data class Missing(val id: Int) : ResultError
