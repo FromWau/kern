@@ -19,8 +19,9 @@ import kotlin.time.Duration.Companion.seconds
  *     .onError { error -> Log.tag("App").w(error) { "no crash reports" } }
  * ```
  *
- * The properties are read once, when the sink is added to a logger's config. Its level and timestamp are the
- * [SinkConfig] of its [ConfiguredSink] in [LoggerConfig.sinks].
+ * The properties are read once, when the sink is added to a logger's config, on the thread that calls
+ * [Logger.configure], where a throw from one is not caught. Its level and timestamp are the [SinkConfig] of its
+ * [ConfiguredSink] in [LoggerConfig.sinks].
  */
 public interface LogSink {
     /** Names the sink in [Logger.sinks], in errors and in health. Unique within a logger's config. */
@@ -44,6 +45,9 @@ public interface LogSink {
      * decides what happens next. An entry logged from inside this call goes to every other sink, never back to this
      * one.
      *
+     * A throw from this call is caught and logged with its stack trace; the logger never throws. It is written to
+     * standard error and as an error entry to every other sink, once until this sink writes again.
+     *
      * @param config the settings the sink has in the logger's config right now; honour its
      *   [SinkConfig.timestamp] when rendering a line.
      */
@@ -52,7 +56,8 @@ public interface LogSink {
     /**
      * Releases what the sink holds open, after its queue has drained or the close timed out. A logger never calls it
      * while it is calling [write]. The next entry after a close is written as usual, so reopen whatever [write]
-     * needs. An error returned, or a throw, is a failure of the sink like a failed write.
+     * needs. An error returned, or a throw, is a failure of the sink like a failed write. A throw from this call is
+     * caught and logged with its stack trace; the logger never throws.
      */
     public fun close(): EmptyResult<SinkError> = Ok(Unit)
 }
@@ -67,7 +72,8 @@ public interface LogSink {
  * @param write writes one entry, given the sink's current settings. It runs on the sink's own worker for each entry
  *   the sink's level takes, one at a time and in the order they were logged, so it may block. It is also handed
  *   the logger's warnings about entries this sink dropped, whatever its level. Return an error, or throw, and
- *   [onFailure] decides what happens next.
+ *   [onFailure] decides what happens next. A throw from this block is caught and logged with its stack trace; the
+ *   logger never throws.
  */
 public fun LogSink(
     name: String,

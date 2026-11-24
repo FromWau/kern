@@ -205,7 +205,7 @@ class BindingTest {
     fun `catching inside the block does not swallow a bind`() {
         var caught = false
         val saved: Result<Result<String, StoreError>, StoreError> = result {
-            catching<String, StoreError>({
+            catching<Exception, String, StoreError>(Exception::class, {
                 caught = true
                 StoreError.Full
             }) { find(2).bind() }

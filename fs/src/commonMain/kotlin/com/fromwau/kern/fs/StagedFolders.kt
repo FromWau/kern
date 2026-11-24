@@ -33,18 +33,27 @@ import kotlinx.io.files.Path
  * @param build fills the stage it is handed, whose path stays valid only while it runs, and returns the value this
  *   answers. When it answers an `Err`, the stage is removed and nothing is put in place, so
  *   `return@createDirectoryAtomically Err(e)` gives up the build, also inside a lambda that is not inline, such as
- *   `awaitLock`'s block. Any other answer, an `Ok` included, puts the folder in place. What it throws is rethrown once
- *   the stage is removed, and a `return` that leaves the function you call this from removes the stage too. An error
- *   from a call made inside it names the stage, `.<name>.<id>.dir` beside this path, since that is the path the call
- *   was given; `failure.path.relativeTo(stage)` names the entry within the folder being built.
+ *   `awaitLock`'s block. Any other answer, an `Ok` included, puts the folder in place. A throw from this block is not
+ *   caught, and is rethrown once the stage is removed, and a `return` that leaves the function you call this from
+ *   removes the stage too. An error from a call made inside it names the stage, `.<name>.<id>.dir` beside this path,
+ *   since that is the path the call was given; `failure.path.relativeTo(stage)` names the entry within the folder
+ *   being built.
  * @return `Ok` of what [build] returned, once the folder is in place, or of the `Err` it answered, with nothing
  *   placed; otherwise [FileError.AlreadyExists], [FileError.NameTooLong] naming [LongName.Stage] for a name over
  *   [MAX_STAGED_NAME_BYTES], whose claim would be longer than 255 bytes, [FileError.WriteFailed] when the stage or
  *   its claim could not be made or the stage renamed, or [FileError.LockFailed] when the claim could not be locked,
  *   and then nothing is left at this path.
  */
-public inline fun <T> Path.createDirectoryAtomically(build: (stage: Path) -> T): Result<T, FileError> {
-    val stage = when (val made = makeStage()) {
+public inline fun <T> Path.createDirectoryAtomically(build: (stage: Path) -> T): Result<T, FileError> =
+    buildInStage(makeStage(), build)
+
+/** [createDirectoryAtomically] in the stage [made], or the error making it gave. */
+@PublishedApi
+internal inline fun <T> Path.buildInStage(
+    made: Result<Stage, FileError>,
+    build: (stage: Path) -> T,
+): Result<T, FileError> {
+    val stage = when (made) {
         is Result.Success -> made.value
         is Result.Error -> return made
     }
@@ -74,10 +83,10 @@ internal class Stage(
 
 /**
  * A new, empty stage folder beside this path for [createDirectoryAtomically], claimed before it is made, or why there
- * can be none.
+ * can be none; [osLock] tries the claim's OS lock.
  */
 @PublishedApi
-internal fun Path.makeStage(): Result<Stage, FileError> {
+internal fun Path.makeStage(osLock: (lockFile: Path) -> OsLock = { tryOsLock(it) }): Result<Stage, FileError> {
     refusedPath()?.let { return it }
     existingOrUnknown()?.let { return it }
     val stage = besideWith(STAGE_SUFFIX)
@@ -86,7 +95,7 @@ internal fun Path.makeStage(): Result<Stage, FileError> {
     val created = parent?.createDirectories()
     if (created is Result.Error) return created
     val unopened = { lockFile: Path, failure: Exception -> writeFailed(this, failure, at = FailedAt.Claim(lockFile)) }
-    val claim = when (val taken = claimFile.acquireLock(Duration.ZERO, unopened = unopened)) {
+    val claim = when (val taken = claimFile.acquireLock(Duration.ZERO, unopened = unopened, osLock = osLock)) {
         is Result.Success -> taken.value
         is Result.Error -> return taken
     }

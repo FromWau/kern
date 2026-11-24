@@ -19,6 +19,7 @@ import java.lang.foreign.ValueLayout.JAVA_LONG
 import java.lang.foreign.ValueLayout.JAVA_SHORT
 import java.lang.invoke.MethodHandle
 import java.lang.invoke.VarHandle
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -174,6 +175,22 @@ internal fun inheritedEnvironment(): Map<String, ByteArray> {
     }
 }
 
+/** The points in a child's life where [testProbe] is called. */
+internal enum class FfmStep {
+    ThreadStart,
+    Spawn,
+    Started,
+    Read,
+    WriteStdin,
+    Wait,
+    Reaped,
+    Stop,
+    Wake,
+}
+
+/** Called at each [FfmStep] of the children started while it is set: a test throws from it as a bug in kern would. */
+internal val testProbe = AtomicReference<((FfmStep) -> Unit)?>(null)
+
 /** Starts [command] as [program], the path [lookUp] gave, with [environment] as `NAME=value` entries. */
 internal fun startFfmChild(
     command: Command,
@@ -185,16 +202,19 @@ internal fun startFfmChild(
     try {
         val stdin = command.stdin
         fds.open(command)?.let { return fds.failed(it) }
-        events = FfmEvents(fds.wake)
+        events = FfmEvents(fds.wake, testProbe.get())
         if (stdin is Stdin.Bytes) {
             val writer = fds.stdinWriter
-            daemon("stdin") { writeStdin(writer, stdin.bytes, events) }
+            daemon("stdin", events) { writeStdin(writer, stdin.bytes, events) }
+                ?.let { return fds.failed(ExecError.StartFailed(command.argv, it)) }
             fds.stdinWriter = -1
         }
         // From here on the reader thread owns every descriptor left.
-        daemon("reader") { spawnAndRead(command, program, environment, fds, events) }
-    } catch (failure: Throwable) {
-        return fds.failed(ExecError.StartFailed(command.argv, failure.toString()))
+        daemon("reader", events) { spawnAndRead(command, program, environment, fds, events) }
+            ?.let { return fds.failed(ExecError.StartFailed(command.argv, it)) }
+    } catch (bug: Throwable) {
+        fds.closeAll()
+        throw bug
     }
     return events.awaitStart().map { pid -> FfmChild(pid, events) }
 }
@@ -207,9 +227,20 @@ private class FfmChild(override val pid: Int, private val events: FfmEvents) : C
     override fun detach() = events.detach()
 }
 
-/** Daemon, so a child still running never keeps this process from exiting. */
-private fun daemon(role: String, body: () -> Unit) {
-    Thread(body, "kern-exec-$role").apply { isDaemon = true }.start()
+/**
+ * Runs [body] on a new daemon thread, so a child still running never keeps this process from exiting. Returns null, or
+ * why the system started no thread.
+ */
+private fun daemon(role: String, events: FfmEvents, body: () -> Unit): String? {
+    val thread = Thread(body, "kern-exec-$role").apply { isDaemon = true }
+    return try {
+        events.reached(FfmStep.ThreadStart)
+        thread.start()
+        null
+    } catch (refused: OutOfMemoryError) {
+        // How the JVM reports the errno of pthread_create: the system's thread limit, or no memory for a stack.
+        refused.message ?: refused.toString()
+    }
 }
 
 /** The descriptors a start opens; each is -1 once closed or handed to the thread that owns it. */
@@ -310,27 +341,33 @@ private class StartFds {
     }
 
     fun closeChildEnds() {
-        stdinChild = closed(stdinChild)
-        stdoutChild = closed(stdoutChild)
-        stderrChild = closed(stderrChild)
+        closeFd(stdinChild.also { stdinChild = -1 })
+        closeFd(stdoutChild.also { stdoutChild = -1 })
+        closeFd(stderrChild.also { stderrChild = -1 })
+    }
+
+    fun closeReadEnds() {
+        closeFd(stdoutRead.also { stdoutRead = -1 })
+        closeFd(stderrRead.also { stderrRead = -1 })
+    }
+
+    fun closeAll() {
+        closeChildEnds()
+        closeReadEnds()
+        closeFd(stdinWriter.also { stdinWriter = -1 })
+        closeFd(wake.also { wake = -1 })
     }
 
     fun failed(error: ExecError.StartError): Err<ExecError.StartError> {
-        closeChildEnds()
-        stdinWriter = closed(stdinWriter)
-        stdoutRead = closed(stdoutRead)
-        stderrRead = closed(stderrRead)
-        wake = closed(wake)
+        closeAll()
         return Err(error)
-    }
-
-    private fun closed(fd: Int): Int {
-        closeFd(fd)
-        return -1
     }
 }
 
-/** Runs on the reader thread: starts the child, hands the outcome to `start`, then reads the child to its end. */
+/**
+ * Runs on the reader thread: starts the child, hands the outcome to `start`, then reads the child to its end. A throw
+ * is a bug in kern, [FfmEvents.crashed]; the descriptors are still closed and the child still reaped.
+ */
 private fun spawnAndRead(
     command: Command,
     program: String,
@@ -339,53 +376,63 @@ private fun spawnAndRead(
     events: FfmEvents,
 ) {
     var pid = -1
+    var reader: Reader? = null
     try {
-        val spawned = try {
-            spawn(command, program, environment, fds)
-        } catch (failure: Throwable) {
-            Err(ExecError.StartFailed(command.argv, failure.toString()))
-        }
+        events.reached(FfmStep.Spawn)
+        val spawned = spawn(command, program, environment, fds)
         fds.closeChildEnds()
         when (spawned) {
             is Err -> {
-                closeFd(fds.stdoutRead)
-                closeFd(fds.stderrRead)
+                fds.closeReadEnds()
                 events.startFailed(spawned)
             }
             is Ok -> {
                 pid = spawned.value
                 events.started(pid)
+                events.reached(FfmStep.Started)
                 Arena.ofConfined().use { arena ->
-                    Reader(arena, pid, fds.stdoutRead, fds.stderrRead, fds.wake, events).run()
+                    Reader(arena, pid, fds.stdoutRead, fds.stderrRead, fds.wake, events).also { reader = it }.run()
                 }
             }
         }
-    } catch (failure: Throwable) {
-        // Whatever failed, `start` and `next` must not wait for an answer that never comes.
-        if (pid < 0) {
-            events.startFailed(Err(ExecError.StartFailed(command.argv, failure.toString())))
-        } else {
-            try {
-                events.post(ChildEvent.Failed(ExecError.WaitFailed(pid, failure.toString())))
-                // Nothing reads the pipes from here on: a child that writes gets SIGPIPE instead of blocking forever.
-                closeFd(fds.stdoutRead)
-                closeFd(fds.stderrRead)
-                reapWhenEnded(pid, events)
-            } finally {
-                events.end()
+    } catch (bug: Throwable) {
+        // In a finally, as a throw from the uncaught exception handler leaves the child to clean up all the same.
+        try {
+            events.crashed(bug)
+        } finally {
+            // A reader lets go of the child even when it throws.
+            if (reader == null) {
+                fds.closeChildEnds()
+                // Nothing reads the pipes: a child that writes gets SIGPIPE instead of blocking forever.
+                fds.closeReadEnds()
+                if (pid >= 0) {
+                    try {
+                        reapWhenEnded(pid, events)
+                    } catch (again: Throwable) {
+                        try {
+                            events.crashedAgain(bug, again)
+                        } finally {
+                            reapWhenEnded(pid, events, probed = false)
+                        }
+                    }
+                }
             }
         }
+    } finally {
+        events.end()
     }
 }
 
 /**
  * Waits for the child to end without a reader, then reaps it so it leaves no zombie. `stop` reaches it until it ended
- * and is shut off before the reap, so it never signals another process that got the same number.
+ * and is shut off before the reap, so it never signals another process that got the same number. Without [probed] it
+ * passes no [FfmStep], so it reaps a child after a throw at one of them.
  */
-private fun reapWhenEnded(pid: Int, events: FfmEvents) = Arena.ofConfined().use { arena ->
+private fun reapWhenEnded(pid: Int, events: FfmEvents, probed: Boolean = true) = Arena.ofConfined().use { arena ->
     val state = arena.allocate(Libc.stateLayout)
     val siginfo = arena.allocate(SIGINFO_BYTES, 8)
     fun waitFor(options: Int): Int {
+        if (probed) events.reached(FfmStep.Wait)
         while (true) {
             if (Libc.waitid.invokeWithArguments(state, P_PID, pid, siginfo, options) as Int == 0) return 0
             val errno = Libc.errno(state)
@@ -521,9 +568,12 @@ private fun cStrings(arena: Arena, strings: List<ByteArray>): MemorySegment {
  */
 private fun writeStdin(fd: Int, bytes: ByteArray, events: FfmEvents) {
     val failure = try {
+        events.reached(FfmStep.WriteStdin)
         Arena.ofConfined().use { arena -> writeAll(arena, fd, bytes) }
-    } catch (failure: Throwable) {
-        failure.toString()
+    } catch (bug: Throwable) {
+        // Recorded before the close below, which may let the child end.
+        events.crashed(bug)
+        return
     } finally {
         closeFd(fd)
     }
@@ -561,6 +611,8 @@ private fun writeAll(arena: Arena, fd: Int, bytes: ByteArray): String? {
 private class OutputPipe(var fd: Int, val stream: ChildStream) {
     val decoder = Utf8Stream()
     val isOpen: Boolean get() = fd >= 0
+
+    fun close() = closeFd(fd.also { fd = -1 })
 }
 
 /**
@@ -591,7 +643,10 @@ private class Reader(
     private var held = false
     private var outputClosed = false
 
-    /** Reads to the end; whatever goes wrong, the events end and `next` returns. */
+    /**
+     * Reads to the end, then lets go of the child. A throw is a bug in kern, [FfmEvents.crashed]; the descriptors are
+     * still closed and the child still reaped, a throw while letting go of it reported too.
+     */
     fun run() {
         try {
             pidfd = pidfdOpen()
@@ -607,18 +662,32 @@ private class Reader(
                     awaitReady()
                 }
             }
-        } catch (failure: Throwable) {
+            events.awaitLetGo()
+            release()
+        } catch (bug: Throwable) {
             try {
-                giveUp(failure.toString())
-            } catch (_: Throwable) {
-                // Reported already unless posting failed too, and nothing is left to read by.
-            }
-        } finally {
-            try {
-                events.awaitLetGo()
-                release()
+                events.crashed(bug)
             } finally {
-                events.end()
+                // Nothing reads the pipes from here on: a child that writes gets SIGPIPE instead of blocking forever.
+                pipes.forEach { it.close() }
+                releaseAfter(bug)
+            }
+        }
+    }
+
+    /** [release] after [bug]; when that throws too, the throw is reported and the child reaped all the same. */
+    private fun releaseAfter(bug: Throwable) {
+        try {
+            release()
+        } catch (again: Throwable) {
+            try {
+                events.crashedAgain(bug, again)
+            } finally {
+                if (!exited || held) {
+                    reapWhenEnded(pid, events, probed = false)
+                    exited = true
+                    held = false
+                }
             }
         }
     }
@@ -667,11 +736,11 @@ private class Reader(
     private fun awaitExit() {
         val failure = waitFor(keep = true)
         exited = true
-        if (failure != 0) {
+        held = failure == 0
+        if (!held) {
             events.post(ChildEvent.Failed(ExecError.WaitFailed(pid, reason(failure))))
             return
         }
-        held = true
         val exitedNormally = siginfo.get(JAVA_INT, SIGINFO_CODE) == CLD_EXITED
         val status = siginfo.get(JAVA_INT, SIGINFO_STATUS)
         for (pipe in pipes) {
@@ -688,6 +757,7 @@ private class Reader(
 
     /** Waits for the child to end, by pidfd when there is one, and reaps it unless [keep]. Returns 0 or errno. */
     private fun waitFor(keep: Boolean): Int {
+        events.reached(FfmStep.Wait)
         val options = if (keep) WEXITED or WNOWAIT else WEXITED
         var byPidfd = pidfd >= 0
         while (true) {
@@ -708,6 +778,7 @@ private class Reader(
 
     /** Reads and posts up to [limit] bytes of [pipe], at most a buffer's worth. Returns how many; 0 for none. */
     private fun readOnce(pipe: OutputPipe, limit: Int = READ_SIZE): Int {
+        events.reached(FfmStep.Read)
         val size = minOf(limit, READ_SIZE).toLong()
         while (true) {
             val read = (Libc.read.invokeWithArguments(state, pipe.fd, nativeBuffer, size) as Long).toInt()
@@ -732,8 +803,7 @@ private class Reader(
 
     private fun closePipe(pipe: OutputPipe) {
         post(pipe.decoder.end(), pipe.stream)
-        closeFd(pipe.fd)
-        pipe.fd = -1
+        pipe.close()
     }
 
     private fun post(text: String, stream: ChildStream) {
@@ -748,15 +818,26 @@ private class Reader(
         outputClosed = true
     }
 
-    /** Stops `stop` from signalling, then reaps the child, which frees its pid for reuse. */
+    /**
+     * Stops `stop` from signalling, then reaps the child, which frees its pid for reuse. After a throw it first waits
+     * for the child to end, unless that was done; called again, it reaps nothing twice.
+     */
     private fun release() {
-        events.release()
-        if (held) {
-            // Fails only when something else in this process reaped the child first, which leaves nothing to do.
-            val _ = waitFor(keep = false)
+        try {
+            if (!exited) {
+                held = waitFor(keep = true) == 0
+                exited = true
+            }
+            events.release()
+            if (held) {
+                // Fails only when something else in this process reaped the child first, which leaves nothing to do.
+                val _ = waitFor(keep = false)
+                held = false
+                events.reached(FfmStep.Reaped)
+            }
+        } finally {
+            closeFd(pidfd.also { pidfd = -1 })
         }
-        if (pidfd >= 0) closeFd(pidfd)
-        pidfd = -1
     }
 }
 
@@ -764,9 +845,9 @@ private class Reader(
  * The events the reader thread posts and [next] takes, behind one lock. Also hands the outcome of the start to the
  * thread waiting in `start`, and sends [stop]'s signals under the same lock, so none is sent after the reader let go
  * of the child with [release]. A [ChildEvent.Failed] is the last event: the child is then read and dropped, and let go
- * of as after [ChildEvent.Exited].
+ * of as after [ChildEvent.Exited]. A throw on the reader or stdin thread is a bug in kern, which [crashed] reports.
  */
-private class FfmEvents(private val wake: Int) {
+private class FfmEvents(private val wake: Int, private val probe: ((FfmStep) -> Unit)?) {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private val queue = ArrayDeque<ChildEvent>()
@@ -777,6 +858,7 @@ private class FfmEvents(private val wake: Int) {
     private var released = false
     private var finished = false
     private var exhausted = false
+    private var crash: Throwable? = null
 
     fun started(pid: Int) = locked { start = Ok(pid) }
 
@@ -786,18 +868,38 @@ private class FfmEvents(private val wake: Int) {
         endLocked()
     }
 
-    fun awaitStart(): Result<Int, ExecError.StartError> = locked {
-        var outcome = start
-        while (outcome == null) {
-            changed.awaitUninterruptibly()
-            outcome = start
-        }
-        outcome
+    /**
+     * Hands [bug], a throw on the reader or stdin thread, to this thread's uncaught exception handler at once. The
+     * first is also recorded, for [awaitStart] and [next] to rethrow unchanged, and nothing is queued from then on.
+     */
+    fun crashed(bug: Throwable) {
+        locked { if (crash == null) crash = bug }
+        report(bug)
     }
 
-    /** Queues [event] unless the events already ended, by [end], a [ChildEvent.Failed] or [detach]. */
+    /** Reports [again], thrown while cleaning up after [bug], and adds it to [bug] as suppressed for a later caller. */
+    fun crashedAgain(bug: Throwable, again: Throwable) {
+        bug.addSuppressed(again)
+        if (again !== bug) report(again)
+    }
+
+    private fun report(bug: Throwable) {
+        val thread = Thread.currentThread()
+        thread.uncaughtExceptionHandler.uncaughtException(thread, bug)
+    }
+
+    /**
+     * The outcome of the start, or the throw [crashed] recorded when the reader ended without one. A started child's
+     * throw is left to [next], so the caller can still stop the child.
+     */
+    fun awaitStart(): Result<Int, ExecError.StartError> = locked {
+        while (start == null && !ended) changed.awaitUninterruptibly()
+        start ?: throw checkNotNull(crash)
+    }
+
+    /** Queues [event] unless the events already ended, by [end], a [ChildEvent.Failed], [detach] or a crash. */
     fun post(event: ChildEvent) = locked {
-        if (ended || failed || detached) return@locked
+        if (ended || failed || detached || crash != null) return@locked
         queue.addLast(event)
         failed = event is ChildEvent.Failed
     }
@@ -806,8 +908,11 @@ private class FfmEvents(private val wake: Int) {
     fun end() = locked { endLocked() }
 
     fun next(): ChildEvent? = locked {
-        while (queue.isEmpty() && !finished && !ended && !failed && !detached) changed.awaitUninterruptibly()
+        while (queue.isEmpty() && !finished && !ended && !failed && !detached && crash == null) {
+            changed.awaitUninterruptibly()
+        }
         if (detached) return@locked null
+        crash?.let { throw it }
         val event = queue.removeFirstOrNull()
         // Asked past the end: the reader may let go of the child.
         if (event == null) exhausted = true
@@ -822,7 +927,7 @@ private class FfmEvents(private val wake: Int) {
         finished = true
         // Before waiting: a next already waiting for an event is woken only by this.
         changed.signalAll()
-        while (!exhausted && !detached) changed.awaitUninterruptibly()
+        while (!exhausted && !detached && crash == null) changed.awaitUninterruptibly()
     }
 
     /**
@@ -830,22 +935,21 @@ private class FfmEvents(private val wake: Int) {
      * lead another process's group.
      */
     fun stop(pid: Int, signal: Signal): EmptyResult<ExecError> = locked {
-        when {
-            released -> Ok(Unit)
-            else -> try {
-                Arena.ofConfined().use { arena ->
-                    val state = arena.allocate(Libc.stateLayout)
-                    val errno = if (Libc.kill.invokeWithArguments(state, -pid, signal.number) as Int == 0) {
-                        0
-                    } else {
-                        Libc.errno(state)
-                    }
-                    if (errno == 0 || errno == ESRCH) Ok(Unit) else Err(ExecError.StopFailed(pid, reason(errno)))
-                }
-            } catch (failure: Throwable) {
-                Err(ExecError.StopFailed(pid, failure.toString()))
+        if (released) return@locked Ok(Unit)
+        reached(FfmStep.Stop)
+        Arena.ofConfined().use { arena ->
+            val state = arena.allocate(Libc.stateLayout)
+            val errno = if (Libc.kill.invokeWithArguments(state, -pid, signal.number) as Int == 0) {
+                0
+            } else {
+                Libc.errno(state)
             }
+            if (errno == 0 || errno == ESRCH) Ok(Unit) else Err(ExecError.StopFailed(pid, reason(errno)))
         }
+    }
+
+    fun reached(step: FfmStep) {
+        probe?.invoke(step)
     }
 
     /** The child is about to be reaped: [stop] sends nothing from then on. */
@@ -859,13 +963,11 @@ private class FfmEvents(private val wake: Int) {
 
     /** Makes the reader's poll return; it is woken only to drop what is queued, so a failed wake loses nothing. */
     private fun wakeReader() {
-        try {
-            Arena.ofConfined().use { arena ->
-                val one = arena.allocate(JAVA_LONG)
-                one.set(JAVA_LONG, 0, 1L)
-                val _ = Libc.write.invokeWithArguments(arena.allocate(Libc.stateLayout), wake, one, 8L)
-            }
-        } catch (_: Throwable) {
+        reached(FfmStep.Wake)
+        Arena.ofConfined().use { arena ->
+            val one = arena.allocate(JAVA_LONG)
+            one.set(JAVA_LONG, 0, 1L)
+            val _ = Libc.write.invokeWithArguments(arena.allocate(Libc.stateLayout), wake, one, 8L)
         }
     }
 

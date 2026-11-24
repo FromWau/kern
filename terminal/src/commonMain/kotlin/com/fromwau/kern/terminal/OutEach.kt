@@ -22,7 +22,8 @@ private const val CHUNK_LENGTH = 64 * 1024
  * [Terminal.afterWrites] block does.
  *
  * @param finished called once with what [Terminal.afterWrites] passes its block: success after the last piece, also
- *   when there are none, or a failure, standard output's before standard error's. It may end the process.
+ *   when there are none, or a failure, standard output's before standard error's. It may end the process. A throw
+ *   from this block is not caught.
  */
 @OptIn(InternalKernApi::class)
 public fun Terminal.outEach(pieces: Sequence<CharSequence>, finished: (EmptyResult<WriteError>) -> Unit) {

@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class)
+@file:OptIn(ExperimentalAtomicApi::class, ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 
 package com.fromwau.kern.process
 
@@ -9,6 +9,8 @@ import com.fromwau.kern.result.Result
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.getUnhandledExceptionHook
 import kotlin.system.exitProcess
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.staticCFunction
@@ -50,7 +52,20 @@ private fun requestFor(event: DWORD): ShutdownRequest? = when (event.toInt()) {
 private fun onControlEvent(event: DWORD): WINBOOL {
     val request = requestFor(event) ?: return FALSE
     if (!requested.compareAndSet(expectedValue = false, newValue = true)) _exit(request.exitCode)
-    exitProcess(checkNotNull(handler.load())(request))
+    // Only reporting what the handler threw can throw here. Escaping this C callback would abort the process, so the
+    // failure ends it with the request's code instead, as a handler that throws does.
+    val exitCode = try {
+        checkNotNull(handler.load())(request)
+    } catch (_: Throwable) {
+        request.exitCode
+    }
+    exitProcess(exitCode)
+}
+
+/** The app's unhandled exception hook, which kern sets none of here, or a print without one. */
+internal actual fun reportUncaught(e: Throwable) {
+    val hook = getUnhandledExceptionHook()
+    if (hook != null) hook(e) else printUncaught(e)
 }
 
 /**

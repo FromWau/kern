@@ -14,6 +14,7 @@ import com.fromwau.kern.logger.Thrown
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Err
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -34,13 +35,14 @@ import kotlin.time.Duration.Companion.seconds
  * wrapped sink as it treats the delegate. A batching delegate such as `FileSink` still gets queued entries several at
  * a time, and each entry of such a write is recorded as a call of its own with the write's result. A write that
  * throws is recorded as `Err(SinkError.Dropped(Thrown(e)))` for each of its entries, and the throw goes on to the
- * logger.
+ * logger, which catches it. So that an assertion failing inside the delegate still fails your test, [awaitCall] and
+ * [calls] throw an [AssertionError] the call was recorded with instead of handing that call out.
  */
 public sealed class RecordingSink : LogSink {
     /** The sink that does the work. */
     public abstract val delegate: LogSink
 
-    private val recorded = Received<SinkCall>()
+    private val recorded = Received<Recorded>()
 
     override val name: String
         get() = delegate.name
@@ -56,20 +58,22 @@ public sealed class RecordingSink : LogSink {
 
     /**
      * Each call, once, in the order they were made; a retried entry once per attempt. A call [awaitCall] took is not
-     * in it, and one collected here is not handed to [awaitCall]. Collecting it never ends by itself.
+     * in it, and one collected here is not handed to [awaitCall]. Collecting it never ends by itself, and throws the
+     * [AssertionError] a call's write threw.
      */
-    public val calls: Flow<SinkCall> = recorded.flow
+    public val calls: Flow<SinkCall> = recorded.flow.map { it.handedOut() }
 
     /** Every call so far, in order, whether or not [calls] or [awaitCall] took it. */
     public val received: List<SinkCall>
-        get() = recorded.snapshot
+        get() = recorded.snapshot.map { it.call }
 
     /**
      * The next call not yet taken from [calls] or by this call, waiting up to [timeout] of real time for it, even
-     * under `runTest`'s virtual clock. Fails the test, naming the sink and the timeout, when none comes in time.
+     * under `runTest`'s virtual clock. Fails the test, naming the sink and the timeout, when none comes in time, and
+     * with the [AssertionError] the call's write threw, when it threw one.
      */
     public suspend fun awaitCall(timeout: Duration = 1.seconds): SinkCall =
-        recorded.await(timeout) { "RecordingSink \"$name\" got no call within $timeout" }
+        recorded.await(timeout) { "RecordingSink \"$name\" got no call within $timeout" }.handedOut()
 
     override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> =
         record(listOf(entry), config) { delegate.write(entry, config) }
@@ -85,15 +89,25 @@ public sealed class RecordingSink : LogSink {
         val result = try {
             call()
         } catch (e: Throwable) {
-            recordAll(entries, config, Err(SinkError.Dropped(Thrown(e))))
+            recordAll(entries, config, Err(SinkError.Dropped(Thrown(e))), assertion = e as? AssertionError)
             throw e
         }
-        recordAll(entries, config, result)
+        recordAll(entries, config, result, assertion = null)
         return result
     }
 
-    private fun recordAll(entries: List<LogEntry>, config: SinkConfig, result: EmptyResult<SinkError>) {
-        entries.forEach { recorded.add(SinkCall(it, config, result)) }
+    private fun recordAll(
+        entries: List<LogEntry>,
+        config: SinkConfig,
+        result: EmptyResult<SinkError>,
+        assertion: AssertionError?,
+    ) {
+        entries.forEach { recorded.add(Recorded(SinkCall(it, config, result), assertion)) }
+    }
+
+    /** A call, and the assertion failure its write threw, which the test must still see. */
+    private class Recorded(val call: SinkCall, val assertion: AssertionError?) {
+        fun handedOut(): SinkCall = assertion?.let { throw it } ?: call
     }
 }
 

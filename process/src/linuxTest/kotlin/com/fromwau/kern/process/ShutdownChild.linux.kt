@@ -48,6 +48,10 @@ fun shutdownChildMain(args: Array<String>) {
         }
         "throw" -> install { error("the handler failed") }
         "throw exit 0" -> install(exitCode = 0) { error("the handler failed") }
+        "throw, app hook" -> {
+            setUnhandledExceptionHook { say("app hook saw ${it.message}") }
+            install { error("the handler failed") }
+        }
         "unprintable" -> install { throw Unprintable() }
         // The handler throws an exception that cannot be printed once main's exit is waiting for the handler.
         "unprintable during the exit of main" -> {

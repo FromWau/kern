@@ -96,6 +96,16 @@ class ShutdownLinuxTest {
     }
 
     @Test
+    fun aHandlersThrowReachesTheAppsUnhandledExceptionHookAndStillExits143() {
+        val child = NativeChild.start("throw, app hook")
+        child.signal(SIGTERM)
+
+        val exit = child.finish()
+        assertEquals(143, exit.code, exit.toString())
+        assertTrue("app hook saw the handler failed" in exit.lines, exit.toString())
+    }
+
+    @Test
     fun aHandlerThatThrowsExitsWithTheRequestsCodeEvenWithAnExitCodeGivenAtInstall() {
         val child = NativeChild.start("throw exit 0")
         child.signal(SIGTERM)

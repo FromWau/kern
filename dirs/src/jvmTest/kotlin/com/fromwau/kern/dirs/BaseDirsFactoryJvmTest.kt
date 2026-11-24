@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -260,6 +261,11 @@ class BaseDirsFactoryJvmTest {
             System.setProperty("user.name", userName)
             Files.walk(scratch).sorted(Comparator.reverseOrder()).forEach(Files::delete)
         }
+    }
+
+    @Test
+    fun `a runtime folder whose path the JDK refuses is not private`() {
+        assertFalse(isPrivateFolder(Path("/run/user/1000\u0000")))
     }
 
     @Test

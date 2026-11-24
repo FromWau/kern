@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 /** Runs under Node, where the test task's output is captured rather than a terminal. */
@@ -116,6 +117,29 @@ class PlatformWebTest {
         } finally {
             restoreStdoutWrite()
             forgetStdoutError()
+        }
+    }
+
+    @Test
+    fun `a throw from the block after writes is thrown on once rather than taken for a failed write`() {
+        val terminal = defaultTerminal()
+        answerWritesAtOnce()
+        var runs = 0
+        try {
+            val failure = assertFailsWith<IllegalStateException> {
+                terminal.afterWrites {
+                    runs++
+                    error("bug in the block")
+                }
+            }
+
+            assertEquals("bug in the block", failure.message)
+            assertEquals(1, runs)
+            assertEquals(Ok(Unit), terminal.writeResult())
+        } finally {
+            restoreWrites()
+            forgetStdoutError()
+            forgetStderrError()
         }
     }
 
@@ -296,6 +320,26 @@ private fun throwOnEmptyStdoutWrite(message: String): Unit = js(
         };
     }""",
 )
+
+// As a stream that answers each write before the write returns, so the block after writes runs inside the write.
+private fun answerWritesAtOnce(): Unit = js(
+    """{
+        [process.stdout, process.stderr].forEach(s => {
+            s.kernRealWrite = s.write;
+            s.write = function (chunk, encoding, callback) {
+                const done = typeof encoding === 'function' ? encoding : callback;
+                if (done) done(null);
+                return true;
+            };
+        });
+    }""",
+)
+
+private fun restoreWrites(): Unit = js(
+    "{ [process.stdout, process.stderr].forEach(s => { s.write = s.kernRealWrite; }); }",
+)
+
+private fun forgetStderrError(): Unit = js("{ process.stderr[Symbol.for('kern.terminal.writeError')] = null; }")
 
 private fun restoreStdoutWrite(): Unit = js(
     "{ const s = process.stdout; if (s.kernPutDoubleAway) s.kernPutDoubleAway(); delete s.kernPutDoubleAway; " +

@@ -9,6 +9,7 @@ import com.fromwau.kern.result.Result
 import com.fromwau.kern.result.getOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -32,7 +33,6 @@ class FakeShutdownSourceTest {
         source.request(ShutdownRequest.Terminate)
         assertEquals(listOf(ShutdownRequest.Terminate), handled)
         assertEquals(143, source.exitCode)
-        assertNull(source.thrown)
     }
 
     @Test
@@ -68,14 +68,12 @@ class FakeShutdownSourceTest {
     }
 
     @Test
-    fun aHandlerThatThrowsIsKeptInThrownAndTheExitCodeStillSet() {
+    fun aHandlersThrowReachesTheCallerUnchangedWithTheExitCodeSet() {
         val source = FakeShutdownSource()
         val failure = IllegalStateException("the handler failed")
         assertEquals<EmptyResult<ShutdownError>>(Ok(Unit), source.onShutdownRequest { throw failure })
 
-        source.request(ShutdownRequest.Interrupt)
-
-        assertSame(failure, source.thrown)
+        assertSame(failure, assertFails { source.request(ShutdownRequest.Interrupt) })
         assertEquals(130, source.exitCode)
     }
 
@@ -86,7 +84,6 @@ class FakeShutdownSourceTest {
         source.request(ShutdownRequest.Interrupt)
 
         assertEquals(130, source.exitCode)
-        assertNull(source.thrown)
     }
 
     @Test
@@ -116,9 +113,7 @@ class FakeShutdownSourceTest {
         val failure = IllegalStateException("the handler failed")
         assertEquals<EmptyResult<ShutdownError>>(Ok(Unit), source.onShutdownRequest(exitCode = 0) { throw failure })
 
-        source.request(ShutdownRequest.Terminate)
-
-        assertSame(failure, source.thrown)
+        assertSame(failure, assertFails { source.request(ShutdownRequest.Terminate) })
         assertEquals(143, source.exitCode)
     }
 
@@ -145,8 +140,7 @@ class FakeShutdownSourceTest {
             },
         )
 
-        source.request(ShutdownRequest.Terminate)
-
+        assertFails { source.request(ShutdownRequest.Terminate) }
         assertEquals(129, source.exitCode)
     }
 

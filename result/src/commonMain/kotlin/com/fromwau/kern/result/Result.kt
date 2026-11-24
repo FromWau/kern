@@ -63,7 +63,7 @@ public fun <S, E : ResultError> Result<S, E>.isError(): Boolean {
 }
 
 /**
- * A success holding this value, or the error [error] builds when it is null.
+ * A success holding this value, or the error [error] builds when it is null. A throw from [error] is not caught.
  *
  * ```kotlin
  * fun findUser(id: Long): Result<User, CrudError> = users[id].toResult { CrudError.NotFound(id) }
@@ -74,7 +74,10 @@ public inline fun <T : Any, E : ResultError> T?.toResult(error: () -> E): Result
     return if (this != null) Ok(this) else Err(error())
 }
 
-/** Applies [transform] to a success value, passing an error through untouched. */
+/**
+ * Applies [transform] to a success value, passing an error through untouched. A throw from [transform] is
+ * not caught.
+ */
 public inline fun <S, E : ResultError, T> Result<S, E>.map(transform: (S) -> T): Result<T, E> = when (this) {
     is Result.Success -> Result.Success(transform(value))
     is Result.Error -> this
@@ -82,7 +85,8 @@ public inline fun <S, E : ResultError, T> Result<S, E>.map(transform: (S) -> T):
 
 /**
  * Runs [transform] on a success value when the next step can itself fail, passing an error through
- * untouched. Use this where [map] would hand you a `Result` nested inside a `Result`.
+ * untouched. Use this where [map] would hand you a `Result` nested inside a `Result`. A throw from [transform] is
+ * not caught.
  *
  * ```kotlin
  * fun rename(id: Long, name: String): Result<User, CrudError> =
@@ -111,7 +115,8 @@ public fun <S, E : ResultError> Result<Result<S, E>, E>.flatten(): Result<S, E> 
 
 /**
  * Unwraps a result nested in a result whose two errors differ: the inner result on a success, and the outer error
- * turned into the inner error type by [outer] on a failure. [outer] runs only for an outer error.
+ * turned into the inner error type by [outer] on a failure. [outer] runs only for an outer error, and a throw from it
+ * is not caught.
  *
  * ```kotlin
  * // Result<Result<Config, AppError>, FileError>, from a lock around work that has errors of its own
@@ -124,14 +129,17 @@ public inline fun <S, E : ResultError, F : ResultError> Result<Result<S, F>, E>.
         is Result.Error -> Result.Error(outer(error))
     }
 
-/** Applies [transform] to an error, passing a success value through untouched. */
+/**
+ * Applies [transform] to an error, passing a success value through untouched. A throw from [transform] is
+ * not caught.
+ */
 public inline fun <S, E : ResultError, F : ResultError> Result<S, E>.mapError(transform: (E) -> F): Result<S, F> =
     when (this) {
         is Result.Success -> this
         is Result.Error -> Result.Error(transform(error))
     }
 
-/** Returns the success value, or what [fallback] makes of the error. */
+/** Returns the success value, or what [fallback] makes of the error. A throw from [fallback] is not caught. */
 public inline fun <S, E : ResultError> Result<S, E>.getOrElse(fallback: (E) -> S): S = when (this) {
     is Result.Success -> value
     is Result.Error -> fallback(error)
@@ -149,14 +157,20 @@ public fun <S, E : ResultError> Result<S, E>.errorOrNull(): E? = when (this) {
     is Result.Error -> error
 }
 
-/** Collapses both cases into one type: [onSuccess] for a value, [onError] for a failure. */
+/**
+ * Collapses both cases into one type: [onSuccess] for a value, [onError] for a failure. A throw from either block is
+ * not caught.
+ */
 public inline fun <S, E : ResultError, T> Result<S, E>.fold(onSuccess: (S) -> T, onError: (E) -> T): T =
     when (this) {
         is Result.Success -> onSuccess(value)
         is Result.Error -> onError(error)
     }
 
-/** Recovers from a failure with another attempt, which may fail with an error of its own type. */
+/**
+ * Recovers from a failure with [attempt], which may fail with an error of its own type. A throw from [attempt] is not
+ * caught.
+ */
 public inline fun <S, E : ResultError, F : ResultError> Result<S, E>.orElse(
     attempt: (E) -> Result<S, F>,
 ): Result<S, F> = when (this) {
@@ -164,12 +178,15 @@ public inline fun <S, E : ResultError, F : ResultError> Result<S, E>.orElse(
     is Result.Error -> attempt(error)
 }
 
-/** Runs [action] on a success value and returns this result unchanged, for chaining. */
+/**
+ * Runs [action] on a success value and returns this result unchanged, for chaining. A throw from [action] is
+ * not caught.
+ */
 @IgnorableReturnValue
 public inline fun <S, E : ResultError> Result<S, E>.onSuccess(action: (S) -> Unit): Result<S, E> =
     also { if (it is Result.Success) action(it.value) }
 
-/** Runs [action] on an error and returns this result unchanged, for chaining. */
+/** Runs [action] on an error and returns this result unchanged, for chaining. A throw from [action] is not caught. */
 @IgnorableReturnValue
 public inline fun <S, E : ResultError> Result<S, E>.onError(action: (E) -> Unit): Result<S, E> =
     also { if (it is Result.Error) action(it.error) }

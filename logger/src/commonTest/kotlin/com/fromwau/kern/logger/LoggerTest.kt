@@ -268,7 +268,7 @@ class LoggerTest {
         logger.tag("app").i { error("no message today") }
         val _ = logger.awaitFlushed()
 
-        assertEquals("<message threw IllegalStateException>", sink.messages.single())
+        assertEquals(listOf("<message threw IllegalStateException>"), sink.messagesTagged("app"))
     }
 
     @Test
@@ -279,7 +279,7 @@ class LoggerTest {
         logger.tag("app").i { TODO() }
         val _ = logger.awaitFlushed()
 
-        assertEquals("<message threw NotImplementedError>", sink.messages.single())
+        assertEquals(listOf("<message threw NotImplementedError>"), sink.messagesTagged("app"))
     }
 
     @Test
@@ -304,3 +304,5 @@ class LoggerTest {
         assertEquals(listOf("trigger"), chatty.messages)
     }
 }
+
+private fun TestSink.messagesTagged(tag: String): List<String> = received.filter { it.tag == tag }.map { it.message }

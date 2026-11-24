@@ -1,6 +1,7 @@
 package com.fromwau.kern.fs
 
 import kotlinx.io.files.Path
+import java.io.IOException
 import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -194,9 +195,16 @@ internal class CurrentUser(
     }
 }
 
+/** This user's principal, or null when `user.name` is unset or the lookup fails in a way the JDK documents. */
 private fun lookUpCurrentUser(): UserPrincipal? = try {
-    FileSystems.getDefault().userPrincipalLookupService.lookupPrincipalByName(System.getProperty("user.name"))
-} catch (_: Exception) {
+    System.getProperty("user.name")?.let { name ->
+        FileSystems.getDefault().userPrincipalLookupService.lookupPrincipalByName(name)
+    }
+} catch (_: IOException) {
+    null
+} catch (_: UnsupportedOperationException) {
+    null
+} catch (_: SecurityException) {
     null
 }
 

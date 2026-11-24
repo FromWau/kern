@@ -2,9 +2,13 @@
 
 package com.fromwau.kern.logger.sentry
 
+import com.fromwau.kern.logger.ERROR_SUBJECT
 import com.fromwau.kern.logger.InternalKernApi
 import com.fromwau.kern.logger.LogEntry
+import com.fromwau.kern.logger.THROWABLE_SUBJECT
+import com.fromwau.kern.logger.fieldSubject
 import com.fromwau.kern.logger.fieldText
+import com.fromwau.kern.logger.reportRenderingThrew
 import com.fromwau.kern.logger.typedFieldValue
 import com.fromwau.kern.result.ResultError
 import io.sentry.kotlin.multiplatform.SentryAttributes
@@ -35,12 +39,14 @@ internal class SentryEntry(
     val errorType: String? = entry.error?.errorTypeOrClassName()
 
     /** The user field's value as text, as logged: an id is never cut, so the event and the log name the same user. */
-    val userId: String? = userField?.let { entry.fields[it] }?.let(::fieldText)
+    val userId: String? = userField?.let { key -> entry.fields[key]?.let { fieldText(it, fieldSubject(key)) } }
 
     /** The non-null fields, each a string, a boolean or a finite number. */
-    private val values = entry.fields.mapNotNull { (key, value) -> value?.let { key to typedFieldValue(it) } }
+    private val values = entry.fields.mapNotNull { (key, value) ->
+        value?.let { key to typedFieldValue(it, fieldSubject(key)) }
+    }
 
-    private val error = entry.error?.let { "error" to fieldText(it) }
+    private val error = entry.error?.let { "error" to fieldText(it, ERROR_SUBJECT) }
 
     private val exceptionType = entry.throwable?.let { it::class.simpleName }
 
@@ -117,18 +123,23 @@ internal class SentryEntry(
 private const val TAG_KEY = "tag"
 private const val ERROR_TYPE_KEY = "error.type"
 
-/** The error's `errorType`, or its class's simple name when that getter throws, so the entry still goes out. */
+/**
+ * The error's `errorType`, or its class's simple name when that getter throws, which is reported, so the entry still
+ * goes out.
+ */
 internal fun ResultError.errorTypeOrClassName(): String = try {
     errorType
-} catch (_: Throwable) {
+} catch (e: Throwable) {
+    reportRenderingThrew("$ERROR_SUBJECT: its errorType threw", e)
     // ResultError's default, spelled out: the getter that threw is an override, so the default is out of reach.
     this::class.simpleName ?: "ResultError"
 }
 
-/** The throwable's message, or a placeholder when its getter throws, so the entry still goes out. */
+/** The throwable's message, or a placeholder when its getter throws, which is reported, so the entry still goes out. */
 private fun Throwable.messageOrPlaceholder(): String? = try {
     message
 } catch (e: Throwable) {
+    reportRenderingThrew("$THROWABLE_SUBJECT: its message threw", e)
     "<message threw ${e::class.simpleName}>"
 }
 

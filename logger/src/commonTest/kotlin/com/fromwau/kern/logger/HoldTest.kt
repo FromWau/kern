@@ -6,6 +6,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.atomicfu.atomic
@@ -76,6 +77,22 @@ class HoldTest {
 
         assertEquals(listOf("held"), added.messages)
         assertTrue(removed.messages.isEmpty())
+    }
+
+    @Test
+    fun `the report of a held message block's throw goes to the sinks configured when the hold ends`() = runTest {
+        val thrown = IllegalStateException("no message today")
+        val added = TestSink("added")
+        logger.holdUntilConfigured()
+
+        logger.tag("boot").i { throw thrown }
+        val _ = logger.addOrFail(added)
+        val _ = logger.flush()
+        val _ = logger.awaitFlushed()
+
+        val report = added.received.single { it.tag == INTERNAL_TAG }
+        assertContains(report.message, "tagged \"boot\"")
+        assertSame(thrown, report.throwable)
     }
 
     @Test

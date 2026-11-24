@@ -32,7 +32,8 @@ class ReadmeSnippetsTest {
 
     fun findUserById(id: Long): Result<User, CrudError> {
         if (id <= 0) return Err(CrudError.Invalid("id must be positive"))
-        val user = catching({ CrudError.DbError(it) }) { dao.findById(id) }.getOrElse { return Err(it) }
+        val user = catching(SQLException::class, { CrudError.DbError(it) }) { dao.findById(id) }
+            .getOrElse { return Err(it) }
         return user.toResult { CrudError.NotFound(id) }
     }
 
@@ -88,7 +89,7 @@ class ReadmeSnippetsTest {
         val (good, bad) = lines.map(::parse).partition()
         assertEquals(listOf(1, 3), good)
         assertEquals(listOf(Bad("x")), bad)
-        assertEquals(Ok(null), catching({ CrudError.DbError(it) }) { dao.findById(id) })
+        assertEquals(Ok(null), catching(SQLException::class, { CrudError.DbError(it) }) { dao.findById(id) })
     }
 
     @Test
@@ -244,6 +245,8 @@ class ReadmeSnippetsTest {
 
     data class PortError(val given: String) : ResultError
 
+    class SQLException(message: String) : Exception(message)
+
     inner class Dao {
         fun findById(id: Long): User? = when (id) {
             1L -> ada
@@ -253,7 +256,7 @@ class ReadmeSnippetsTest {
     }
 
     private val ada = User(1, "ada")
-    private val dbDown = IllegalStateException("db down")
+    private val dbDown = SQLException("db down")
     private val dao = Dao()
     private val raw = Raw(port = "", host = "")
     private val lines = listOf("1", "x", "3")

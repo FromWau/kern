@@ -3,11 +3,14 @@ package com.fromwau.kern.exec
 import com.fromwau.kern.result.EmptyResult
 import com.fromwau.kern.result.Result
 
-/** Starts a child process. Take one as a parameter and a test can hand in a scripted one. */
+/**
+ * Starts a child process. Take one as a parameter and a test can hand in a scripted one. A throw from an implementation
+ * is not caught: it reaches the caller of [start].
+ */
 public fun interface Starter {
     /**
-     * Starts [command] and returns at once with the running [Child], or the reason nothing started.
-     * It never throws.
+     * Starts [command] and returns at once with the running [Child], or the reason nothing started. Expected failures
+     * are returned; a throw is a bug and propagates.
      */
     public fun start(command: Command): Result<Child, ExecError.StartError>
 }
@@ -20,6 +23,12 @@ public expect object SystemStarter : Starter {
 /**
  * A running child process. Nothing here stops the child except [stop]: not dropping this object, not cancelling the
  * caller, not this process exiting.
+ *
+ * Expected failures are returned, as a [ChildEvent.Failed] or an error; a throw is a bug and propagates. On the JVM a
+ * throw on the thread [SystemStarter] reads the child or writes its input on always goes to that thread's uncaught
+ * exception handler at once. It is also rethrown unchanged from [next], and from [Starter.start] when it kept the
+ * start from answering, so a caller waiting there or calling later sees it too. A throw from an implementation of your
+ * own is not caught either.
  */
 public interface Child {
     /** The operating system's id of the child. */

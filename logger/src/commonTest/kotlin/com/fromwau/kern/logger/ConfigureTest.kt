@@ -7,6 +7,7 @@ import com.fromwau.kern.result.assertError
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -108,16 +109,20 @@ class ConfigureTest {
     }
 
     @Test
-    fun `a sink whose property throws is refused as invalid rather than throwing`() {
+    fun `a sink whose property throws makes configure throw and nothing changes`() {
+        val thrown = IllegalStateException("no capacity")
         val broken = object : LogSink {
             override val name = "broken"
             override val capacity: Int
-                get() = error("no capacity")
+                get() = throw thrown
 
             override fun write(entry: LogEntry, config: SinkConfig): EmptyResult<SinkError> = Ok(Unit)
         }
 
-        logger.configure { LoggerConfig(listOf(ConfiguredSink(broken, allLevels))) }.assertError<ConfigError.Invalid>()
+        val caught = assertFailsWith<IllegalStateException> {
+            logger.configure { LoggerConfig(listOf(ConfiguredSink(broken, allLevels))) }
+        }
+        assertSame(thrown, caught)
         assertTrue(logger.sinks.value.isEmpty())
     }
 

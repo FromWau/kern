@@ -21,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private sealed interface LoadError : ResultError {
@@ -38,16 +39,35 @@ class ResultFlowsTest {
             throw IllegalStateException("offline")
         }
 
-        val collected = upstream.asResult { LoadError.Failed(it.message) }.toList()
+        val collected = upstream.asResult(IllegalStateException::class) { LoadError.Failed(it.message) }.toList()
 
         assertEquals(listOf(Ok(1), Ok(2), Err(LoadError.Failed("offline"))), collected)
     }
 
     @Test
-    fun `a cancellation thrown by the upstream while collecting is an error`() = runTest {
+    fun `asResult ends the flow with an upstream exception of another type`() = runTest {
+        val thrown = IllegalArgumentException("bad frame")
+        val upstream = flow {
+            emit(1)
+            throw thrown
+        }
+        val collected = mutableListOf<Result<Int, LoadError>>()
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            upstream
+                .asResult(IllegalStateException::class) { LoadError.Failed(it.message) }
+                .collect { collected += it }
+        }
+
+        assertSame(thrown, failure)
+        assertEquals(listOf<Result<Int, LoadError>>(Ok(1)), collected)
+    }
+
+    @Test
+    fun `a cancellation thrown by the upstream while collecting is an error when its type is named`() = runTest {
         val upstream = flow<Int> { throw CancellationException("stop") }
 
-        val collected = upstream.asResult { LoadError.Failed(it.message) }.toList()
+        val collected = upstream.asResult(CancellationException::class) { LoadError.Failed(it.message) }.toList()
 
         assertEquals(listOf(Err(LoadError.Failed("stop"))), collected)
     }
@@ -66,7 +86,7 @@ class ResultFlowsTest {
         val collected = mutableListOf<Result<Int, LoadError>>()
         val job = launch(SupervisorJob() + CoroutineExceptionHandler { _, _ -> }) {
             upstream
-                .asResult {
+                .asResult(IllegalStateException::class) {
                     mapped = true
                     LoadError.Failed(it.message)
                 }
@@ -92,7 +112,7 @@ class ResultFlowsTest {
         }
         var cause: Throwable? = null
         val job = launch(SupervisorJob() + CoroutineExceptionHandler { _, _ -> }) {
-            upstream.asResult { LoadError.Failed(it.message) }.collect {}
+            upstream.asResult(IllegalStateException::class) { LoadError.Failed(it.message) }.collect {}
         }
         job.invokeOnCompletion { cause = it }
         yield()

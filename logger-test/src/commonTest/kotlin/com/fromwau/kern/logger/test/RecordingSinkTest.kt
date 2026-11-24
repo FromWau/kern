@@ -155,6 +155,34 @@ class RecordingSinkTest {
     }
 
     @Test
+    fun `an assertion failing in the sink it wraps fails the test at awaitCall`() = runTest {
+        val failed = AssertionError("expected another entry")
+        val recording = RecordingSink(LogSink("asserts") { _, _ -> throw failed })
+        val _ = logger.addOrFail(recording)
+        logger.tag("app").i { "checked" }
+
+        val thrown = assertFailsWith<AssertionError> { recording.awaitCall() }
+
+        assertSame(failed, thrown)
+        assertEquals(Err(SinkError.Dropped(Thrown(failed))), recording.received.single().result)
+    }
+
+    @Test
+    fun `an assertion failing in the sink it wraps fails the test collecting calls`() = runTest {
+        val failed = AssertionError("expected another entry")
+        val recording = RecordingSink(LogSink("asserts") { _, _ -> throw failed })
+        val _ = logger.addOrFail(recording)
+        logger.tag("app").i { "checked" }
+
+        val thrown = assertFailsWith<AssertionError> {
+            withContext(Dispatchers.Default) { withTimeout(5.seconds) { recording.calls.take(1).toList() } }
+        }
+
+        // Crossing withContext, coroutines' stack trace recovery may hand back a copy with the original as its cause.
+        assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === failed }, "$thrown")
+    }
+
+    @Test
     fun `close reaches the sink it wraps`() {
         val closes = AtomicInt(0)
         val delegate = object : LogSink {

@@ -28,7 +28,8 @@ public fun Path.exists(): Boolean = refusedPath() == null && SystemFileSystem.ex
  * @param trusted refuses a file someone besides you may change, or one in a folder they may change, as [readBytes]
  *   refuses it.
  * @param streams reads a FIFO or a character device too, to its end, as [readBytes] reads it.
- * @param accept asked about the file once it is open, before any of it is read, as [readBytes] asks it.
+ * @param accept asked about the file once it is open, before any of it is read, as [readBytes] asks it. A throw from
+ *   this block is not caught, and is thrown from this call with the file closed.
  */
 public fun Path.readText(
     maxBytes: Long? = null,
@@ -69,8 +70,8 @@ public fun Path.readText(
  *   a file swapped in at the path after the open is never the one described. The JVM and Android look the path up
  *   after the open, and a file whose file key is not that of the file the path named when it was opened is
  *   [FileError.Inaccessible]. The JVM on Windows and Windows native, which have no file keys, look the path up after
- *   the open. A file [trusted] refused is never passed to it. What it throws is thrown from this call, with the file
- *   closed.
+ *   the open. A file [trusted] refused is never passed to it. A throw from this block is not caught, and is thrown
+ *   from this call with the file closed.
  */
 public fun Path.readBytes(
     maxBytes: Long? = null,

@@ -14,6 +14,7 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.io.IOException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 
@@ -87,33 +88,56 @@ private val LONGEST_LOCK_PAUSE = 500.milliseconds
  *
  * @param wait how long to wait for a holder before giving up.
  * @param block the work, which runs on the calling thread and may call suspending functions when the caller can.
- *   What it throws is rethrown once the lock is released, also when it is cancelled. Waiting for the lock blocks the
- *   thread; `awaitLock` from kern:fs-coroutines waits by suspending.
+ *   A throw from this block is not caught, and is rethrown once the lock is released, also when it is cancelled.
+ *   Waiting for the lock blocks the thread; `awaitLock` from kern:fs-coroutines waits by suspending.
  * @return what [block] returned; [FileError.LockBusy] when the lock was not free in time, its `waited` the sum of the
  *   pauses; [FileError.NotRegularFile] when a folder, FIFO, device or socket is at this path, [FileError.LockFailed]
- *   when it could not be attempted, or the error creating the parent folders gave.
+ *   when it could not be attempted, or the error creating the parent folders gave. A lock that will not be released
+ *   once [block] returned does not change the answer; it goes to [FileLocks.onReleaseFailed].
  */
+@OptIn(InternalKernApi::class)
 public inline fun <T> Path.withLock(
     wait: Duration = DEFAULT_LOCK_WAIT,
     block: () -> T,
-): Result<T, FileError> = acquireLock(wait).map { held -> held.use { block() } }
+): Result<T, FileError> = acquireLock(wait).map { held -> held.runThenRelease(block) }
+
+/**
+ * Runs [block] holding this lock, then releases it, and answers what [block] returned. A release that fails after
+ * [block] returned, or after a `return` out of it, goes to [FileLocks.onReleaseFailed]. A throw from [block] is
+ * not caught, and is rethrown as it is once the lock is released, also when the release fails. For kern's own
+ * lock-holding functions.
+ */
+@InternalKernApi
+public inline fun <T> FileLock.runThenRelease(block: () -> T): T {
+    var threw = false
+    // A return out of block skips the catch, so only the finally sees every way out.
+    try {
+        return block()
+    } catch (thrown: Throwable) {
+        threw = true
+        throw thrown
+    } finally {
+        if (threw) close() else releaseReportingFailure()
+    }
+}
 
 /**
  * Takes the lock [withLock] holds, waiting up to [wait] for another holder, with a lock file that would not open or be
- * created reported as [unopened] says.
+ * created reported as [unopened] says; [osLock] tries the OS lock, which a test replaces with a fake.
  */
 @OptIn(InternalKernApi::class)
 @PublishedApi
 internal fun Path.acquireLock(
     wait: Duration,
     unopened: (lockFile: Path, failure: Exception) -> FileError = ::lockFailed,
+    osLock: (lockFile: Path) -> OsLock = { tryOsLock(it) },
 ): Result<FileLock, FileError> {
     val gate = when (val prepared = lockGate()) {
         is Result.Success -> prepared.value
         is Result.Error -> return prepared
     }
     return retryWhileLockBusy(wait, pause = { sleepMillis(it.inWholeMilliseconds) }) {
-        attemptLock(gate, unopened) { tryOsLock(this) }
+        attemptLock(gate, unopened) { osLock(this) }
     }
 }
 
@@ -135,7 +159,10 @@ internal fun Path.acquireLock(
 public fun Path.tryLock(): Result<FileLock, FileError> =
     lockGate().flatMap { gate -> attemptLock(gate, unopened = ::lockFailed) { tryOsLock(this) } }
 
-/** A lock [tryLock] took on [path]. Closing it releases the lock; closing it again does nothing. */
+/**
+ * A lock [tryLock] took on [path]. Closing it releases the lock; closing it again does nothing. Closing never throws,
+ * so it is safe in a `finally`: a release the OS refuses goes unreported.
+ */
 @OptIn(ExperimentalAtomicApi::class)
 public class FileLock internal constructor(
     public val path: Path,
@@ -173,8 +200,62 @@ public class FileLock internal constructor(
     }
 
     override fun close() {
-        if (open.compareAndSet(expectedValue = true, newValue = false)) release()
+        val _ = releaseFailure()
     }
+
+    /** Releases the lock as [close] does, telling [FileLocks.onReleaseFailed] of a release the OS refuses. */
+    @PublishedApi
+    internal fun releaseReportingFailure() {
+        val failure = releaseFailure() ?: return
+        FileLocks.onReleaseFailed(path, failure)
+    }
+
+    /** Releases the lock unless that already happened, answering what the release threw. */
+    private fun releaseFailure(): IOException? {
+        if (!open.compareAndSet(expectedValue = true, newValue = false)) return null
+        return try {
+            release()
+            null
+        } catch (e: IOException) {
+            e
+        }
+    }
+}
+
+/** Settings shared by every lock kern:fs takes. */
+@OptIn(ExperimentalAtomicApi::class)
+public object FileLocks {
+    private val releaseFailed = AtomicReference<(lockFile: Path, failure: IOException) -> Unit>(::printReleaseFailed)
+
+    /**
+     * Told of a lock that would not be released once the work that held it returned. [withLock], a [Writer]'s
+     * `withLock` and `awaitLock` answer what the work returned all the same, so this is the only place the failure
+     * shows. It runs on the thread that released the lock, once per failed release.
+     *
+     * By default it prints one warning line naming the lock file to standard error, followed by the failure's stack
+     * trace. Set it once at startup to send the failure where the rest of your app reports, such as kern's logger:
+     *
+     * ```kotlin
+     * FileLocks.onReleaseFailed = { file, e -> Log.tag("kern.fs").w(e) { "the lock on $file was not released" } }
+     * ```
+     *
+     * Setting it is safe from any thread, and a release that fails afterwards on any thread calls the new one. A throw
+     * from it is not caught: it reaches the caller of the lock call in place of the work's answer.
+     */
+    public var onReleaseFailed: (lockFile: Path, failure: IOException) -> Unit
+        get() = releaseFailed.load()
+        set(value) {
+            releaseFailed.store(value)
+        }
+}
+
+/** The default [FileLocks.onReleaseFailed]: one warning line on standard error, then [failure]'s stack trace. */
+private fun printReleaseFailed(
+    lockFile: Path,
+    failure: IOException,
+) {
+    val trace = failure.stackTraceToString().trimEnd()
+    printToStandardError("kern.fs: warning: the lock on $lockFile was not released\n$trace")
 }
 
 /** Deletes this lock's file, then lets go of the lock, for a claim whose file has no use once it is released. */
@@ -280,6 +361,9 @@ public expect fun currentProcessId(): Long
 
 /** Blocks the calling thread, and answers false when it was interrupted before the time was up. */
 internal expect fun sleepMillis(millis: Long): Boolean
+
+/** Writes [text] and a line break to standard error. */
+internal expect fun printToStandardError(text: String)
 
 /**
  * One name for the file this path reaches, however it was spelled, so `dir/.app.lock`, `dir/./.app.lock` and a

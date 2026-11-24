@@ -10,7 +10,6 @@ import com.fromwau.kern.exec.Starter
 import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,8 +46,8 @@ public data class Finished(val stdout: String, val stderr: String, val exitCode:
  * [Command.newSession].
  *
  * Stopping sends SIGTERM to the group, then SIGKILL two seconds later, so a call can take up to two seconds longer
- * than the command. Past [timeout] the group is stopped the same way. Cancelling the call, or a [ChildEvent.Failed],
- * stops it too without the call waiting for it.
+ * than the command. Past [timeout] the group is stopped the same way. Cancelling the call, a [ChildEvent.Failed], or a
+ * throw from the child's [Child.next], stops it too without the call waiting for it; the throw reaches the caller.
  *
  * Everything the command writes is kept in memory: read a command whose output has no end with [events].
  *
@@ -104,9 +103,9 @@ public suspend fun Starter.run(command: Command, timeout: Duration? = null): Res
             }
             coroutineContext.cancelChildren()
         }
-    } catch (cancelled: CancellationException) {
+    } catch (thrown: Throwable) {
         val _ = inBackground.launch { child.stopGroup() }
-        throw cancelled
+        throw thrown
     }
     // Not read past the Failed, so the pid stays held while the group is stopped without the call waiting for it.
     if (failure != null) {

@@ -6,8 +6,12 @@ import kotlin.time.Instant
 /** The tag on every entry the logger writes about itself. */
 internal const val INTERNAL_TAG = "kern.logger"
 
-internal fun internalEntry(level: LogLevel, message: String, fields: Map<String, Any?> = emptyMap()) =
-    LogEntry(Clock.System.now(), INTERNAL_TAG, level, message, fields)
+internal fun internalEntry(
+    level: LogLevel,
+    message: String,
+    fields: Map<String, Any?> = emptyMap(),
+    throwable: Throwable? = null,
+) = LogEntry(Clock.System.now(), INTERNAL_TAG, level, message, fields, throwable)
 
 /** Entries a sink never got, between the first and the last one's timestamp. */
 internal data class Gap(val count: Long, val from: Instant, val to: Instant) {

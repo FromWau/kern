@@ -28,10 +28,14 @@ public const val BROKEN_PIPE_EXIT: Int = 128 + 13
  * [afterWrites] and [awaitWriteResult] read it.
  */
 public interface Terminal {
-    /** Writes [text] to standard output. No newline is added, so include one when you want one. */
+    /**
+     * Writes [text] to standard output. No newline is added, so include one when you want one. On the JVM and
+     * Android an interrupt of the writing thread is no failed write: this throws the `InterruptedIOException` the
+     * stream raised, with the thread still interrupted.
+     */
     public fun out(text: String)
 
-    /** Writes [text] to standard error. */
+    /** Writes [text] to standard error; an interrupt is thrown as by [out]. */
     public fun err(text: String)
 
     /** Usable width in columns, or 0 when unknown, which means "do not wrap". */
@@ -82,7 +86,8 @@ public interface Terminal {
      *
      * It reads whatever standard input is, a pipe, a file, a socket or a device, so give [maxBytes] when it may never
      * end, as `/dev/zero` does. The default answers an empty input, as a process whose standard input is `/dev/null`
-     * reads.
+     * reads. On the JVM and Android an interrupt of the reading thread is no [ReadError]: this throws the
+     * `InterruptedIOException` the stream raised, with the thread still interrupted.
      *
      * @param maxBytes the most bytes read; once more than that arrives, the read stops with [ReadError.TooLarge].
      *   Null reads it all, however much that is.

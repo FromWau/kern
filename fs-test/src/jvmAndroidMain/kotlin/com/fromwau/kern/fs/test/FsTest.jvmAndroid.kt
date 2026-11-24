@@ -66,8 +66,8 @@ public actual fun Path.mkfifo(): EmptyResult<FileError> {
     }
 }
 
-/** Runs [make], which creates [path], answering what it threw as fs answers a failed creation. */
-private inline fun made(
+/** Runs [make], which creates [path], answering an I/O failure it threw as fs answers a failed creation. */
+internal inline fun made(
     path: Path,
     make: () -> Unit,
 ): EmptyResult<FileError> = try {
@@ -75,8 +75,12 @@ private inline fun made(
     Ok(Unit)
 } catch (_: FileAlreadyExistsException) {
     Err(path.alreadyExists())
-} catch (e: Exception) {
+} catch (e: IOException) {
     Err(FileError.WriteFailed(path, IoCause.of(e), e))
+} catch (e: InterruptedException) {
+    // Process.waitFor clears the interrupt as it throws, so it is set again for whoever asked this thread to stop.
+    Thread.currentThread().interrupt()
+    throw e
 }
 
 // PosixFilePermission lists the nine bits from the owner's read down to everyone's execute.

@@ -377,7 +377,7 @@ public sealed interface FailedAt {
  *     .getOrElse { return warn(it) }
  * ```
  *
- * @param value called only on [FileError.NotFound].
+ * @param value called only on [FileError.NotFound]. A throw from this block is not caught.
  */
 public inline fun <S, E : FileError> Result<S, E>.orIfNotFound(value: () -> S): Result<S, E> =
     if (this is Result.Error && error is FileError.NotFound) Ok(value()) else this

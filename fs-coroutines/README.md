@@ -88,6 +88,8 @@ follow the last four, whatever their `watch`.
 - The block may suspend while it holds the lock. It may also resume on another thread.
 - The lock is released when the block returns, throws or is cancelled. What the block throws is rethrown once the lock
   is released.
+- A lock that will not be released once the block returned still answers what the block returned, and goes to
+  `FileLocks.onReleaseFailed` as [Locking](../fs/docs/locking.md#rules) says.
 - A wait that is cancelled holds nothing.
 - A holder that keeps the lock past `wait` is `LockBusy`. [Locking](../fs/docs/locking.md#rules) bounds `wait`, the
   default included.

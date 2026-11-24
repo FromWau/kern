@@ -43,6 +43,9 @@ public sealed interface FakeRun {
 /**
  * A [Starter] that runs no process: [script] says, for each command, what the start does. It records every command
  * and every child it made. It is safe to use from several threads.
+ *
+ * @param script what the start does with each command. A throw from this block is not caught: it reaches the caller
+ *   of [start].
  */
 public class FakeStarter(private val script: (Command) -> FakeRun) : Starter {
     private val lock = reentrantLock()

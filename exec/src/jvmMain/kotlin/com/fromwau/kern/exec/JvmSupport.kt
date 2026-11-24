@@ -16,14 +16,15 @@ internal fun unsupportedSystem(osName: String?, osArch: String?): String? = when
     else -> null
 }
 
-private fun nativeAccessRefusal(): String? = try {
-    loadLibc()
+/** [NATIVE_ACCESS_DENIED] when [load], which loads the libc calls, is refused native access, else null. */
+internal fun nativeAccessRefusal(load: () -> Unit = ::loadLibc): String? = try {
+    load()
     null
 } catch (_: IllegalCallerException) {
     NATIVE_ACCESS_DENIED
-} catch (_: LinkageError) {
-    // The refusal thrown while Libc initialises reaches here wrapped in an ExceptionInInitializerError.
-    NATIVE_ACCESS_DENIED
+} catch (failure: ExceptionInInitializerError) {
+    // The refusal thrown while Libc initialises arrives wrapped.
+    if (failure.cause is IllegalCallerException) NATIVE_ACCESS_DENIED else throw failure
 }
 
 internal const val NATIVE_ACCESS_DENIED: String =

@@ -72,8 +72,8 @@ import kotlinx.io.files.Path
  *   yield, when the walk meets it among its parent's entries; a folder it answers false for is yielded as
  *   [WalkSkip.Refused] and never read, and one it accepts is yielded once the walk enters it. The root is never
  *   passed to it and is always walked. Where links are followed it is not asked about a folder already walked, and a
- *   folder it refuses counts as not walked, so a later path to the same folder is asked again. What it throws ends
- *   the iteration.
+ *   folder it refuses counts as not walked, so a later path to the same folder is asked again. A throw from this
+ *   block is not caught, and ends the iteration.
  * @return the entries; [FileError.NotFound] or [FileError.Inaccessible] when the root cannot be looked up or listed,
  *   [FileError.NotRegularFile] when it is a FIFO, device or socket, [FileError.NotADirectory] when a folder root was
  *   swapped for a file before it could be listed, or what [realPath] answers for a folder in [exclude] that is there

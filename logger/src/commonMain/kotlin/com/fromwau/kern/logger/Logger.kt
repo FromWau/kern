@@ -40,6 +40,11 @@ private const val MAX_HELD = 1024
  * write; it may wait briefly for a lock while it queues the entry or during a hold. Each sink writes on its own
  * worker, so a slow disk or a failing network holds up nothing but that sink.
  *
+ * Logging catches what your code throws, so a logger never ends an app and keeps logging up to a crash: a message
+ * block, a sink's write or close, a field value's `toString()`, a throwable's message. Each throw is logged with its
+ * stack trace, to standard error and to the other sinks: a sink's throw once until it writes again, a value's once per
+ * field and kind of throw for each sink. [configure] is setup, and catches nothing.
+ *
  * ```kotlin
  * Log.configure { it.copy(sinks = it.sinks + ConfiguredSink(StderrSink(format = LogFormat.JSON))) }
  *     .onError { error -> System.err.println("no JSON log: $error") }
@@ -134,13 +139,15 @@ public class Logger {
      * single write runs for five seconds without returning is [SinkState.Abandoned]: what it still had, that write
      * included, counts as lost, and the logger waits for it no more. [draining] lists the removed sinks not yet done.
      *
+     * Unlike logging, configuring catches nothing: a throw from [transform], or from a new sink's [LogSink.name],
+     * [LogSink.onFailure], [LogSink.capacity] or [LogSink.drop], read here on your thread, reaches you with nothing
+     * changed.
+     *
      * @param transform makes the new config from the current one. It runs once, under the logger's lock, so two calls
-     *   from different threads never undo each other's change. If it throws, nothing changes and the exception
-     *   reaches you.
+     *   from different threads never undo each other's change. A throw from this block is not caught.
      * @return [ConfigError.NameTaken] when two sinks in the new list share a name, the same sink listed twice
-     *   included, or [ConfigError.Invalid] when a new sink's capacity is below one, its backoff is negative, or
-     *   reading one of its properties threw. Nothing changes then. A name may be reused by a new sink when the change
-     *   removes the old one.
+     *   included, or [ConfigError.Invalid] when a new sink's capacity is below one or its backoff is negative. Nothing
+     *   changes then. A name may be reused by a new sink when the change removes the old one.
      */
     public fun configure(transform: (LoggerConfig) -> LoggerConfig): Result<Unit, ConfigError> = lock.withLock {
         val next = transform(mutableConfig.value)
@@ -323,8 +330,9 @@ public class Logger {
      *
      * @param fields structured values; see [TaggedLogger] for how each type is written.
      * @param at the time the entry happened, for one forwarded from elsewhere; null for now.
-     * @param message built only when at least one configured sink takes [level], or at once during a hold. If it
-     *   throws anything, an `Error` included, the entry is logged with `<message threw ...>` in its place.
+     * @param message built only when at least one configured sink takes [level], or at once during a hold. A throw
+     *   from this block is caught and logged with its stack trace, to standard error and to the sinks; the logger
+     *   never throws. The entry is logged with `<message threw ...>` in its place and [throwable] as it was given.
      */
     public fun log(
         tag: String,
@@ -337,20 +345,43 @@ public class Logger {
     ) {
         if (level == LogLevel.OFF) return
 
-        fun entry() = LogEntry(at ?: Clock.System.now(), tag, level, build(message), fields, throwable, error)
+        fun entry(): LogEntry {
+            val time = at ?: Clock.System.now()
+            val text = try {
+                message()
+            } catch (e: Throwable) {
+                reportThrow("the message of an entry tagged \"$tag\" threw", e, from = currentWriter)
+                "<message threw ${e::class.simpleName}>"
+            }
+            return LogEntry(time, tag, level, text, fields, throwable, error)
+        }
 
         // Built before taking the lock a hold needs, so a slow or locking message holds up no other log call.
-        val built = if (holding.load()) entry().also { if (hold(it)) return } else null
+        val built = if (holding.load()) entry().also { if (hold(it, currentWriter)) return } else null
         if (level.severity < delivery.load().lowest) return
         dispatch(built ?: entry(), currentWriter)
     }
 
-    /** Reports [message] for the sink [name] unless a failure of that name was reported since it last wrote. */
-    internal fun reportFirstFailure(name: String, message: String) {
+    /**
+     * Reports [message] for the failing [sink] unless a failure of its name was reported since it last wrote; with
+     * [thrown], what it threw, as [reportThrow] does.
+     */
+    internal fun reportFirstFailure(sink: InstalledSink, message: String, thrown: Throwable?) {
         val first = failureLock.withLock {
-            reportedNames.add(name).also { failingNames.store(reportedNames.size) }
+            reportedNames.add(sink.name).also { failingNames.store(reportedNames.size) }
         }
-        if (first) reportFailure(message)
+        if (!first) return
+        if (thrown == null) reportFailure(message) else reportThrow(message, thrown, from = sink)
+    }
+
+    /**
+     * Reports [message] with [thrown]'s stack trace to standard error, and as an error entry carrying [thrown] to
+     * every sink but [from], the one that threw; during a hold the entry is held like any other.
+     */
+    internal fun reportThrow(message: String, thrown: Throwable, from: InstalledSink?) {
+        reportFailure("$message\n${thrown.stackTraceOrPlaceholder()}")
+        val report = internalEntry(LogLevel.ERROR, message, throwable = thrown)
+        if (!holding.load() || !hold(report, from)) dispatch(report, from)
     }
 
     /** Lets the next failure of the sink [name] be reported again. */
@@ -371,11 +402,11 @@ public class Logger {
         lock.withLock { pruneStalled() }
     }
 
-    // A failure while reporting a failure is swallowed: there is nowhere left to report it.
     internal fun reportFailure(message: String) {
         try {
             report("$INTERNAL_TAG: $message")
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
+            // Standard error failing loses this one report, and the logger goes on: there is nowhere left to report it.
         }
     }
 
@@ -398,10 +429,10 @@ public class Logger {
         }
     }
 
-    /** Holds [entry], unless the hold ended meanwhile. */
-    private fun hold(entry: LogEntry): Boolean = lock.withLock {
+    /** Holds [entry] for every sink but [writer], unless the hold ended meanwhile. */
+    private fun hold(entry: LogEntry, writer: InstalledSink?): Boolean = lock.withLock {
         if (!holding.load()) return false
-        held.addLast(Held(entry, currentWriter))
+        held.addLast(Held(entry, writer))
         if (held.size > MAX_HELD) {
             held.removeFirst()
             droppedFromThisHold++
@@ -563,16 +594,8 @@ public class Logger {
     }
 
     private fun settingsOf(sink: LogSink, config: SinkConfig): Result<Settings, ConfigError> {
-        val name = try {
-            sink.name
-        } catch (e: Throwable) {
-            return Err(ConfigError.Invalid("<unnamed>", "reading its name threw $e"))
-        }
-        val settings = try {
-            Settings(sink, name, config, sink.onFailure, sink.capacity, sink.drop)
-        } catch (e: Throwable) {
-            return Err(ConfigError.Invalid(name, "reading its settings threw $e"))
-        }
+        val name = sink.name
+        val settings = Settings(sink, name, config, sink.onFailure, sink.capacity, sink.drop)
         if (settings.capacity < 1) {
             return Err(ConfigError.Invalid(name, "capacity must be at least 1, was ${settings.capacity}"))
         }
@@ -640,9 +663,3 @@ private val SinkFailure.backoff: Duration
         is SinkFailure.Drop -> backoff
         is SinkFailure.Retry -> backoff
     }
-
-private fun build(message: () -> String): String = try {
-    message()
-} catch (e: Throwable) {
-    "<message threw ${e::class.simpleName}>"
-}

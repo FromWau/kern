@@ -18,7 +18,7 @@ find(id).map { it.name }.getOrElse { "unknown" }                                
 result { save(find(id).bind().copy(name = name)).bind() }                       // chain: the first error ends it
 resultAll { val a by checkA(raw).collect(); val b by checkB(raw).collect(); Pair(a, b) }   // every error at once
 val (good, bad) = lines.map(::parse).partition()                                // keep what succeeded
-catching({ CrudError.DbError(it) }) { dao.findById(id) }                        // an exception becomes an error
+catching(SQLException::class, { CrudError.DbError(it) }) { dao.findById(id) }   // an SQLException becomes an error
 ```
 
 ## Add to your build
@@ -89,12 +89,15 @@ data object Declined : PaymentError {
 ```kotlin
 fun findUserById(id: Long): Result<User, CrudError> {
     if (id <= 0) return Err(CrudError.Invalid("id must be positive"))
-    val user = catching({ CrudError.DbError(it) }) { dao.findById(id) }.getOrElse { return Err(it) }
+    val user = catching(SQLException::class, { CrudError.DbError(it) }) { dao.findById(id) }
+        .getOrElse { return Err(it) }
     return user.toResult { CrudError.NotFound(id) }
 }
 ```
 
-- `catching(toError) { }` turns an exception into your error. It rethrows cancellation.
+- `catching(type, toError) { }` turns an exception of the type you name into your error. It is for third-party
+  code that reports a failure by throwing. Name the narrowest type that code documents: a throw of any other type
+  is not caught. It rethrows cancellation, even when the type you name is a supertype of it.
 - The block of `catching` cannot suspend. In suspending code use `suspendCatching` from `result-coroutines`.
 - `toResult { error }` turns a nullable value into a result.
 - `EmptyResult<E>` is `Result<Unit, E>`, for work with nothing to hand back. Its success is `Ok(Unit)`.
@@ -324,7 +327,7 @@ Prefer `assertError { }` when the check alone is enough.
 - **A forgotten `.collect()`.** `if (bad) Err(e)` in a `resultAll` block is a value nobody reads. Only the
   must-use checker reports it.
 - **Timeouts.** A `withTimeout` that runs out inside `result { }` ends the block with its exception. Wrap it in
-  `suspendCatching` to make it an error.
+  `suspendCatching` that names `TimeoutCancellationException` to make it an error.
 
 ## Coming from Arrow
 
@@ -333,7 +336,7 @@ Prefer `assertError { }` when the check alone is enough.
 | `Either<E, A>`, `Left`, `Right`      | `Result<A, E>`, `Err`, `Ok`: the value type comes first |
 | `either { }`, `bind()`               | `result { }`, `bind()`                                 |
 | `raise(e)`, `ensure(cond) { e }`     | `Err(e).bind()`, `if (!cond) Err(e).bind()`            |
-| `Either.catch { }`                   | `catching { }`, `suspendCatching { }`                  |
+| `Either.catch { }`                   | `catching(type) { }`, `suspendCatching(type) { }`      |
 | `zipOrAccumulate`, `mapOrAccumulate` | `zipAll`, `mapResultAll`, `resultAll { }`              |
 | `recover`, `mapLeft`                 | `orElse`, `mapError`                                   |
 | `parMap`                             | `parMapResult` in `result-coroutines`                  |

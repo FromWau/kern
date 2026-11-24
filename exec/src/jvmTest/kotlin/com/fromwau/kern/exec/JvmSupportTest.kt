@@ -2,6 +2,8 @@ package com.fromwau.kern.exec
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import kotlin.test.assertSame
 
 class JvmSupportTest {
     @Test
@@ -23,4 +25,27 @@ class JvmSupportTest {
             unsupportedSystem("Linux", "riscv64"),
         ),
     )
+
+    @Test
+    fun `a refusal of native access, thrown or wrapped while loading, says how to allow it`() = assertEquals(
+        listOf(NATIVE_ACCESS_DENIED, NATIVE_ACCESS_DENIED),
+        listOf(
+            nativeAccessRefusal { throw IllegalCallerException() },
+            nativeAccessRefusal { throw ExceptionInInitializerError(IllegalCallerException()) },
+        ),
+    )
+
+    @Test
+    fun `another failure wrapped while loading is rethrown unchanged`() {
+        val failure = ExceptionInInitializerError(IllegalStateException())
+
+        assertSame(failure, assertFails { nativeAccessRefusal { throw failure } })
+    }
+
+    @Test
+    fun `a library that fails to link is rethrown unchanged`() {
+        val failure = UnsatisfiedLinkError("no libc")
+
+        assertSame(failure, assertFails { nativeAccessRefusal { throw failure } })
+    }
 }

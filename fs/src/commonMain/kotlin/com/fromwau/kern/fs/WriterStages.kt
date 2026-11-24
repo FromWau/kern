@@ -36,8 +36,8 @@ import kotlinx.io.files.Path
  * A build whose folder is replaced answers [FileError.FolderReplaced] and leaves its stage in that folder, wherever it
  * went; a [leftoversIn] scan of it finds a [Leftover.StagedFolder], which [discard] removes.
  *
- * @param build fills the stage. When it answers an `Err`, the stage is removed and nothing is put in place. What it
- *   throws is rethrown once the stage is removed.
+ * @param build fills the stage. When it answers an `Err`, the stage is removed and nothing is put in place. A throw
+ *   from this block is not caught, and is rethrown once the stage is removed.
  * @return `Ok` of what [build] returned, once the folder is in place, or of the `Err` it answered, with nothing
  *   placed; otherwise [FileError.FolderReplaced] when this writer's folder was replaced before or while [build] runs;
  *   [FileError.AlreadyExists] for anything already at [name], a link included, without calling [build], or for

@@ -72,8 +72,10 @@ was installed. The exit is the platform's normal one: shutdown hooks run on the 
 - A systemd service counts exit 143 as a failure, so either pass `exitCode = 0` or set `SuccessExitStatus=143` in its
   unit (add 129 and 130 as needed).
 
-**A handler that throws** does not stop the exit. Its stack trace goes to standard error, as an uncaught exception's
-would. The process exits with the request's code, since `exitCode` is used only when the handler returns.
+**A handler that throws** does not stop the exit. kern does not catch the throw: it is reported as an uncaught
+exception, to the thread's uncaught exception handler on the JVM, to your `setUnhandledExceptionHook` natively, or
+printed to standard error without one. The process exits with the request's code, since `exitCode` is used only when
+the handler returns.
 
 ## Stopping a worker loop
 

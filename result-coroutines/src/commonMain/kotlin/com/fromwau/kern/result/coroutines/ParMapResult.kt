@@ -7,6 +7,8 @@ import com.fromwau.kern.result.ResultError
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -48,6 +50,8 @@ public suspend fun <T, S, E : ResultError> Iterable<T>.parMapResult(
     // The scope attaches a sibling's failure during cancellation to the first error, where it would be lost.
     val lost = first.suppressedExceptions.filter { it !is FirstError }
     if (lost.isNotEmpty()) throw lost.first().apply { lost.drop(1).forEach(::addSuppressed) }
+    // A caller cancelled while the steps ended still sees its cancellation, which the first error took the place of.
+    currentCoroutineContext().ensureActive()
     @Suppress("UNCHECKED_CAST")
     Err(first.error as E)
 }

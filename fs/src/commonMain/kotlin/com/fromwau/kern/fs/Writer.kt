@@ -632,14 +632,17 @@ public class Writer internal constructor(
      * state.withLock(".sync.lock") { syncNow() }.onError { println("not synced: $it") }
      * ```
      *
+     * @param block the work, which runs on the calling thread. A throw from this block is not caught, and is rethrown
+     *   once the lock is released, also when it is cancelled.
      * @return what [block] returned; [FileError.LockBusy] when the lock was not free in time; or what [tryLock]
      *   answers.
      */
+    @OptIn(InternalKernApi::class)
     public inline fun <T> withLock(
         name: String,
         wait: Duration = DEFAULT_LOCK_WAIT,
         block: () -> T,
-    ): Result<T, FileError> = acquireLock(name, wait).map { held -> held.use { block() } }
+    ): Result<T, FileError> = acquireLock(name, wait).map { held -> held.runThenRelease(block) }
 
     /** Takes the lock [withLock] holds on [name], waiting up to [wait] for another holder. */
     @OptIn(InternalKernApi::class)

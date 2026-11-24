@@ -19,6 +19,9 @@ fun Path.tryLock(): Result<FileLock, FileError>
 fun AppDirs.singleInstance(name: String): Result<InstanceLock, FileError>
 fun AppDirs.singleInstance(key: Path): Result<InstanceLock, FileError>
 fun currentProcessId(): Long
+object FileLocks {
+    var onReleaseFailed: (lockFile: Path, failure: IOException) -> Unit
+}
 ```
 
 ## Rules
@@ -29,6 +32,9 @@ fun currentProcessId(): Long
 - Waiting is bounded. A holder that keeps the lock past `wait`, half a second by default, makes the call `LockBusy`.
 - A `wait` of zero or less tries once.
 - What the work throws is rethrown once the lock is released. That holds when it is cancelled too.
+- A lock that will not be released once the work returned still answers what the work returned. The failure goes to
+  `FileLocks.onReleaseFailed`, which by default prints a warning naming the lock file to standard error, followed by
+  the stack trace. [Report it through your logger](#report-a-lock-that-was-not-released-through-your-logger) instead.
 - **Lock a sibling `.lock` file**, never the file you work on. Closing any descriptor to a file drops the process's
   locks on it.
 - The lock file and its missing folders are created and stay. Deleting one lets a new holder in beside the one still
@@ -71,6 +77,14 @@ val text: Result<String, AppError> = result {
 
 `bind(AppError::File)` wraps a `FileError` in your app's case. Inside the lock it wraps the work's error. Outside it
 wraps the lock's.
+
+### Report a lock that was not released through your logger
+
+```kotlin
+FileLocks.onReleaseFailed = { file, e -> Log.tag("kern.fs").w(e) { "the lock on $file was not released" } }
+```
+
+Set it once at startup. `Log` is kern's [`logger`](../../logger/README.md). Setting it is safe from any thread.
 
 ### Hold a lock for a whole run, and notice losing it
 

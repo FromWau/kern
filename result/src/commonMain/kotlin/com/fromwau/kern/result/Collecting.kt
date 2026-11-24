@@ -74,12 +74,18 @@ public class CollectScope<E : ResultError> @PublishedApi internal constructor() 
         }
     }
 
-    /** [collect] for a result of another error type, made into this block's by [convert] first. */
+    /**
+     * [collect] for a result of another error type, made into this block's by [convert] first. A throw from [convert]
+     * is not caught.
+     */
     @IgnorableReturnValue
     public inline fun <S, F : ResultError> Result<S, F>.collect(convert: (F) -> E): Collected<S> =
         mapError(convert).collect()
 
-    /** [bind] for a result of another error type, made into this block's by [convert] first. */
+    /**
+     * [bind] for a result of another error type, made into this block's by [convert] first. A throw from [convert]
+     * is not caught.
+     */
     @IgnorableReturnValue
     public inline fun <S, F : ResultError> Result<S, F>.bind(convert: (F) -> E): S = mapError(convert).bind()
 
@@ -131,7 +137,7 @@ public class CollectScope<E : ResultError> @PublishedApi internal constructor() 
  * `collect()` records a step's error and hands back its value for later; reading a failed one ends the block.
  * Collect every step before reading any, or the steps after an early read never run and their errors are
  * missing. `bind()` reads at once, ending the block at that step. A failed step fails the block even when
- * nothing reads it.
+ * nothing reads it. Any other throw from [block] is not caught.
  */
 public inline fun <S, E : ResultError> resultAll(block: CollectScope<E>.() -> S): Result<S, AllErrors<E>> {
     val scope = CollectScope<E>()

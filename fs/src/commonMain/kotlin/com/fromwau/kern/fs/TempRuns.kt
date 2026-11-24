@@ -48,6 +48,8 @@ import kotlinx.io.files.Path
  * [Writer.deleteRecursively] removes it, then removed, and the lock file is deleted while the claim is still held.
  * A process that is killed clears nothing, and [staleTempRuns] finds its folder later.
  *
+ * @param block the work, handed a [privateWriter] on the folder. A throw from this block is not caught, and is
+ *   rethrown once the folder is cleared; a failure to clear it is then lost.
  * @return what [block] returned, or why the folder could not be created, claimed or cleared. A folder holding the runs'
  *   folders that another user owns or its group or everyone else may write is [FileError.Refused] naming it, and a
  *   symlink there is [FileError.NotADirectory] naming it, with nothing made in it either way. A run temp already
@@ -57,8 +59,7 @@ import kotlinx.io.files.Path
  *   created is [FileError.WriteFailed] naming the folder that holds the runs' folders, with the claim file as its
  *   [FailedAt.Claim], and one that is there but will not open is [FileError.LockFailed] naming that claim file; a
  *   folder this user cannot make `700` is [FileError.WriteFailed] naming it, and one that another user owns or others
- *   may write or read once it is made so is [FileError.Refused], as [privateWriter] answers. What [block] throws is not
- *   caught, and when [block] throws, a failure to clear the folder afterwards is lost.
+ *   may write or read once it is made so is [FileError.Refused], as [privateWriter] answers.
  */
 public inline fun <T> AppDirs.withRunTemp(block: (temp: Writer) -> T): Result<T, FileError> {
     val claim = when (val claimed = claimRunTemp()) {

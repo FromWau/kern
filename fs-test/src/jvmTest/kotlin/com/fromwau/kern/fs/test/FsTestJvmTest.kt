@@ -10,6 +10,9 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 class FsTestJvmTest {
@@ -28,5 +31,15 @@ class FsTestJvmTest {
         file.chmod(0).assertSuccess()
 
         file.setModifiedAt(Instant.fromEpochSeconds(981_173_106)).assertError<FileError.WriteFailed>()
+    }
+
+    @Test
+    fun `an interrupt while making a file is rethrown with the thread still interrupted`() {
+        val interrupt = InterruptedException("stop")
+
+        val thrown = assertFailsWith<InterruptedException> { made(dir / "fifo") { throw interrupt } }
+
+        assertSame(interrupt, thrown)
+        assertTrue(Thread.interrupted(), "the interrupt was cleared for whoever asked this thread to stop")
     }
 }

@@ -117,7 +117,7 @@ sink sends it, normally milliseconds after it was logged.
 - `error.type` is the error's `errorType`, as [Grouping into issues](#grouping-into-issues) explains.
 - `exception.type` is the throwable's class name. It is left out when the class has none.
 - `exception.message` is left out when the throwable has no message. It is `<message threw X>` when reading it
-  throws.
+  throws, and that throw is reported with its stack trace on standard error and to the logger's other sinks.
 - No stack trace goes into a log.
 
 #### Details: field values
@@ -126,7 +126,8 @@ Field values and the entry's `ResultError` read as [kern:logger renders them](..
 
 - An array or a collection reads as its contents, `[1, 2]`, also inside a list or a map.
 - A container that holds itself reads as `(this Collection)` or `(this Map)`.
-- A `toString()` or an iteration that throws reads as `<toString() threw X>`, so the entry still goes out.
+- A `toString()` or an iteration that throws reads as `<toString() threw X>`, so the entry still goes out. The throw is
+  reported as kern:logger reports it.
 
 A log and a breadcrumb keep a field's type for a `String`, `Int`, `Long`, `Short`, `Byte`, `Float`, `Double` or
 `Boolean`.
@@ -181,7 +182,8 @@ Log.tag("Sync").e("fileId" to id) { "sync failed" }          // one issue; the i
 - Under one tag, two hierarchies with a case of the same name share an issue, so
   [namespace them](../result/README.md#declaring-your-errors).
 - If `errorType` throws, `error.type` and the fingerprint fall back to the class's simple name. That loses a
-  namespace your override adds.
+  namespace your override adds. The throw is reported with its stack trace on standard error and to the logger's
+  other sinks.
 
 On Android, R8 renames classes, so without a rule the default `errorType` becomes a name like `a`. These rules keep
 two things:

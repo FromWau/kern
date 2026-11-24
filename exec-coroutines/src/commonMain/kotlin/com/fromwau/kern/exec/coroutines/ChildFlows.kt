@@ -28,12 +28,12 @@ import kotlinx.coroutines.flow.flow
  * goes unused.
  */
 public fun Child.events(dispatcher: CoroutineDispatcher = waiting): Flow<ChildEvent> = flow {
-    var ranOut = false
+    val detach = DetachOnce(this@events)
     try {
-        while (true) emit(nextEvent(dispatcher) ?: break)
-        ranOut = true
-    } finally {
-        if (!ranOut) detach()
+        while (true) emit(nextEvent(dispatcher, detach) ?: break)
+    } catch (thrown: Throwable) {
+        detach.keeping(thrown)
+        throw thrown
     }
 }
 
@@ -45,8 +45,11 @@ public fun Child.events(dispatcher: CoroutineDispatcher = waiting): Flow<ChildEv
  * It returns at [ChildEvent.Exited] and leaves the child attached, so what a background job the child left running
  * writes later is kept for [Child.next]. Call [Child.detach] afterwards when you will not read it.
  *
- * Cancelling the call detaches the child with [Child.detach]. It never stops it, and [Child.stop] still reaches it, so
- * a wait that timed out can end in a kill:
+ * Cancelling the call detaches the child with [Child.detach], and so does a throw from reading it, which reaches the
+ * caller, a throw from [Child.detach] added to it as suppressed. A throw from [Child.detach] while the call is
+ * cancelled is also reported as uncaught: on the JVM to the current thread's uncaught exception handler, on Linux to
+ * the unhandled exception hook, or printed without one. It never stops the child, and [Child.stop] still
+ * reaches it, so a wait that timed out can end in a kill:
  *
  * ```kotlin
  * withTimeoutOrNull(5.seconds) { child.awaitExit() } ?: child.stop(Signal.Kill)
@@ -55,17 +58,18 @@ public fun Child.events(dispatcher: CoroutineDispatcher = waiting): Flow<ChildEv
  * @param dispatcher where each blocking [Child.next] runs, as for [events].
  */
 public suspend fun Child.awaitExit(dispatcher: CoroutineDispatcher = waiting): Result<Int, ExecError> {
+    val detach = DetachOnce(this)
     try {
         while (true) {
-            when (val event = nextEvent(dispatcher) ?: return Err(ExecError.Detached)) {
+            when (val event = nextEvent(dispatcher, detach) ?: return Err(ExecError.Detached)) {
                 is ChildEvent.Exited -> return Ok(event.code)
                 is ChildEvent.Failed -> return Err(event.error)
                 is ChildEvent.Output, ChildEvent.OutputClosed -> {}
             }
         }
-    } catch (cancelled: CancellationException) {
-        detach()
-        throw cancelled
+    } catch (thrown: Throwable) {
+        detach.keeping(thrown)
+        throw thrown
     }
 }
 
@@ -78,19 +82,52 @@ internal val waiting: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(In
  * test dispatcher drives it in virtual time.
  */
 public interface SuspendingChild : Child {
-    /** What [Child.next] returns, suspending instead of blocking while nothing has come. */
+    /**
+     * What [Child.next] returns, suspending instead of blocking while nothing has come. A throw from it is not caught:
+     * [events] and [awaitExit] detach the child and rethrow it.
+     */
     public suspend fun awaitNext(): ChildEvent?
 }
 
-private suspend fun Child.nextEvent(dispatcher: CoroutineDispatcher): ChildEvent? =
-    if (this is SuspendingChild) awaitNext() else blockingNext(dispatcher)
+private suspend fun Child.nextEvent(
+    dispatcher: CoroutineDispatcher,
+    detach: DetachOnce,
+): ChildEvent? = if (this is SuspendingChild) awaitNext() else blockingNext(dispatcher, detach)
 
-private suspend fun Child.blockingNext(dispatcher: CoroutineDispatcher): ChildEvent? = coroutineScope {
+private suspend fun Child.blockingNext(
+    dispatcher: CoroutineDispatcher,
+    detach: DetachOnce,
+): ChildEvent? = coroutineScope {
     val read = async(dispatcher) { next() }
     try {
         read.await()
     } catch (cancelled: CancellationException) {
-        detach()
+        // The scope waits for the read, and only a detach ends a read that is blocked.
+        detach.keeping(cancelled)
         throw cancelled
     }
 }
+
+/**
+ * Detaches [child] on the first [keeping] and does nothing after, so a read that detached on cancellation is not
+ * detached again on its way out, and a throwing [Child.detach] is reported once.
+ */
+private class DetachOnce(private val child: Child) {
+    private var done = false
+
+    /** Detaches [child], a throw from that added to [primary] as suppressed, so [primary] still reaches the caller. */
+    fun keeping(primary: Throwable) {
+        if (done) return
+        done = true
+        try {
+            child.detach()
+        } catch (again: Throwable) {
+            primary.addSuppressed(again)
+            // Coroutines never report a cancellation, nor what is suppressed on it.
+            if (primary is CancellationException) reportUncaught(again)
+        }
+    }
+}
+
+/** Reports [e] as an exception no code caught, without ending the process. */
+internal expect fun reportUncaught(e: Throwable)

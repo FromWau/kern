@@ -84,13 +84,15 @@ private fun LogEntry.jsonLine(): String = json.encodeToString(
         tag = tag,
         level = level.name,
         message = message,
-        fields = JsonObject(fields.mapValues { (_, value) -> value.toJsonField() }),
+        fields = JsonObject(fields.mapValues { (key, value) -> value.toJsonField(key) }),
         stackTrace = throwable?.safeStackTrace(),
-        error = error?.let(::fieldText),
+        error = error?.let { fieldText(it, ERROR_SUBJECT) },
     ),
 )
 
-private fun Any?.toJsonField(): JsonElement = when (val typed = this?.let(::typedFieldValue)) {
+private fun Any?.toJsonField(key: String): JsonElement = when (
+    val typed = this?.let { typedFieldValue(it, fieldSubject(key)) }
+) {
     null -> JsonNull
     is String -> JsonPrimitive(typed)
     is Boolean -> JsonPrimitive(typed)
@@ -98,19 +100,45 @@ private fun Any?.toJsonField(): JsonElement = when (val typed = this?.let(::type
 }
 
 /** The error as ` error=<text>`, ready to follow the fields, or nothing without one. */
-private fun ResultError?.asErrorText(): String = if (this == null) "" else " error=${fieldText(this)}"
+private fun ResultError?.asErrorText(): String = if (this == null) "" else " error=${fieldText(this, ERROR_SUBJECT)}"
 
 /** The fields as ` key=value` pairs, ready to follow the message. */
 private fun Map<String, Any?>.asText(): String = entries.joinToString(separator = "") { (key, value) ->
-    " $key=${fieldText(value)}"
+    " $key=${fieldText(value, fieldSubject(key))}"
 }
 
-/** The stack trace, or a placeholder when building it throws, as a `toString()` or `message` that throws makes it. */
+/** How a report of a throw while rendering names the field [key]. */
+@InternalKernApi
+public fun fieldSubject(key: String): String = "field \"$key\""
+
+/** How a report of a throw while rendering names the entry's [LogEntry.error]. */
+@InternalKernApi
+public const val ERROR_SUBJECT: String = "the entry's error"
+
+/** How a report of a throw while rendering names the entry's [LogEntry.throwable]. */
+@InternalKernApi
+public const val THROWABLE_SUBJECT: String = "the entry's throwable"
+
+/**
+ * The stack trace, or a placeholder when building it throws, as a `toString()` or `message` that throws makes it; that
+ * throw is reported through [reportRenderingThrew].
+ */
 internal fun Throwable.safeStackTrace(): String = try {
     stackTraceToString()
 } catch (e: Throwable) {
-    "${this::class.simpleName}: <stack trace threw ${e::class.simpleName}>"
+    reportRenderingThrew("$THROWABLE_SUBJECT: its stack trace threw", e)
+    stackTracePlaceholder(e)
 }
+
+/** The stack trace, or a placeholder when building it throws, reporting nothing. */
+internal fun Throwable.stackTraceOrPlaceholder(): String = try {
+    stackTraceToString()
+} catch (e: Throwable) {
+    stackTracePlaceholder(e)
+}
+
+private fun Throwable.stackTracePlaceholder(thrown: Throwable) =
+    "${this::class.simpleName}: <stack trace threw ${thrown::class.simpleName}>"
 
 // ISO 8601 with a fixed number of fraction digits, so stamps of one offset sort as text in time order.
 private fun timestampFormat(fractionDigits: Int) = DateTimeComponents.Format {

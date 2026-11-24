@@ -11,26 +11,32 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
+import kotlin.reflect.KClass
+import kotlin.reflect.safeCast
 
 /**
- * Each value of this flow as a success; an exception the flow throws becomes one last error, and the flow
- * completes.
+ * Each value of this flow as a success; an exception of the type [caught] names that the flow throws becomes one last
+ * error, and the flow completes. It adapts a third-party flow that reports a failure by throwing:
  *
  * ```kotlin
- * repository.observe(city).asResult { NetworkError.Unknown(it) }   // Flow<Result<Weather, NetworkError>>
+ * val weather: Flow<Result<Weather, NetworkError>> =
+ *     repository.observe(city).asResult(IOException::class) { NetworkError.Unknown(it) }
  * ```
  *
- * Cancellation is handled as in [suspendCatching]. Exceptions thrown downstream of this flow are never caught.
- * To reconnect a flow that drops, put `retry` or `retryWhen` before this, where the failure is still an
- * exception.
+ * A throw of any other type is not caught: it ends the flow with that exception. Cancellation is handled as in
+ * [suspendCatching]. Exceptions thrown downstream of this flow are never caught. To reconnect a flow that drops, put
+ * `retry` or `retryWhen` before this, where the failure is still an exception.
  *
- * @param toError makes your error from the [Exception] the flow threw. An [Error] is never caught.
+ * @param caught the type of exception made an error, along with its subtypes.
+ * @param toError makes your error from the exception the flow threw. A throw from this block is not caught.
  */
-public fun <S, E : ResultError> Flow<S>.asResult(toError: (Exception) -> E): Flow<Result<S, E>> =
-    map<S, Result<S, E>> { Ok(it) }.catch { thrown ->
-        if (thrown !is Exception || !currentCoroutineContext().isActive) throw thrown
-        emit(Err(toError(thrown)))
-    }
+public fun <X : Exception, S, E : ResultError> Flow<S>.asResult(
+    caught: KClass<X>,
+    toError: (X) -> E,
+): Flow<Result<S, E>> = map<S, Result<S, E>> { Ok(it) }.catch { thrown ->
+    if (!currentCoroutineContext().isActive) throw thrown
+    emit(Err(toError(caught.safeCast(thrown) ?: throw thrown)))
+}
 
 /**
  * Each success of this flow transformed by [transform], which may suspend; errors pass through unchanged. An

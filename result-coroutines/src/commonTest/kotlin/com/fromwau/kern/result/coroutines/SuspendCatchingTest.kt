@@ -15,8 +15,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private sealed interface FetchError : ResultError {
@@ -26,7 +28,7 @@ private sealed interface FetchError : ResultError {
 class SuspendCatchingTest {
     @Test
     fun `suspendCatching gives the value of a block that suspends`() = runTest {
-        val fetched = suspendCatching({ FetchError.Failed(it.message) }) {
+        val fetched = suspendCatching(Exception::class, { FetchError.Failed(it.message) }) {
             delay(10)
             "ada"
         }
@@ -35,16 +37,33 @@ class SuspendCatchingTest {
     }
 
     @Test
-    fun `suspendCatching turns an exception into the error you make of it`() = runTest {
-        val fetched = suspendCatching({ FetchError.Failed(it.message) }) { error("timeout") }
+    fun `suspendCatching turns an exception of the named type into the error you make of it`() = runTest {
+        val fetched = suspendCatching(IllegalStateException::class, { FetchError.Failed(it.message) }) {
+            error("timeout")
+        }
 
         assertEquals(Err(FetchError.Failed("timeout")), fetched)
     }
 
     @Test
+    fun `suspendCatching throws on an exception of another type`() = runTest {
+        val thrown = IllegalArgumentException("bad city")
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            val _ = suspendCatching(IllegalStateException::class, { FetchError.Failed(it.message) }) { throw thrown }
+        }
+
+        assertSame(thrown, failure)
+    }
+
+    @Test
     fun `a cancelled coroutine stays cancelled rather than ending in an error`() = runTest {
         var outcome: Result<String, FetchError>? = null
-        val job = launch { outcome = suspendCatching({ FetchError.Failed(it.message) }) { awaitCancellation() } }
+        val job = launch {
+            outcome = suspendCatching(IllegalStateException::class, { FetchError.Failed(it.message) }) {
+                awaitCancellation()
+            }
+        }
         yield()
 
         job.cancelAndJoin()
@@ -54,8 +73,10 @@ class SuspendCatchingTest {
     }
 
     @Test
-    fun `a cancellation thrown while the coroutine is still active is an error like any other`() = runTest {
-        val fetched = suspendCatching({ FetchError.Failed(it.message) }) { throw CancellationException("inner") }
+    fun `a cancellation thrown while the coroutine is still active is an error when its type is named`() = runTest {
+        val fetched = suspendCatching(CancellationException::class, { FetchError.Failed(it.message) }) {
+            throw CancellationException("inner")
+        }
 
         assertEquals(Err(FetchError.Failed("inner")), fetched)
     }
@@ -64,7 +85,7 @@ class SuspendCatchingTest {
     fun `an exception the block throws while the coroutine is cancelled ends it with that exception`() = runTest {
         var cause: Throwable? = null
         val job = launch(SupervisorJob() + CoroutineExceptionHandler { _, _ -> }) {
-            val _ = suspendCatching({ FetchError.Failed(it.message) }) {
+            val _ = suspendCatching(Exception::class, { FetchError.Failed(it.message) }) {
                 try {
                     awaitCancellation()
                 } finally {

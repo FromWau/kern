@@ -10,7 +10,7 @@ public fun <T, E : ResultError> Iterable<Result<T, E>>.combine(): Result<List<T>
 
 /**
  * Runs [transform] on each item in order and collects the values, stopping at the first error: no item after
- * it is transformed, and that error is the result.
+ * it is transformed, and that error is the result. A throw from [transform] is not caught.
  *
  * ```kotlin
  * val ports: Result<List<Int>, PortError> = listOf("80", "443").mapResult(::parsePort)
@@ -30,7 +30,8 @@ public data class Partial<out S, out E : ResultError>(val done: List<S>, val err
 
 /**
  * [mapResult] that keeps what went through: it stops at the first error as well, and the error is [Partial],
- * holding the values of the items before it with that error, as a batch save reports what it already wrote.
+ * holding the values of the items before it with that error, as a batch save reports what it already wrote. A throw
+ * from [transform] is not caught.
  *
  * ```kotlin
  * fun importAll(orders: List<Order>): Result<List<OrderId>, ImportError> =
@@ -49,7 +50,7 @@ public inline fun <T, R, E : ResultError> Iterable<T>.mapResultPartial(
 
 /**
  * Combines this success value with [other]'s through [transform], or fails with the first error in argument
- * order. [transform] runs only when both succeeded.
+ * order. [transform] runs only when both succeeded, and a throw from it is not caught.
  *
  * ```kotlin
  * val endpoint = parseHost(rawHost).zip(parsePort(rawPort)) { host, port -> Endpoint(host, port) }
@@ -64,7 +65,10 @@ public inline fun <A, B, E : ResultError, T> Result<A, E>.zip(
     return Ok(transform(a, b))
 }
 
-/** [zip] for three results: [transform] runs only when all three succeeded, otherwise the first error wins. */
+/**
+ * [zip] for three results: [transform] runs only when all three succeeded, otherwise the first error wins. A throw
+ * from [transform] is not caught.
+ */
 public inline fun <A, B, C, E : ResultError, T> Result<A, E>.zip(
     second: Result<B, E>,
     third: Result<C, E>,
@@ -78,7 +82,7 @@ public inline fun <A, B, C, E : ResultError, T> Result<A, E>.zip(
 
 /**
  * Runs [transform] on every item and collects the values in order, or every error in order, where [mapResult]
- * stops at the first:
+ * stops at the first. A throw from [transform] is not caught:
  *
  * ```kotlin
  * val entries: Result<List<Entry>, AllErrors<LineError>> = lines.mapResultAll(::parseLine)
@@ -120,7 +124,7 @@ public fun <S, E : ResultError> Iterable<Result<S, E>>.partition(): Pair<List<S>
 
 /**
  * Combines two successes through [transform], or fails with every error in argument order, where [zip] stops at
- * the first. [transform] runs only when both succeeded.
+ * the first. [transform] runs only when both succeeded, and a throw from it is not caught.
  *
  * ```kotlin
  * val config = zipAll(checkPort(raw.port), checkHost(raw.host)) { port, host -> Config(port, host) }
@@ -135,7 +139,10 @@ public inline fun <A, B, E : ResultError, T> zipAll(
     return Err(AllErrors(listOfNotNull(first.errorOrNull(), second.errorOrNull())))
 }
 
-/** [zipAll] for three results: [transform] runs only when all three succeeded, otherwise every error comes back. */
+/**
+ * [zipAll] for three results: [transform] runs only when all three succeeded, otherwise every error comes back. A
+ * throw from [transform] is not caught.
+ */
 public inline fun <A, B, C, E : ResultError, T> zipAll(
     first: Result<A, E>,
     second: Result<B, E>,

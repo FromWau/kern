@@ -33,7 +33,8 @@ public inline fun <reified F : ResultError> Result<Any?, ResultError>.assertErro
 /**
  * This error when [check] holds for it, or a test failure naming what came instead: a success, or an error the
  * check refused. Inside [check] the error has the result's own type, so an `is` against a case the result can
- * never hold does not compile, and a case's fields can be checked in the same call:
+ * never hold does not compile, and a case's fields can be checked in the same call. A throw from [check] is not
+ * caught:
  *
  * ```kotlin
  * findUser(8).assertError { it is CrudError.NotFound && it.id == 8L }

@@ -7,7 +7,9 @@ import com.fromwau.kern.result.ResultError
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -104,7 +106,7 @@ class ParMapResultTest {
                     delay(10)
                     Err(CityError.Missing(city))
                 } else {
-                    suspendCatching({ CityError.Missing(city) }) {
+                    suspendCatching(IllegalStateException::class, { CityError.Missing(city) }) {
                         try {
                             delay(1_000)
                             city.length
@@ -148,6 +150,23 @@ class ParMapResultTest {
         yield()
 
         job.cancelAndJoin()
+
+        assertTrue(job.isCancelled)
+        assertNull(outcome)
+    }
+
+    @Test
+    fun `parMapResult in a caller cancelled as the first error arrives throws the cancellation`() = runTest {
+        var outcome: Result<List<Int>, CityError>? = null
+        val job = launch {
+            val caller = currentCoroutineContext().job
+            outcome = listOf("Oslo").parMapResult { city ->
+                caller.cancel()
+                Err(CityError.Missing(city))
+            }
+        }
+
+        job.join()
 
         assertTrue(job.isCancelled)
         assertNull(outcome)

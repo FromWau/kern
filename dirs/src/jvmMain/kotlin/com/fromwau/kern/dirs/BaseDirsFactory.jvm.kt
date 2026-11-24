@@ -4,6 +4,7 @@ import com.fromwau.kern.result.Err
 import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import kotlinx.io.files.Path
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.nio.file.attribute.PosixFileAttributes
@@ -86,8 +87,9 @@ private val SYSTEM_SUPPORT = Path("/Library/Application Support")
 
 /**
  * Whether [path] is a folder this process's user owns that its group and others may not enter, read through any link.
- * The owner's user id is compared with that of `/proc/self`, which is this process's effective user. Without the unix
- * attribute view or `/proc/self`, the folder counts as not private.
+ * The owner's user id is compared with that of `/proc/self`, which is this process's effective user. A folder that
+ * cannot be read, a path the JDK refuses, and a system without the unix attribute view or `/proc/self` count as not
+ * private.
  */
 internal actual fun isPrivateFolder(path: Path): Boolean = try {
     val folder = Paths.get(path.toString())
@@ -95,7 +97,13 @@ internal actual fun isPrivateFolder(path: Path): Boolean = try {
     attributes.isDirectory &&
         Files.getAttribute(folder, "unix:uid") == Files.getAttribute(Paths.get("/proc/self"), "unix:uid") &&
         attributes.permissions().all { it in OWNER_PERMISSIONS }
-} catch (_: Exception) {
+} catch (_: IOException) {
+    false
+} catch (_: UnsupportedOperationException) {
+    false
+} catch (_: IllegalArgumentException) {
+    false
+} catch (_: SecurityException) {
     false
 }
 

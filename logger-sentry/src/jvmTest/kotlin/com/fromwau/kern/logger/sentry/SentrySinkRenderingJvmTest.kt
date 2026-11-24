@@ -16,6 +16,7 @@ import io.sentry.transport.RateLimiter
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -236,6 +237,34 @@ class SentrySinkRenderingJvmTest {
         assertEquals(listOf("Storage", "TypeThrows"), event.fingerprints)
         assertEquals("TypeThrows", breadcrumbs.single().getData("error.type"))
         assertEquals("TypeThrows", logs.single().attributes?.get("error.type")?.value)
+    }
+
+    @Test
+    fun `an error whose errorType throws is reported with its stack trace naming the sink`() = withSentry {
+        val reports = CopyOnWriteArrayList<String>()
+        val logger = sentryLogger(SentrySink(), reports)
+
+        logger.tag("Storage").e(TypeThrows) { "saving failed" }
+        val _ = logger.flush()
+        val _ = logger.close()
+
+        val report = reports.single { "errorType" in it }
+        assertContains(report, "sink \"sentry\"")
+        assertContains(report, "TypeThrows.getErrorType")
+    }
+
+    @Test
+    fun `a throwable whose message throws is reported with its stack trace naming the sink`() = withSentry {
+        val reports = CopyOnWriteArrayList<String>()
+        val logger = sentryLogger(SentrySink(), reports)
+
+        logger.tag("app").e(MessageThrows()) { "saving failed" }
+        val _ = logger.flush()
+        val _ = logger.close()
+
+        val report = reports.first { "message" in it }
+        assertContains(report, "sink \"sentry\"")
+        assertContains(report, "MessageThrows.getMessage")
     }
 
     @Test

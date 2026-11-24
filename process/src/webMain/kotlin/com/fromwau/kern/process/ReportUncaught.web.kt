@@ -1,5 +1,5 @@
 package com.fromwau.kern.process
 
-internal actual fun printUncaught(e: Throwable) {
+internal actual fun reportUncaught(e: Throwable) {
     e.printStackTrace()
 }

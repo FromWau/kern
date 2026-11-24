@@ -23,6 +23,12 @@ object ShutdownChild {
             }
             "throw" -> install { error("the handler failed") }
             "throw exit 0" -> install(exitCode = 0) { error("the handler failed") }
+            "throw, default handler" -> {
+                Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+                    println("${thread.name} reported ${e.message}")
+                }
+                install { error("the handler failed") }
+            }
             "main exits as the handler returns" -> {
                 val handlerReturning = CountDownLatch(1)
                 install(exitCode = 0) { handlerReturning.countDown() }

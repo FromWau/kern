@@ -305,6 +305,9 @@ fun Path.tryLock(): Result<FileLock, FileError>
 fun AppDirs.singleInstance(name: String): Result<InstanceLock, FileError>
 fun AppDirs.singleInstance(key: Path): Result<InstanceLock, FileError>
 fun currentProcessId(): Long
+object FileLocks {
+    var onReleaseFailed: (lockFile: Path, failure: IOException) -> Unit
+}
 
 inline fun <T> AppDirs.withRunTemp(block: (temp: Writer) -> T): Result<T, FileError>
 fun AppDirs.staleTempRuns(): Result<StaleRuns, FileError>

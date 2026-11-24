@@ -63,14 +63,10 @@ public class FakeShutdownSource : ShutdownSource {
     public var exitCode: Int? = null
         private set
 
-    /** What the handler threw. A real program prints it and still exits; here it is kept instead of printed. */
-    @Volatile
-    public var thrown: Throwable? = null
-        private set
-
     /**
      * Installs [handler], or answers [ShutdownError.AlreadyInstalled] after a handler or a stop was installed, or else
-     * the error [failWith] set.
+     * the error [failWith] set. A throw from [handler] is not caught: [request] sets [exitCode] as for any handler that
+     * throws, then rethrows it unchanged.
      *
      * @throws IllegalArgumentException when [exitCode] is outside 0..255, as the real one does.
      */
@@ -114,6 +110,7 @@ public class FakeShutdownSource : ShutdownSource {
     /**
      * Sends [request]: the first one runs the installed handler on the calling thread, or sets the installed stop. Any
      * later one, like one sent with nothing installed, only records its exit code, as the process would end at once.
+     * What the handler throws reaches the caller unchanged, once [exitCode] is set.
      */
     public fun request(request: ShutdownRequest) {
         val first = requested.compareAndSet(expectedValue = false, newValue = true)
@@ -133,8 +130,8 @@ public class FakeShutdownSource : ShutdownSource {
         try {
             handler(request)
         } catch (e: Throwable) {
-            thrown = e
             if (!laterRequestSent) exitCode = request.exitCode
+            throw e
         }
     }
 

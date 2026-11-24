@@ -8,9 +8,12 @@ results through a flow, and to run fallible work in parallel.
 ```kotlin
 import com.fromwau.kern.result.coroutines.*
 
-val one = suspendCatching({ NetworkError.Unknown(it) }) { http.get(city) }   // Result<String, NetworkError>
-repository.observe(city).asResult { NetworkError.Unknown(it) }               // Flow<Result<Weather, NetworkError>>
-val all = cities.parMapResult(concurrency = 4) { load(it) }                  // Result<List<Weather>, NetworkError>
+// Result<String, NetworkError>
+val one = suspendCatching(IOException::class, { NetworkError.Unknown(it) }) { http.get(city) }
+// Flow<Result<Weather, NetworkError>>
+repository.observe(city).asResult(IOException::class) { NetworkError.Unknown(it) }
+// Result<List<Weather>, NetworkError>
+val all = cities.parMapResult(concurrency = 4) { load(it) }
 ```
 
 ## Add to your build
@@ -29,17 +32,21 @@ dependencies {
 
 | function          | on                   | takes                                                        | gives                |
 |-------------------|----------------------|--------------------------------------------------------------|----------------------|
-| `suspendCatching` |                      | `toError: (Exception) -> E`, a block that may suspend        | `Result<S, E>`       |
-| `asResult`        | `Flow<S>`            | `toError: (Exception) -> E`                                  | `Flow<Result<S, E>>` |
+| `suspendCatching` |                      | `caught`, `toError: (X) -> E`, a block that may suspend      | `Result<S, E>`       |
+| `asResult`        | `Flow<S>`            | `caught`, `toError: (X) -> E`                                | `Flow<Result<S, E>>` |
 | `mapSuccess`      | `Flow<Result<S, E>>` | `transform: suspend (S) -> T`                                | `Flow<Result<T, E>>` |
 | `flatMapSuccess`  | `Flow<Result<S, E>>` | `transform: suspend (S) -> Result<T, E>`                     | `Flow<Result<T, E>>` |
 | `parMapResult`    | `Iterable<T>`        | `concurrency: Int`, `transform: suspend (T) -> Result<S, E>` | `Result<List<S>, E>` |
 
-- **`suspendCatching`** turns an exception into your error.
-  - A cancelled coroutine stays cancelled. It is never turned into an error.
-  - A timeout inside the block is an error like any other.
-- **`asResult`** makes each value a success. An exception the flow throws becomes one last error, and the flow
-  completes. It never catches exceptions thrown downstream, by your collector or by an operator such as `take`.
+- **`suspendCatching`** turns an exception of the type you name into your error. It is for third-party code that
+  reports a failure by throwing. Name the narrowest type that code documents: a throw of any other type is not
+  caught.
+  - A cancelled coroutine stays cancelled. It is never turned into an error, whatever type you name.
+  - A timeout inside the block, while the coroutine is still active, is an error when you name its type or a
+    supertype of it, such as `CancellationException`.
+- **`asResult`** makes each value a success. An exception of the type you name that the flow throws becomes one last
+  error, and the flow completes. A throw of any other type ends the flow with that exception. It never catches
+  exceptions thrown downstream, by your collector or by an operator such as `take`.
 - **`mapSuccess`** and **`flatMapSuccess`** transform each success and pass errors through. Use `flatMapSuccess`
   for a step that returns a result, since `mapSuccess` would nest it.
 - **`parMapResult`** runs the steps in parallel, at most `concurrency` at once. It gives their values in order.
@@ -54,8 +61,10 @@ a lookup that can fail:
 ```kotlin
 fun quotes(): Flow<Result<Quote, FeedError>> =
     reconnecting { socket.frames() }                                         // a cold flow
-        .asResult { FeedError.Down(it) }                                     // still failing after retries: ends it
-        .flatMapSuccess { raw -> catching({ FeedError.Malformed(raw) }) { parse(raw) } }   // a bad frame is one item
+        .asResult(IOException::class) { FeedError.Down(it) }                 // still failing after retries: ends it
+        .flatMapSuccess { raw ->                                             // a bad frame is one item
+            catching(SerializationException::class, { FeedError.Malformed(raw) }) { parse(raw) }
+        }
         .flatMapSuccess { price -> lookup(price.symbol).map { Quote(price, it) } }
 
 fun reconnecting(source: () -> Flow<String>): Flow<String> = flow {

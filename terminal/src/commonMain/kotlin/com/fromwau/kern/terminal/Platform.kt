@@ -115,7 +115,7 @@ private const val READ_CHUNK_BYTES = 64 * 1024
  * bypasses [supported].
  *
  * [defaultTerminal] applies this for you. Call it directly only when you own the IO and still want the
- * standard answer, passing your own [env] lookup.
+ * standard answer, passing your own [env] lookup. A throw from [env] is not caught.
  */
 public fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Boolean = true): Boolean =
     when {
@@ -135,7 +135,10 @@ public fun ansiEnabled(isTty: Boolean, env: (String) -> String?, supported: Bool
  */
 private fun String?.forcesColor(): Boolean = !isNullOrEmpty() && this != "0" && this != "false"
 
-/** Terminal width: the `COLUMNS` environment variable wins, then the [detected] width, then 80. */
+/**
+ * Terminal width: the `COLUMNS` environment variable wins, then the [detected] width, then 80. A throw from [env] is
+ * not caught.
+ */
 public fun resolveColumns(env: (String) -> String?, detected: Int? = null): Int =
     env("COLUMNS")?.toIntOrNull()?.takeIf { it > 0 }
         ?: detected?.takeIf { it > 0 }

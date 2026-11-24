@@ -59,9 +59,8 @@ fun `a terminate request stops the server`() {
 |---|---|
 | `installed` | whether a handler or a stop is installed |
 | `stopOnShutdownRequest(exitCode)` | returns a `ShutdownStop` that the first request sets |
-| `request(request)` | the first request runs the handler or sets the stop |
+| `request(request)` | the first request runs the handler or sets the stop; what the handler throws reaches you |
 | `exitCode` | null until a request arrives, then the code the process would end with |
-| `thrown` | what the handler threw, kept instead of printed |
 | `failWith(error)` | makes the next install return `error` |
 
 - `request`: a later request only records its code, as the process would end at once.

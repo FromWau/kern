@@ -78,8 +78,8 @@ public sealed interface Reopen {
      * @param onReopen called with the file just opened at the path and the [AppendState] of the file it replaces:
      *   [AppendState.Moved], [AppendState.Deleted], or [AppendState.Unknown] where the platform cannot tell those apart
      *   or the state could not be looked up. It runs after each reopen and before the append that caused it, such as
-     *   to write a header first, and appending to it there is appending to the new file. What it throws is thrown from
-     *   that append, which then appends nothing.
+     *   to write a header first, and appending to it there is appending to the new file. A throw from this block is
+     *   not caught, and is thrown from that append, which then appends nothing.
      */
     public class WhenMoved(
         public val checkEvery: Duration = Duration.ZERO,

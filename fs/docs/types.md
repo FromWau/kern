@@ -399,8 +399,9 @@ The other types the calls take or hand back:
   `readText`, `readBytes`, `readPrefix`, `readSymlink`, `realName`, `info` and `list`, as
   [Read without making anything](writer.md#read-without-making-anything) describes.
 - `FailedAt`, the `at` of `WriteFailed` and `RestoreFailed`, as [Which path failed](#which-path-failed) lists it.
-- `FileLock`, from `tryLock()`. It has its `path`, `close()` to release it, and `check()`, whether it still holds the
-  file at its path, as [Locking](locking.md#hold-a-lock-for-a-whole-run-and-notice-losing-it) describes.
+- `FileLock`, from `tryLock()`. It has its `path`, `close()` to release it, which never throws, and `check()`,
+  whether it still holds the file at its path, as
+  [Locking](locking.md#hold-a-lock-for-a-whole-run-and-notice-losing-it) describes.
 - `InstanceLock`, from `singleInstance()`. It has its `lockFile` and `pidFile`, `check()` as a `FileLock` has it, and
   `close()` to release the lock. It is `AutoCloseable`, so `use { }` releases it.
 - `StaleRuns`, from `staleTempRuns()`: the `stale` folders, and the `failed` ones as `StaleFailure`s.

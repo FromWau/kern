@@ -8,11 +8,15 @@ import kotlinx.coroutines.test.runTest
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.net.SocketTimeoutException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private class FailingStream : OutputStream() {
@@ -28,6 +32,14 @@ private class WorkingStream : OutputStream() {
 private class FailingInput : InputStream() {
     val thrown = IOException("Is a directory")
 
+    override fun read(): Int = throw thrown
+}
+
+private class InterruptedStream : OutputStream() {
+    override fun write(b: Int): Unit = throw InterruptedIOException("interrupted")
+}
+
+private class ThrowingInput(private val thrown: IOException) : InputStream() {
     override fun read(): Int = throw thrown
 }
 
@@ -140,6 +152,40 @@ class JvmTerminalTest {
             Err(ReadError.Unknown("Is a directory", input.thrown)),
             reading(input).readIn(),
         )
+    }
+
+    @Test
+    fun `an interrupted read of standard input is thrown on with the thread still interrupted`() {
+        val thrown = InterruptedIOException("interrupted")
+        try {
+            val failure = assertFailsWith<InterruptedIOException> { reading(ThrowingInput(thrown)).readIn() }
+
+            assertSame(thrown, failure)
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test
+    fun `a read of standard input that times out is Unknown`() {
+        val thrown = SocketTimeoutException("Read timed out")
+
+        assertEquals(Err(ReadError.Unknown("Read timed out", thrown)), reading(ThrowingInput(thrown)).readIn())
+        assertFalse(Thread.currentThread().isInterrupted)
+    }
+
+    @Test
+    fun `an interrupted write is thrown on with the thread still interrupted and is no failed write`() {
+        val terminal = terminal(InterruptedStream(), WorkingStream())
+        try {
+            assertFailsWith<InterruptedIOException> { terminal.out("cut short") }
+
+            assertTrue(Thread.currentThread().isInterrupted)
+            assertEquals(Ok(Unit), terminal.writeResult())
+        } finally {
+            Thread.interrupted()
+        }
     }
 
     @Test

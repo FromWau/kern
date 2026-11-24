@@ -63,7 +63,7 @@ private fun requestFor(signal: Int): ShutdownRequest? = when (signal) {
 /** Runs on the C reader thread, outside any signal handler, for the first request only. */
 private fun onSignal(signal: Int) {
     val request = requestFor(signal) ?: error("no shutdown request for signal $signal")
-    // Only printing what the handler threw can throw here. Escaping this C callback would abort the process, so the
+    // Only reporting what the handler threw can throw here. Escaping this C callback would abort the process, so the
     // failure ends it with the request's code instead, as a handler that throws does.
     val exitCode = try {
         checkNotNull(handler.load())(request)
@@ -74,11 +74,17 @@ private fun onSignal(signal: Int) {
     if (kern_process_handler_returned(exitCode) == 0) exitProcess(exitCode)
 }
 
+/** The app's own hook, the one kern's replaced, or a print without one. */
+internal actual fun reportUncaught(e: Throwable) {
+    val previous = previousUnhandledExceptionHook.load()
+    if (previous != null) previous(e) else printUncaught(e)
+}
+
 /** An exception escaping `main` after a request ends the process as an exit would: once a handler is done. */
 private fun onUnhandledException(e: Throwable) {
     val previous = previousUnhandledExceptionHook.load()
     if (kern_process_request_signal() != 0) {
-        if (previous != null) previous(e) else printUncaught(e)
+        reportUncaught(e)
         // The atexit wait replaces this code with the handler's.
         exitProcess(1)
     }

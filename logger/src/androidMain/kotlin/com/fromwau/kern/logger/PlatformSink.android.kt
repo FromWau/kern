@@ -1,3 +1,5 @@
+@file:OptIn(InternalKernApi::class)
+
 package com.fromwau.kern.logger
 
 import com.fromwau.kern.result.Ok
@@ -11,8 +13,9 @@ internal actual fun platformWriter(): EntryWriter = EntryWriter { entry, _ ->
     val message = entry.summary()
     try {
         write(entry.level, entry.tag, message, entry.throwable)
-    } catch (_: Throwable) {
+    } catch (e: Throwable) {
         // Logcat renders the trace unguarded: a throwable whose toString() throws would fail every attempt.
+        reportRenderingThrew("$THROWABLE_SUBJECT: Logcat could not write it", e)
         write(entry.level, entry.tag, entry.body(), throwable = null)
     }
     Ok(Unit)

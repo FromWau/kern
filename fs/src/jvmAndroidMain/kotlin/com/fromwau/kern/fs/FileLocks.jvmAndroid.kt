@@ -75,3 +75,7 @@ internal actual fun sleepMillis(millis: Long): Boolean = try {
     Thread.currentThread().interrupt()
     false
 }
+
+internal actual fun printToStandardError(text: String) {
+    System.err.println(text)
+}

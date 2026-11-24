@@ -66,6 +66,16 @@ class ShutdownJvmTest {
     }
 
     @Test
+    fun `a handler's throw reaches the default uncaught exception handler and still exits 143`() {
+        val child = Child.start("throw, default handler")
+        child.signal("TERM")
+
+        val exit = child.finish()
+        assertEquals(143, exit.code, exit.toString())
+        assertTrue("kern shutdown handler reported the handler failed" in exit.lines, exit.toString())
+    }
+
+    @Test
     fun `a handler that throws exits with the request's code even with an exitCode given at install`() {
         val child = Child.start("throw exit 0")
         child.signal("TERM")

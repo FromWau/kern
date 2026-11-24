@@ -8,6 +8,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import kotlinx.datetime.IllegalTimeZoneException
 import kotlinx.datetime.UtcOffset
 import platform.posix.localtime_r
 import platform.posix.time_tVar
@@ -29,3 +30,5 @@ internal actual fun systemLocalClock(): LocalClock {
         UtcOffset(seconds = offsetSeconds)
     }
 }
+
+internal actual fun Throwable.isUnreadableSystemZone(): Boolean = this is IllegalTimeZoneException

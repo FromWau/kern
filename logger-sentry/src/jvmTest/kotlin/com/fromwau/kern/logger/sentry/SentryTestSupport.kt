@@ -93,10 +93,13 @@ internal fun SentrySink.writeAll(vararg entries: LogEntry) = entries.forEach { e
     write(entry, SinkConfig(level = LogLevel.VERBOSE)).assertSuccess()
 }
 
-/** A logger writing to [sink] alone, whose reports of its own failures are dropped rather than printed. */
+/** A logger writing to [sink] alone, whose reports of its own failures go to [reports] rather than stderr. */
 @OptIn(InternalKernApi::class)
-internal fun sentryLogger(sink: LogSink): Logger = Logger().also { logger ->
-    logger.reportFailuresTo {}
+internal fun sentryLogger(
+    sink: LogSink,
+    reports: MutableList<String> = mutableListOf(),
+): Logger = Logger().also { logger ->
+    logger.reportFailuresTo { reports += it }
     logger.configure { LoggerConfig(listOf(ConfiguredSink(sink))) }.assertSuccess()
 }
 

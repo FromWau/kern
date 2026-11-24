@@ -5,7 +5,9 @@ import com.fromwau.kern.result.Ok
 import com.fromwau.kern.result.Result
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.net.SocketTimeoutException
 import kotlin.concurrent.getOrSet
 
 /**
@@ -40,8 +42,20 @@ internal fun jvmPlatformIo(
 private fun readChunk(source: InputStream, buffer: ByteArray): Result<Int, ReadError> = try {
     Ok(source.read(buffer).coerceAtLeast(0))
 } catch (e: IOException) {
+    e.rethrowIfInterrupt()
     // The JDK raises a directory and a failing device alike as a plain IOException, with no errno to tell them apart.
     Err(ReadError.Unknown(e.message, e))
+}
+
+/**
+ * Throws this on when it reports that the thread was interrupted, with the thread's interrupt flag set again, which
+ * the stream may have cleared. An interrupt is the thread's owner asking it to stop, not a failure of the stream: as a
+ * typed error it would end the stream for good. A socket's read timeout shares the type but is a failure.
+ */
+private fun IOException.rethrowIfInterrupt() {
+    if (this !is InterruptedIOException || this is SocketTimeoutException) return
+    Thread.currentThread().interrupt()
+    throw this
 }
 
 /** Writes UTF-8 to [sink] at once, keeps the first failure a PrintStream would swallow, and writes nothing after it. */
@@ -60,6 +74,7 @@ internal class StreamSink(
             sink.write(text.encodeToByteArray())
             sink.flush()
         } catch (e: IOException) {
+            e.rethrowIfInterrupt()
             // The JDK raises every failed write as a plain IOException, with no errno to tell a closed pipe
             // from a full disk.
             failure = WriteError.Unknown(stream, e.message, e)

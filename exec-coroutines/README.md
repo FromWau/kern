@@ -71,9 +71,9 @@ dependencies {
   `Dispatchers.IO` that does not count against its limit, so many long-running children never hold up the rest of
   your IO.
 - When a collection ends before the events ran out, by cancellation, an exception or `first` or `takeWhile`, the child
-  is detached with `detach()`. Cancelling `awaitExit()` does the same. Neither ever stops the child: it keeps running,
-  and `stop()` is the only thing that ends one. `stop()` still reaches a detached child, so a wait that timed out can
-  end in a kill:
+  is detached with `detach()`. Cancelling `awaitExit()`, or a throw from reading the child, does the same. Neither
+  ever stops the child: it keeps running, and `stop()` is the only thing that ends one. `stop()` still reaches a
+  detached child, so a wait that timed out can end in a kill:
 
   ```kotlin
   withTimeoutOrNull(5.seconds) { child.awaitExit() } ?: child.stop(Signal.Kill)
@@ -96,8 +96,8 @@ dependencies {
 - Stopping sends SIGTERM to the group and SIGKILL two seconds later, so a call can take up to two seconds longer
   than the command.
 - Past `timeout` the group is stopped the same way and the call answers `ExecError.TimedOut(after, stdout, stderr)`
-  with what both streams had got. Cancelling the call, or a `ChildEvent.Failed`, stops the group too, without the
-  call waiting for it.
+  with what both streams had got. Cancelling the call, a `ChildEvent.Failed`, or a throw from the child's `next()`
+  stops the group too, without the call waiting for it. The throw reaches you.
 - Everything the command writes is kept in memory. Read a command whose output has no end with `events()`.
 - It takes a `Starter`, so a test hands it a `FakeStarter` from [`exec-test`](../exec-test/README.md); a live fake
   child's timeout then runs in virtual time.

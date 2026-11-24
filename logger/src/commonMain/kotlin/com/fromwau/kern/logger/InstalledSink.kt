@@ -49,6 +49,9 @@ private val GAP_INTERVAL: Duration = 1.seconds
  */
 internal const val MAX_BATCH = 256
 
+/** How many different rendering throws one sink reports; past that a broken value would only flood the others. */
+private const val MAX_RENDERING_REPORTS = 64
+
 /** No overflow timestamp recorded. */
 private const val NO_TIME = Long.MIN_VALUE
 
@@ -95,9 +98,10 @@ public class InstalledSink internal constructor(
     private val waiters = AtomicInt(0)
     private val progress = MutableStateFlow(0L)
 
-    // Guards the gap, which a close dropping entries and the worker both move.
+    // Guards the gap, which a close dropping entries and the worker both move, and the rendering throws reported.
     private val lock = reentrantLock()
     private var gap: Gap? = null
+    private val renderingReports = mutableSetOf<String>()
 
     // What a full queue dropped, counted without a lock by the log calls and folded into gap and health later.
     private val overflowed = AtomicLong(0)
@@ -355,6 +359,13 @@ public class InstalledSink internal constructor(
         countLost(lost.count)
         lock.withLock { gap = lost.plus(gap) }
         mutableHealth.update { it.copy(dropped = it.dropped + lost.count) }
+    }
+
+    /** Reports what [what] threw while this sink rendered an entry, unless this sink reported the same before. */
+    internal fun renderingThrew(what: String, thrown: Throwable) {
+        val key = "$what ${thrown::class}"
+        val first = lock.withLock { renderingReports.size < MAX_RENDERING_REPORTS && renderingReports.add(key) }
+        if (first) owner.reportThrow("sink \"$name\" could not render $what", thrown, from = this)
     }
 
     /** What a flush or close waits for, taken as it starts; it also cuts a Retry backoff short. */
@@ -704,14 +715,20 @@ public class InstalledSink internal constructor(
         sink.write(entry, mutableConfig.value).errorOrNull()
     } catch (e: Throwable) {
         // A CancellationException included: write does not suspend, so it is the sink's own.
-        SinkError.Dropped(Thrown(e))
+        threw(e)
     }
 
     private fun writeBatch(sink: BatchSink, entries: List<LogEntry>): SinkError? = try {
         closedSinceWrite = false
         sink.writeBatch(entries, mutableConfig.value).errorOrNull()
     } catch (e: Throwable) {
-        SinkError.Dropped(Thrown(e))
+        threw(e)
+    }
+
+    /** Reports the throw with its stack trace; [failed] then finds the name reported and adds no second line. */
+    private fun threw(thrown: Throwable): SinkError {
+        owner.reportFirstFailure(this, "sink \"$name\" threw", thrown)
+        return SinkError.Dropped(Thrown(thrown))
     }
 
     // Called by the channel for the oldest entry a full queue drops.
@@ -762,7 +779,7 @@ public class InstalledSink internal constructor(
                 lastError = error,
             )
         }
-        owner.reportFirstFailure(name, "sink \"$name\" failed: $error")
+        owner.reportFirstFailure(this, "sink \"$name\" failed: $error", thrown = null)
     }
 
     /**
@@ -850,7 +867,7 @@ public class InstalledSink internal constructor(
     private fun closeSinkOnce(): SinkError? = try {
         sink.close().errorOrNull()
     } catch (e: Throwable) {
-        SinkError.Dropped(Thrown(e))
+        threw(e)
     }
 
     /** Writes the pending gap, if any; returns why that failed, leaving the gap pending, or null. */

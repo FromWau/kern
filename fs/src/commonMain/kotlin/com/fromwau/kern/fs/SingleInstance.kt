@@ -174,13 +174,18 @@ internal fun AppDirs.pidFileOf(name: String): Path = state / pidFileName(name)
 public class InstanceLock internal constructor(
     public val lockFile: Path,
     public val pidFile: Path,
-    private val lock: FileLock,
+    @PublishedApi internal val lock: FileLock,
 ) : AutoCloseable {
     /** Whether the lock file is still the file this lock holds, as [FileLock.check] answers for [lockFile]. */
     public fun check(): EmptyResult<FileError> = lock.check()
 
     override fun close(): Unit = lock.close()
 }
+
+/** Runs [block] holding this instance, then releases it, as [FileLock.runThenRelease] does. */
+@InternalKernApi
+public inline fun <T> InstanceLock.runThenRelease(block: (instance: InstanceLock) -> T): T =
+    lock.runThenRelease { block(this) }
 
 /**
  * The pid in [pidFile] when a process with it is running, read again after each [pause] for up to [PID_REREAD_WAIT],

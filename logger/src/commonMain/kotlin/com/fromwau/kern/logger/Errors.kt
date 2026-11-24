@@ -41,7 +41,10 @@ public sealed interface SinkError : ResultError {
     public data class Lost(val count: Long) : SinkError
 }
 
-/** What a sink's write or close threw, any [Throwable], an [Error] included, passed through as it is. */
+/**
+ * What a sink's write or close threw, any [Throwable], an [Error] included, passed through as it is. The logger also
+ * writes it with its stack trace to standard error and to its other sinks.
+ */
 public data class Thrown(val throwable: Throwable) : ResultError
 
 /** Why [Logger.configure] refused a new config. Nothing changed. */
@@ -49,10 +52,7 @@ public sealed interface ConfigError : ResultError {
     /** Two sinks in the new list are called [name]. */
     public data class NameTaken(val name: String) : ConfigError
 
-    /**
-     * The sink [name] asked for something impossible, such as a capacity below one or a negative backoff, or reading
-     * one of its properties threw.
-     */
+    /** The sink [name] asked for something impossible, such as a capacity below one or a negative backoff. */
     public data class Invalid(
         val name: String,
         val reason: String,

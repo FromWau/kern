@@ -61,7 +61,13 @@ takes nothing. An entry logged at `OFF` is discarded.
 
 The message is a lambda. It is built only when a configured sink takes the level, so a filtered `log.d { expensive() }`
 costs a level check. If the message block throws anything, an `Error` included, the entry is logged with
-`<message threw IllegalStateException>` in its place.
+`<message threw IllegalStateException>` in its place, and an exception the call passed stays the entry's, unchanged. The
+throw itself is reported as the next paragraph says.
+
+Logging is the one place kern catches what your code throws: a logger should never crash an app, and should keep
+logging up to the crash. It catches loudly. A message block, a sink's `write` or `close`, a field's `toString()` or a
+throwable's `message` that throws is written with its stack trace to standard error and to every other sink, as an
+`ERROR` entry tagged `kern.logger`. `configure` is setup, not logging, and catches nothing.
 
 A log call never suspends and never throws, from any thread. It never waits for a sink to write. It may wait briefly for
 a lock while it queues the entry, and while a hold is on.
@@ -91,7 +97,10 @@ log.i("count" to files.size, "ms" to elapsed.inWholeMilliseconds, "cached" to tr
 A value is turned into text when the sink writes the entry, on that sink's worker, so pass values that will not change,
 such as a copy of a list rather than the list itself.
 
-- A `toString()` or an iteration that throws is written as `<toString() threw IllegalStateException>`.
+- A `toString()` or an iteration that throws is written as `<toString() threw IllegalStateException>`. The throw is
+  written with its stack trace to standard error and to the other sinks, naming the sink and the field, once per field
+  and kind of throw for each sink. Each sink reports at most 64 of these, a throwable's stack trace that throws
+  included. Past that it reports none, so one broken value logged in many shapes cannot flood the other sinks.
 - A key passed twice keeps its last value.
 
 ### Exceptions and errors
@@ -162,10 +171,12 @@ their old levels. Every entry after it goes to the new list's sinks, by their ne
 It returns a `Result<Unit, ConfigError>`. On an error nothing changes:
 
 - `ConfigError.NameTaken`: two sinks in the new list share a name, or one sink is listed twice.
-- `ConfigError.Invalid`: a new sink's capacity is below one, its backoff is negative, or one of its properties throws.
+- `ConfigError.Invalid`: a new sink's capacity is below one or its backoff is negative.
 
 The lambda runs under the logger's lock, so keep it to a `copy`. Two calls from different threads never undo each
-other's change. If the lambda throws, nothing changes and the exception reaches you.
+other's change. If the lambda throws, nothing changes and the exception reaches you. So does a throw from a new sink's
+`name`, `onFailure`, `capacity` or `drop`, which `configure` reads on your thread: a broken sink fails where it is set
+up, not later in the logging.
 
 A sink in both lists, as the same object, keeps its queue and health. It takes the `config` of its `ConfiguredSink` in
 the new list.
@@ -316,7 +327,8 @@ also gets the `SinkConfig` its `ConfiguredSink` gives it.
 It runs on the sink's own worker, one entry at a time, in the order they were logged, so it may block.
 
 Return an `Err`, or throw anything, an `Error` included. The sink's `onFailure` then decides what happens next. A throw
-is the failure `SinkError.Dropped(Thrown(e))`. It never ends the sink's worker.
+is the failure `SinkError.Dropped(Thrown(e))`. It never ends the sink's worker, and is written with its stack trace to
+standard error and to every other sink, so a bug in a sink shows up where you look.
 
 An entry your sink logs while writing goes to every other sink, never back to itself.
 
@@ -528,8 +540,12 @@ Xcode's console while you debug, so watch `health` there.
 kern.logger: sink "file:/var/log/app.log" failed: Dropped(error=WriteFailed(path=/var/log/app.log, cause=Denied, exception=/var/log/app.log: Permission denied, at=null))
 ```
 
+When the sink threw, the line says `sink "name" threw` and the stack trace follows it. The same goes to every other
+sink as an `ERROR` entry tagged `kern.logger`, with the throw as its exception.
+
 Later failures under that name only count in `health`, until a sink of that name writes successfully. Its next failure
-is reported again. A reload that builds a failing sink anew under the same name does not repeat the line.
+is reported again. A reload that builds a failing sink anew under the same name does not repeat the line. If standard
+error itself throws, that one line is lost and the logger goes on.
 
 ### Details
 

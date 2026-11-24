@@ -66,12 +66,12 @@ import kotlin.time.Duration.Companion.seconds
  *   is copied as the file it leads to, and one to a folder is copied as that folder.
  * @param exclude folders and files the walk leaves out, as [walkTopDown] takes them, beside [dst] itself.
  * @param enter asked about each folder before the walk enters it, as [walkTopDown] asks; a folder it refuses holds
- *   what [dst] has at its place.
+ *   what [dst] has at its place. A throw from this block is not caught, and ends the mirror.
  * @param keep whether an entry of [dst] that nothing in this folder yields or holds stays, from its path relative to
  *   [dst]; asked while the run is planned, before anything is copied or removed, and never about what stands in an
  *   entry's way. One it answers true for is never removed, nor are the folders it lies in. A kept folder is not looked
- *   into, so all it holds stays, and none of them is listed in the [MirrorReport]. Nothing is kept by default. What it
- *   throws ends the mirror.
+ *   into, so all it holds stays, and none of them is listed in the [MirrorReport]. Nothing is kept by default. A throw
+ *   from this block is not caught, and ends the mirror.
  * @param approveRemovals asked once, before anything is copied or removed, with the [RemovalPlan]: every path the run
  *   would remove and why, in the order it would, how many of them are files and folders, and how many entries [dst]
  *   holds. It is not asked when nothing would be removed. It answers the removals to carry out, matched by path; one
@@ -80,22 +80,25 @@ import kotlin.time.Duration.Companion.seconds
  *   an entry is then a failure, [FileError.NotADirectory] for a folder and [FileError.NotRegularFile] for a file,
  *   naming what is at its output; the rest are copied as usual. By default it answers [RemovalPlan.defaultApproved]:
  *   none for a source that yielded nothing, [RemovalPlan.sourceEmpty], and otherwise every removal but those at the
- *   place of an entry the walk passed over, [RemovalReason.AtPassedOver]. What it throws ends the mirror.
+ *   place of an entry the walk passed over, [RemovalReason.AtPassedOver]. A throw from this block is not caught, and
+ *   ends the mirror.
  * @param outputOf the name a file goes to in its folder's output, from its path relative to this folder; by default
  *   its own name. Only the last name of what it answers counts, so a site builder answering `thing.html/x.html` for
  *   `thing.md/x.md` writes `thing.md/x.html`: a folder always keeps its own name, and the tree stays one tree. It is
  *   never asked about a folder the walk yields, and is asked about an entry the walk passed over or could not read,
- *   which may be a file. A name [Writer] refuses is that entry's failure.
+ *   which may be a file. A name [Writer] refuses is that entry's failure. A throw from this block is not caught, and
+ *   ends the mirror.
  * @param isCurrent whether the regular file already at a file's output is current, so it is left alone and listed as
  *   [MirrorReport.unchanged]. It is asked only when a regular file is there, never about a symlink or anything else.
  *   By default a file is current when its size and modification time match the source's, as a copy with
  *   `keepAttributes` leaves them, and the copy was made at least 2 s after the source last changed. A file system that
  *   keeps times in whole seconds, or FAT's 2 s, gives a same-size edit made within that step the time the copy has,
  *   so such a file is copied again, on each run until one comes 2 s after the source changed. Windows does not say
- *   when a copy was made, so there the size and time alone decide.
+ *   when a copy was made, so there the size and time alone decide. A throw from this block is not caught, and ends the
+ *   mirror.
  * @param copy writes a file to the output `name` through `out`, which is [dst]. By default it is [Writer.copyFrom]
  *   with `keepAttributes`, so a hard link at the name is cut, never written through. A symlink there is removed
- *   before it is asked, as what stands in the way. What it throws ends the mirror.
+ *   before it is asked, as what stands in the way. A throw from this block is not caught, and ends the mirror.
  * @return what was done, as a [MirrorReport]; [FileError.NotADirectory] when this path is not a folder, since a walk
  *   of a file yields only that file and the removals would empty [dst]; [FileError.MirrorOverlap] when this folder is
  *   [dst]'s root or lies below it, by the [realPath] of this folder; [FileError.FolderReplaced] when [dst]'s root is

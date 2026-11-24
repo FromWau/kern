@@ -5,6 +5,14 @@ import kotlinx.coroutines.CoroutineDispatcher
 /** Writes one line about the logger's own failure where an operator looks first: standard error. */
 internal expect fun reportToStandardError(message: String)
 
+/** [reportToStandardError], with standard error failing losing this one line: there is nowhere left to report it. */
+internal fun reportToStandardErrorOrDrop(message: String) {
+    try {
+        reportToStandardError(message)
+    } catch (_: Throwable) {
+    }
+}
+
 /**
  * Where one sink's calls run, one at a time. On JVM and native, on threads that may block and do not count against
  * the limit of `Dispatchers.IO`; on JS and Wasm, on the single thread.

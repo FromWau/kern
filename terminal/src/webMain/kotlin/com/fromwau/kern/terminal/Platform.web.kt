@@ -149,11 +149,15 @@ private fun nodeErrorMessage(stdout: Boolean): String? = js(
 )
 
 // Node runs write callbacks in order, so an empty write's callback comes after every earlier write's, and it gets
-// their failure before the stream's error event does.
+// their failure before the stream's error event does. A stream may also answer, or throw, before the write returns;
+// callback then runs once the write has, so what it throws is the caller's, never the stream's failure.
 private fun afterNodeWrites(stdout: Boolean, callback: () -> Unit): Unit = js(
     "{ const s = stdout ? process.stdout : process.stderr; const key = Symbol.for('kern.terminal.writeError'); " +
-        "try { s.write('', e => { if (e != null && s[key] == null) s[key] = e; callback(); }); } " +
-        "catch (e) { if (s[key] == null) s[key] = e; callback(); } }",
+        "let writing = true; let answered = false; " +
+        "try { s.write('', e => { if (e != null && s[key] == null) s[key] = e; " +
+        "if (writing) answered = true; else callback(); }); } " +
+        "catch (e) { if (s[key] == null) s[key] = e; answered = true; } " +
+        "writing = false; if (answered) callback(); }",
 )
 
 private fun consoleLog(text: String): Unit = js("console.log(text)")

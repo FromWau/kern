@@ -1,5 +1,6 @@
 package com.fromwau.kern.process
 
-internal actual fun printUncaught(e: Throwable) {
+/** Prints [e] to standard error the way Kotlin/Native prints an uncaught exception. */
+internal fun printUncaught(e: Throwable) {
     e.printStackTrace()
 }

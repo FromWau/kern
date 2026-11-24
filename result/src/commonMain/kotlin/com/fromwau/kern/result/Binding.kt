@@ -30,7 +30,10 @@ public class ResultScope<E : ResultError> @PublishedApi internal constructor() {
         throw signal
     }
 
-    /** [bind] for a result of another error type, made into this block's by [convert] first. */
+    /**
+     * [bind] for a result of another error type, made into this block's by [convert] first. A throw from [convert]
+     * is not caught.
+     */
     @IgnorableReturnValue
     public inline fun <S, F : ResultError> Result<S, F>.bind(convert: (F) -> E): S = mapError(convert).bind()
 
@@ -90,8 +93,8 @@ public class ResultScope<E : ResultError> @PublishedApi internal constructor() {
  * through. Swallowing it with `catch (t: Throwable)` or `runCatching` cannot make the result a success, but the
  * code after it runs until the next `bind`. A failing `bind` in another coroutine that runs while the block does,
  * such as one in a nested `runBlocking` or a `launch` the block joins, still ends the block with its error. Once the
- * block has returned, `bind` throws an [IllegalStateException]. Other exceptions, cancellation included, pass
- * through.
+ * block has returned, `bind` throws an [IllegalStateException]. Any other throw from [block], cancellation
+ * included, is not caught.
  */
 public inline fun <S, E : ResultError> result(block: ResultScope<E>.() -> S): Result<S, E> {
     val scope = ResultScope<E>()

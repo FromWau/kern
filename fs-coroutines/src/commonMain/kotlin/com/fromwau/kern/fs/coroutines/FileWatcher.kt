@@ -40,6 +40,10 @@ public class FileWatcher(
         trusted: Boolean = false,
     ): Flow<Result<String, FileError>> = path.textChanges(maxBytes, trusted, watch)
 
-    /** Collects [changes]. */
+    /**
+     * Collects [changes].
+     *
+     * @param action called with each answer. A throw from this block is not caught, and ends the collection.
+     */
     public suspend fun collect(action: suspend (Result<FileInfo, FileError>) -> Unit): Unit = changes.collect(action)
 }

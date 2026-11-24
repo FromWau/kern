@@ -63,9 +63,10 @@ private val installation = Installation(::installShutdownHandler, ::installShutd
  *   a second request, still exit with the request's own code.
  * @param handler runs once, for the first request, on a thread of its own (on Node, on its event loop) rather than
  *   inside a signal handler. When it returns, the process exits with [exitCode], or the request's code without one,
- *   running shutdown hooks on the JVM and `atexit` handlers natively. When it throws, the exception's stack trace
- *   goes to standard error and the process exits with the request's code. If `main` returns, throws or exits
- *   meanwhile, the process still waits for [handler] and exits with its code, on the JVM, Linux and androidNative.
+ *   running shutdown hooks on the JVM and `atexit` handlers natively. A throw from this block is not caught: it is
+ *   reported as an uncaught exception, and the process exits with the request's code. If `main` returns, throws or
+ *   exits meanwhile, the process still waits for [handler] and exits with its code, on the JVM, Linux and
+ *   androidNative.
  *   On Linux and androidNative, set your own `setUnhandledExceptionHook` before this call: kern passes every uncaught
  *   exception on to it, also during shutdown, and then lets [handler] finish. A hook set after this call replaces
  *   kern's, and `main` throwing then ends the process at once. Do not call `exitProcess` in [handler]: natively that
@@ -125,7 +126,10 @@ public interface ShutdownStop {
  * it.
  */
 public interface ShutdownSource {
-    /** Installs [handler] as the top-level [com.fromwau.kern.process.onShutdownRequest] does. */
+    /**
+     * Installs [handler] as the top-level [com.fromwau.kern.process.onShutdownRequest] does. A throw from [handler] is
+     * not caught: it is reported as an uncaught exception, and the process exits with the request's code.
+     */
     public fun onShutdownRequest(
         exitCode: Int? = null,
         handler: (ShutdownRequest) -> Unit,
@@ -197,7 +201,7 @@ internal class Installation(
     }
 }
 
-/** Runs [handler], printing what it throws; true when it returned. */
+/** Runs [handler]; true when it returned. What it throws goes to [reportUncaught], as if it escaped a thread. */
 private fun runHandler(
     handler: (ShutdownRequest) -> Unit,
     request: ShutdownRequest,
@@ -205,7 +209,7 @@ private fun runHandler(
     handler(request)
     true
 } catch (e: Throwable) {
-    printUncaught(e)
+    reportUncaught(e)
     false
 }
 
@@ -218,5 +222,9 @@ internal expect fun installShutdownHandler(onRequest: (ShutdownRequest) -> Int):
 /** Installs every request handler or none, recording the first request and exiting with [exitCode] or its code. */
 internal expect fun installShutdownStop(exitCode: Int?): Result<ShutdownStop, ShutdownError>
 
-/** Prints [e] to standard error the way this platform prints an uncaught exception. */
-internal expect fun printUncaught(e: Throwable)
+/**
+ * Reports [e] the way this platform reports an exception no code caught, without ending the process: on the JVM to the
+ * current thread's uncaught exception handler, which falls back to the default one; natively to the app's unhandled
+ * exception hook, or printed without one; elsewhere printed.
+ */
+internal expect fun reportUncaught(e: Throwable)

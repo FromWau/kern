@@ -62,7 +62,7 @@ fun gitLog(): Int? {
 - A shell line is yours to start: `listOf("/bin/sh", "-c", line)`.
 - A program name without a `/` is looked up in the `PATH` the child gets, not in this process's. A name with a `/` is
   used as given, a relative one from the child's working folder.
-- `start` never throws. An empty argv is an error like any other.
+- `start` returns every expected failure as an error, an empty argv too; a throw is a bug and propagates unchanged.
 
 The rest of a `Command` is the child's environment, working folder and input:
 
